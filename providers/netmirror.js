@@ -19,7 +19,8 @@ var __spreadValues = (a, b) => {
 var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
 console.log("[NetMirror] Initializing NetMirror provider");
 const TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
-const NETMIRROR_BASE = "https://net51.cc/";
+const NETMIRROR_BASE = "https://net22.cc";
+const NETMIRROR_PLAY = "https://net52.cc";
 const BASE_HEADERS = {
   "X-Requested-With": "XMLHttpRequest",
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -55,7 +56,7 @@ function bypass() {
     if (attempts >= 5) {
       throw new Error("Max bypass attempts reached");
     }
-    return makeRequest(`${NETMIRROR_BASE}/tv/p.php`, {
+    return makeRequest(`${NETMIRROR_PLAY}/tv/p.php`, {
       method: "POST",
       headers: BASE_HEADERS
     }).then(function(response) {
@@ -84,6 +85,51 @@ function bypass() {
     });
   }
   return attemptBypass(0);
+}
+function getVideoToken(id, cookie, ott) {
+  const cookies = {
+    "t_hash_t": cookie,
+    "ott": ott || "nf",
+    "hd": "on"
+  };
+  const cookieString = Object.entries(cookies).map(([key, value]) => `${key}=${value}`).join("; ");
+  return makeRequest(`${NETMIRROR_BASE}/play.php`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-Requested-With": "XMLHttpRequest",
+      "Referer": `${NETMIRROR_BASE}/`,
+      "Cookie": cookieString
+    },
+    body: `id=${id}`
+  }).then((response) => response.json()).then((playData) => {
+    const h = playData.h;
+    const headers2 = {
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Connection": "keep-alive",
+      "Host": "net52.cc",
+      "Referer": `${NETMIRROR_BASE}/`,
+      "sec-ch-ua": "\"Chromium\";v=\"142\", \"Brave\";v=\"142\", \"Not_A Brand\";v=\"99\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Linux\"",
+      "Sec-Fetch-Dest": "iframe",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "cross-site",
+      "Sec-Fetch-Storage-Access": "none",
+      "Sec-Fetch-User": "?1",
+      "Sec-GPC": "1",
+      "Upgrade-Insecure-Requests": "1",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      "Cookie": cookieString
+    };
+    return makeRequest(`${NETMIRROR_PLAY}/play.php?id=${id}&${h}`, {
+      headers: headers2
+    });
+  }).then((response) => response.text()).then((play2Text) => {
+    const tokenMatch = play2Text.match(/data-h="([^"]+)"/);
+    return tokenMatch ? tokenMatch[1] : null;
+  });
 }
 function searchContent(query, platform) {
   console.log(`[NetMirror] Searching for "${query}" on ${platform}...`);
@@ -271,21 +317,29 @@ function getStreamingLinks(contentId, title, platform) {
     "disney": "hs"
   };
   const ott = ottMap[platform.toLowerCase()] || "nf";
+  let globalCookieValue = "";
   return bypass().then(function(cookie) {
+    globalCookieValue = cookie;
+    return getVideoToken(contentId, cookie, ott);
+  }).then(function(token) {
     const cookies = {
-      "t_hash_t": cookie,
-      "user_token": "233123f803cf02184bf6c67e149cdd50",
+      "t_hash_t": globalCookieValue,
       "ott": ott,
       "hd": "on"
     };
     const cookieString = Object.entries(cookies).map(([key, value]) => `${key}=${value}`).join("; ");
-    const playlistUrl = `${NETMIRROR_BASE}/tv/playlist.php`;
+    const playlistEndpoints = {
+      "netflix": `${NETMIRROR_PLAY}/playlist.php`,
+      "primevideo": `${NETMIRROR_PLAY}/pv/playlist.php`,
+      "disney": `${NETMIRROR_PLAY}/mobile/hs/playlist.php`
+    };
+    const playlistUrl = playlistEndpoints[platform.toLowerCase()] || playlistEndpoints["netflix"];
     return makeRequest(
-      `${playlistUrl}?id=${contentId}&t=${encodeURIComponent(title)}&tm=${getUnixTime()}`,
+      `${playlistUrl}?id=${contentId}&t=${encodeURIComponent(title)}&tm=${getUnixTime()}&h=${token}`,
       {
         headers: __spreadProps(__spreadValues({}, BASE_HEADERS), {
           "Cookie": cookieString,
-          "Referer": `${NETMIRROR_BASE}/tv/home`
+          "Referer": `${NETMIRROR_PLAY}/`
         })
       }
     );
@@ -304,7 +358,7 @@ function getStreamingLinks(contentId, title, platform) {
           let fullUrl = source.file.replace("/tv/", "/");
           if (!fullUrl.startsWith("/"))
             fullUrl = "/" + fullUrl;
-          fullUrl = NETMIRROR_BASE + fullUrl;
+          fullUrl = NETMIRROR_PLAY + "/" + fullUrl;
           sources.push({
             url: fullUrl,
             quality: source.label,
@@ -316,7 +370,7 @@ function getStreamingLinks(contentId, title, platform) {
         item.tracks.filter((track) => track.kind === "captions").forEach((track) => {
           let fullSubUrl = track.file;
           if (track.file.startsWith("/") && !track.file.startsWith("//")) {
-            fullSubUrl = NETMIRROR_BASE + track.file;
+            fullSubUrl = NETMIRROR_PLAY + track.file;
           } else if (track.file.startsWith("//")) {
             fullSubUrl = "https:" + track.file;
           }
@@ -516,21 +570,20 @@ function getStreams(tmdbId, mediaType = "movie", seasonNum = null, episodeNum = 
                     streamTitle += ` - ${episodeName}`;
                   }
                 }
-                const lowerPlatform = (platform || "").toLowerCase();
-                const isNfOrPv = lowerPlatform === "netflix" || lowerPlatform === "primevideo";
                 const streamHeaders = {
-                  "Accept": "application/vnd.apple.mpegurl, video/mp4, */*",
-                  "Origin": isNfOrPv ? "https://net51.cc" : "https://net51.cc",
-                  "Referer": isNfOrPv ? "https://net51.cc/" : "https://net51.cc/tv/home",
+                  "User-Agent": "Mozilla/5.0 (Android) ExoPlayer",
+                  "Accept": "*/*",
+                  "Accept-Encoding": "identity",
+                  "Connection": "keep-alive",
                   "Cookie": "hd=on",
-                  "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/138.0.7204.156 Mobile/15E148 Safari/604.1"
+                  "Referer": `${NETMIRROR_PLAY}/`
                 };
                 return {
                   name: `NetMirror (${platform.charAt(0).toUpperCase() + platform.slice(1)})`,
                   title: streamTitle,
                   url: source.url,
                   quality,
-                  type: source.type.includes("mpegURL") ? "hls" : "direct",
+                  type: "hls",
                   headers: streamHeaders
                 };
               });
