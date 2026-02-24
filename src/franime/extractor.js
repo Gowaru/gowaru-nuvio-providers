@@ -1,0 +1,146 @@
+/**
+ * Extractor Logic for FRAnime
+ */
+
+import { fetchText, fetchJson } from './http.js';
+import cheerio from 'cheerio-without-node-native';
+
+const BASE_URL = "https://franime.fr";
+const API_BASE = "https://api.franime.fr/api";
+
+let animeListCache = null;
+
+/**
+ * Get the title of a media from TMDB ID
+ */
+async function getTmdbTitle(tmdbId, mediaType) {
+    try {
+        // Use language=en-US to always get English titles
+        const url = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
+        const html = await fetchText(url);
+        const $ = cheerio.load(html);
+
+        let title = $('meta[property="og:title"]').attr('content') || $('h1').first().text() || $('h2').first().text();
+
+        if (title && title.includes(' (')) title = title.split(' (')[0];
+        if (title && title.includes(' - ')) title = title.split(' - ')[0];
+
+        title = title ? title.trim() : null;
+        console.log(`[FRAnime] TMDB Title found: ${title}`);
+        return title;
+    } catch (e) {
+        console.error(`[FRAnime] Failed to get title from TMDB: ${e.message}`);
+        return null;
+    }
+}
+
+/**
+ * Load and cache the full anime list from FRAnime
+ */
+async function getAnimeList() {
+    if (animeListCache) return animeListCache;
+    try {
+        console.log(`[FRAnime] Loading full anime list...`);
+        animeListCache = await fetchJson(`${API_BASE}/animes/`);
+        console.log(`[FRAnime] Loaded ${animeListCache.length} animes.`);
+        return animeListCache;
+    } catch (e) {
+        console.error(`[FRAnime] Failed to load anime list: ${e.message}`);
+        return [];
+    }
+}
+
+/**
+ * Find the best matching anime from the local list
+ */
+function findBestMatch(list, title) {
+    const normalize = (s) => s.toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[':!.,?]/g, '')
+        .replace(/\bthe\s+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const targetTitle = normalize(title);
+
+    // 1. Precise match on title or titleO
+    let match = list.find(a => normalize(a.title) === targetTitle || normalize(a.titleO || "") === targetTitle);
+
+    // 2. Includes match
+    if (!match) {
+        match = list.find(a => normalize(a.title).includes(targetTitle) || normalize(a.titleO || "").includes(targetTitle));
+    }
+
+    return match;
+}
+
+export async function extractStreams(tmdbId, mediaType, season, episode) {
+    const title = await getTmdbTitle(tmdbId, mediaType);
+    if (!title) return [];
+
+    const animeList = await getAnimeList();
+    const anime = findBestMatch(animeList, title);
+
+    if (!anime) {
+        console.warn(`[FRAnime] No match found for "${title}" in anime list.`);
+        return [];
+    }
+
+    console.log(`[FRAnime] Found match: ${anime.title} (ID: ${anime.id})`);
+
+    const streams = [];
+    const seasonIdx = season - 1;
+    const epIdx = episode - 1;
+
+    const s = anime.saisons[seasonIdx];
+    if (!s) {
+        console.warn(`[FRAnime] Season ${season} not found for ${anime.title}`);
+        return [];
+    }
+
+    const ep = s.episodes[epIdx];
+    if (!ep) {
+        console.warn(`[FRAnime] Episode ${episode} not found in Season ${season}`);
+        return [];
+    }
+
+    // Languages: vo (vostfr), vf
+    const languages = ['vo', 'vf'];
+
+    for (const lang of languages) {
+        const langData = ep.lang[lang];
+        if (!langData || !langData.lecteurs) continue;
+
+        const langName = lang === 'vo' ? 'VOSTFR' : 'VF';
+
+        for (let i = 0; i < langData.lecteurs.length; i++) {
+            const playerName = langData.lecteurs[i];
+            const playerUrl = `${API_BASE}/anime/${anime.id}/${seasonIdx}/${epIdx}/${lang}/${i}`;
+
+            try {
+                // Fetch the player URL with required Referer
+                const embedUrl = await fetchText(playerUrl, {
+                    headers: {
+                        "Referer": "https://franime.fr/"
+                    }
+                });
+
+                if (embedUrl && embedUrl.startsWith('http')) {
+                    streams.push({
+                        name: `FRAnime (${langName})`,
+                        title: `${playerName} Player`,
+                        url: embedUrl,
+                        quality: "HD",
+                        headers: {
+                            "Referer": "https://franime.fr/"
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error(`[FRAnime] Failed to fetch player ${i} for ${lang}: ${err.message}`);
+            }
+        }
+    }
+
+    return streams;
+}

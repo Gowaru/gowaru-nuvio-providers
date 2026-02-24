@@ -9,7 +9,9 @@
         "serve": "node server.js"
     },
     "devDependencies": {
-        "esbuild": "^0.20.0",
+        "cheerio": "^1.1.2",
+        "cheerio-without-node-native": "^0.20.2",
+        "esbuild": "^0.27.3",
         "nodemon": "^3.0.0"
     },
     "keywords": [

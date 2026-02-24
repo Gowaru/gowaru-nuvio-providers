@@ -114,5 +114,13 @@ test_vidnest.js
 test_mapple.js
 test_cinevibe.js
 castle_cli-2.py
+<<<<<<< HEAD
 providers/mbox.js
 mbox.kt
+=======
+.gitignore
+franime_js/
+all_chunks.js
+animes.json
+episode_chunk.js
+>>>>>>> d6b7c0d (feat: add 5 new francophone anime providers, setup minification)

@@ -412,6 +412,150 @@
       "contentLanguage": [
         "en"
       ]
+    },
+    {
+      "id": "anime-sama",
+      "name": "Anime-Sama",
+      "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/anime-sama.js",
+      "enabled": true,
+      "logo": "https://raw.githubusercontent.com/Anime-Sama/IMG/img/autres/logo.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "voiranime",
+      "name": "VoirAnime",
+      "description": "Un des plus gros catalogues français d'animes.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/voiranime.js",
+      "enabled": true,
+      "logo": "https://lh3.googleusercontent.com/728eE_dzDC7HWN9Cs2eGkQg4Vlk1CqCJj3T8aAQs50srttRUl6pVmmD0O4t1Zxn4fdiVpPzcoPAzNS2EuUre29Dulw=s60",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "vostfree",
+      "name": "Vostfree",
+      "description": "Animes VF et VOSTFR en streaming et téléchargement.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/vostfree.js",
+      "enabled": true,
+      "logo": "https://vostfree.ws/templates/Animix/images/logo.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "franime",
+      "name": "FRAnime",
+      "description": "Regarder des animes VF et VOSTFR gratuitement sur FRAnime.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/franime.js",
+      "enabled": true,
+      "logo": "https://franime.fr/logo.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "french-anime",
+      "name": "French-Anime",
+      "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/french-anime.js",
+      "enabled": true,
+      "logo": "https://french-anime.com/templates/franime/images/favicon3.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "animevostfr",
+      "name": "AnimeVOSTFR",
+      "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/animevostfr.js",
+      "enabled": true,
+      "logo": "https://animevostfr.org/wp-content/uploads/luffy-icon.jpg",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
     }
   ]
 }
