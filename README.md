@@ -17,6 +17,18 @@ A collection of streaming providers for the Nuvio app. Providers are JavaScript 
 
 ---
 
+## 🇫🇷 Nouveaux Fournisseurs Français (New French Providers)
+
+This repository now includes 6 major French anime providers:
+- **Anime-Sama** (One of the largest French catalogs)
+- **VoirAnime** (Extensive French anime catalog)
+- **Vostfree** (VF and VOSTFR anime)
+- **French-Anime** (Free streaming for French anime)
+- **AnimeVOSTFR** (VF and VOSTFR anime streaming)
+- **FRAnime** (VF and VOSTFR anime - *Currently video extraction pending*)
+
+---
+
 ## Project Structure
 
 ```
