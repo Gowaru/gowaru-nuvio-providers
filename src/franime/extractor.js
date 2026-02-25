@@ -101,14 +101,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     const streams = [];
-    const seasonIdx = season - 1;
-    const epIdx = episode - 1;
+    let targetS = null;
+    let targetEp = null;
 
-    let targetS = anime.saisons[seasonIdx];
-    let targetEp = targetS ? targetS.episodes[epIdx] : null;
-
-    // If session/episode not found, try to find by absolute episode
-    if (!targetEp && absoluteEpisode && anime.saisons) {
+    // 1. Prioritize Absolute Episode Match (Most reliable on FRAnime)
+    if (absoluteEpisode && anime.saisons) {
         let currentAbs = 0;
         for (let sIdx = 0; sIdx < anime.saisons.length; sIdx++) {
             const s = anime.saisons[sIdx];
@@ -118,7 +115,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     if (currentAbs === absoluteEpisode) {
                         targetS = s;
                         targetEp = s.episodes[eIdx];
-                        console.log(`[FRAnime] ArmSync match: Found absolute episode ${absoluteEpisode} at S${sIdx + 1}E${eIdx + 1}`);
+                        console.log(`[FRAnime] ArmSync: Matched Absolute ${absoluteEpisode} at S${sIdx + 1}E${eIdx + 1}`);
                         break;
                     }
                 }
@@ -127,8 +124,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
+    // 2. Fallback to Seasonal Match if Absolute fails or is missing
     if (!targetEp) {
-        console.warn(`[FRAnime] Episode S${season}E${episode} (or Abs ${absoluteEpisode}) not found for ${anime.title}`);
+        const seasonIdx = season - 1;
+        const epIdx = episode - 1;
+        targetS = anime.saisons[seasonIdx];
+        targetEp = targetS ? targetS.episodes[epIdx] : null;
+    }
+
+    if (!targetEp) {
+        console.warn(`[FRAnime] Episode S${season}E${episode} not found for ${anime.title}`);
         return [];
     }
 

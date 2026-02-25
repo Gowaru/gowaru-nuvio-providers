@@ -25,25 +25,39 @@ async function syncFetch(url, options = {}) {
 
 /**
  * Step 0: Get IMDb ID from TMDB ID
+ * Upgraded with multi-source fallback
  */
 export async function getImdbId(tmdbId, mediaType) {
     if (!tmdbId) return null;
+    
+    // 1. Try ARM API
     const armRes = await syncFetch(`${ARM_API}/themoviedb?id=${tmdbId}`);
     if (armRes) {
-        const data = await armRes.json();
-        const entry = Array.isArray(data) ? data[0] : data;
-        if (entry && entry.imdb) return entry.imdb;
+        try {
+            const data = await armRes.json();
+            const entry = Array.isArray(data) ? data[0] : data;
+            if (entry && entry.imdb) return entry.imdb;
+        } catch (e) {}
     }
+
+    // 2. Fallback: TMDB Scraping (already often in memory in extractors, but we fetch safe here)
+    const tmdbUrl = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}`;
+    const tmdbRes = await syncFetch(tmdbUrl);
+    if (tmdbRes) {
+        const html = await tmdbRes.text();
+        const imdbMatch = html.match(/imdb\.com\/title\/(tt\d+)/);
+        if (imdbMatch) return imdbMatch[1];
+    }
+
     return null;
 }
 
 /**
  * Step 1: Optimized Absolute Episode Mapping
- * Instead of date-based matching (unreliable), we use Cinemata's full episode list
- * which follows TVDB/TMDB ordering and map it to a linear index.
+ * Improved to handle missing episodes or different sorting
  */
 export async function getAbsoluteEpisode(imdbId, season, episode) {
-    if (!imdbId || season === 0) return null; // Season 0 is Specials/OVAs
+    if (!imdbId || season === 0) return null;
 
     const res = await syncFetch(`${CINEMATA_API}/meta/series/${imdbId}.json`);
     if (!res) return null;
@@ -51,19 +65,33 @@ export async function getAbsoluteEpisode(imdbId, season, episode) {
     const data = await res.json();
     if (!data?.meta?.videos) return null;
 
-    // Filter out specials (Season 0) and sort by season/episode
+    // Filter and normalize
     const episodes = data.meta.videos
-        .filter(v => v.season > 0)
+        .filter(v => v.season > 0 && v.episode > 0)
         .sort((a, b) => a.season - b.season || a.episode - b.episode);
 
+    // Special case: deduplicate by season/episode (Cinemata sometimes has duplicates)
+    const uniqueEpisodes = [];
+    const seen = new Set();
+    for (const ep of episodes) {
+        const key = `${ep.season}-${ep.episode}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            uniqueEpisodes.push(ep);
+        }
+    }
+
     // Find the index (+1) of our current S/E
-    const index = episodes.findIndex(v => v.season == season && v.episode == episode);
+    const index = uniqueEpisodes.findIndex(v => v.season == season && v.episode == episode);
     if (index !== -1) {
         const absoluteNumber = index + 1;
         console.log(`[ArmSync] Resolved: S${season}E${episode} -> Absolute ${absoluteNumber}`);
         return absoluteNumber;
     }
 
+    // Fallback: If seasonal match fails but we have total count, 
+    // maybe it is a single season show on Cinemata but multi-season on TMDB?
+    // Not likely with IMDb ID, but safety first.
     return null;
 }
 

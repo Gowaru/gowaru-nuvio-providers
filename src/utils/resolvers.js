@@ -7,48 +7,31 @@ const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
 };
 
-/**
- * Fallback for atob if not available in environment
- */
 const _atob = (str) => {
     try {
         if (typeof atob === 'function') return atob(str);
         return Buffer.from(str, 'base64').toString('binary');
-    } catch (e) {
-        return str;
-    }
+    } catch (e) { return str; }
 };
 
-/**
- * Robust fetcher optimized for Hermes/React Native
- */
 async function safeFetch(url, options = {}) {
     try {
         const response = await fetch(url, {
             ...options,
             headers: { ...HEADERS, ...options.headers },
+            redirect: 'follow'
         });
-        
         if (!response.ok) return null;
         const html = await response.text();
-        
-        // Basic Cookie extraction (Hermes compatible)
-        const setCookie = response.headers.get('set-cookie') || "";
-        
         return { 
             text: () => Promise.resolve(html), 
             ok: true, 
             url: response.url,
-            headers: { 'set-cookie': setCookie }
+            headers: response.headers
         };
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
-/**
- * Universal P.A.C.K.E.R. Unpacker
- */
 export function unpack(code) {
     try {
         if (!code.includes('p,a,c,k,e,d')) return code;
@@ -69,9 +52,6 @@ export function unpack(code) {
     } catch (err) { return code; }
 }
 
-/**
- * Sibnet resolver
- */
 export async function resolveSibnet(url) {
     try {
         const res = await safeFetch(url, { headers: { 'Referer': 'https://video.sibnet.ru/' } });
@@ -87,9 +67,6 @@ export async function resolveSibnet(url) {
     return { url };
 }
 
-/**
- * Vidmoly resolver
- */
 export async function resolveVidmoly(url) {
     try {
         const res = await safeFetch(url, { headers: { 'Referer': 'https://vidmoly.to/' } });
@@ -102,19 +79,33 @@ export async function resolveVidmoly(url) {
     return { url };
 }
 
-/**
- * VOE resolver
- */
+export async function resolveUqload(url) {
+    try {
+        const res = await safeFetch(url, { headers: { 'Referer': 'https://uqload.com/' } });
+        if (!res) return { url };
+        const html = await res.text();
+        const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) || 
+                      html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
+        if (match) return { url: match[1], headers: { "Referer": "https://uqload.com/" } };
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveVoe(url) {
     try {
         const res = await safeFetch(url);
         if (!res) return { url };
-        const html = await res.text();
+        let html = await res.text();
         const redirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
-        if (redirect) return resolveVoe(redirect[1]);
-        const match = html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/file\s*:\s*['"]([^'"]+\.m3u8[^'"]*)['"]/);
+        if (redirect) {
+            const res2 = await safeFetch(redirect[1]);
+            if (res2) html = await res2.text();
+        }
+        const match = html.match(/'hls'\s*:\s*'([^']+)'/) || 
+                      html.match(/"hls"\s*:\s*"([^"]+)"/) ||
+                      html.match(/https?:\/\/[^"']+\.m3u8[^"']*/);
         if (match) {
-            let videoUrl = match[1];
+            let videoUrl = match[1] || match[0];
             if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
             return { url: videoUrl };
         }
@@ -122,54 +113,63 @@ export async function resolveVoe(url) {
     return { url };
 }
 
-/**
- * Streamtape resolver
- */
 export async function resolveStreamtape(url) {
     try {
         const res = await safeFetch(url);
         if (!res) return { url };
         const html = await res.text();
-        const match = html.match(/document\.getElementById\(['"]robotlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*(?:['"]([^'"]+)['"]|['"]([^'"]+)['"]\.substring\(\d+\))/);
+        const match = html.match(/robotlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*([^;]+)/);
         if (match) {
-            const part1 = match[1];
-            let part2 = match[2] || "";
-            if (match[3]) {
-                const sub = html.match(/substring\((\d+)\)/);
-                part2 = match[3].substring(sub ? parseInt(sub[1]) : 0);
+            let videoUrl = "https:" + match[1];
+            const parts = match[2].split('+');
+            for (const p of parts) {
+                const innerMatch = p.match(/['"]([^'"]+)['"]/);
+                if (innerMatch) {
+                    let val = innerMatch[1];
+                    const sub = p.match(/substring\((\d+)\)/);
+                    if (sub) val = val.substring(parseInt(sub[1]));
+                    videoUrl += val;
+                }
             }
-            return { url: "https:" + part1 + part2 };
+            return { url: videoUrl };
         }
     } catch (e) {}
     return { url };
 }
 
-/**
- * Doodstream resolver
- */
 export async function resolveDood(url) {
     try {
-        const domain = url.match(/https?:\/\/([^\/]+)/)?.[1];
+        const domain = url.match(/https?:\/\/([^\/]+)/)?.[1] || "dood.to";
         const res = await safeFetch(url);
-        if (!res || !domain) return { url };
+        if (!res) return { url };
         let html = await res.text();
         if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
         const passMatch = html.match(/\$\.get\(['"]\/pass_md5\/([^'"]+)['"]/);
         if (passMatch) {
             const token = passMatch[1];
-            const passRes = await fetch(`https://${domain}/pass_md5/${token}`, { headers: { "Referer": url } });
+            const passUrl = `https://${domain}/pass_md5/${token}`;
+            const passRes = await fetch(passUrl, { headers: { "Referer": url } });
             if (passRes.ok) {
                 const content = await passRes.text();
-                return { url: content + "z762vpz?token=" + token + "&expiry=" + Date.now() };
+                const randomStr = Math.random().toString(36).substring(2, 12);
+                return { url: content + randomStr + "?token=" + token + "&expiry=" + Date.now() };
             }
         }
     } catch (e) {}
     return { url };
 }
 
-/**
- * Main resolve function
- */
+export async function resolveMoon(url) {
+    try {
+        const res = await safeFetch(url);
+        if (!res) return { url };
+        const html = await res.text();
+        const match = html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/);
+        if (match) return { url: match[1] };
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveStream(stream) {
     const originalUrl = stream.url;
     const urlLower = originalUrl.toLowerCase();
@@ -179,13 +179,15 @@ export async function resolveStream(stream) {
     }
 
     try {
-        let result = { url: originalUrl };
+        let result = null;
 
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
         else if (urlLower.includes('vidmoly.')) result = await resolveVidmoly(originalUrl);
+        else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
         else if (urlLower.includes('voe.')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
         else if (urlLower.includes('dood') || urlLower.includes('ds2play')) result = await resolveDood(originalUrl);
+        else if (urlLower.includes('moonplayer') || urlLower.includes('moon.')) result = await resolveMoon(originalUrl);
         else {
             const res = await safeFetch(originalUrl);
             if (res) {
@@ -195,7 +197,7 @@ export async function resolveStream(stream) {
             }
         }
 
-        if (result.url !== originalUrl && result.url.startsWith('http')) {
+        if (result && result.url !== originalUrl && result.url.startsWith('http')) {
             return { 
                 ...stream, 
                 url: result.url, 
