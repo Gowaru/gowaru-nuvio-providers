@@ -24,7 +24,7 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     },
     {
       "id": "voiranime",
@@ -48,7 +48,7 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     },
     {
       "id": "vostfree",
@@ -72,7 +72,7 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     },
     {
       "id": "franime",
@@ -96,7 +96,7 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     },
     {
       "id": "french-anime",
@@ -120,7 +120,7 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     },
     {
       "id": "animevostfr",
@@ -144,7 +144,7 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     }
   ]
 }
