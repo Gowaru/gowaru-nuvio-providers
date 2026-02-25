@@ -11,7 +11,7 @@ A collection of streaming providers for the Nuvio app. Providers are JavaScript 
 1. Open **Nuvio** > **Settings** > **Plugins**
 2. Add this repository URL:
    ```
-   https://raw.githubusercontent.com/Gowaru/gowaru-nuvio-providers/main/manifest.json
+   https://raw.githubusercontent.com/Gowaru/gowaru-nuvio-providers/refs/heads/main/
    ```
 3. Refresh and enable the providers you want
 
