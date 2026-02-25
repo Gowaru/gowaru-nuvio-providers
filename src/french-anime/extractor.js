@@ -5,6 +5,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
+import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
 
 const BASE_URL = "https://french-anime.com";
 
@@ -140,16 +141,32 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const title = await getTmdbTitle(tmdbId, mediaType);
     if (!title) return [];
 
+    // --- ARMSYNC Metadata Resolution ---
+    let targetEpisodes = [episode];
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const airDate = await getEpisodeAirDate(imdbId, season, episode);
+            if (airDate) {
+                const malData = await resolveMalMetadata(imdbId, airDate);
+                if (malData && malData.absoluteEpisode) {
+                    console.log(`[French-Anime] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
+                    targetEpisodes.push(malData.absoluteEpisode);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[French-Anime] ArmSync failed: ${e.message}`);
+    }
+    // ------------------------------------
+
     const searchResult = await searchAnime(title);
     if (!searchResult) return [];
 
     const streams = [];
     const pagesChecked = new Set();
-
-    // Try the found URL first
     const pagesToCheck = [searchResult.url];
 
-    // Also try VOSTFR/VF/exclue variants if possible
     try {
         const searchHtml = await fetchText(`${BASE_URL}/index.php?do=search`, {
             method: 'POST',
@@ -190,10 +207,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 langName = 'VF';
             }
 
-            // Parse episode data
-            const playerUrls = parseEpisodeData(html, episode);
+            // Parse episode data for each targeted episode number (absolute or original)
+            const allPlayerUrls = [];
+            for (const ep of targetEpisodes) {
+                const playerUrls = parseEpisodeData(html, ep);
+                allPlayerUrls.push(...playerUrls);
+            }
 
-            for (const url of playerUrls) {
+            for (const url of allPlayerUrls) {
                 const playerName = getPlayerName(url);
                 const stream = await resolveStream({
                     name: `French-Anime (${langName})`,
@@ -205,8 +226,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 streams.push(stream);
             }
 
-            if (playerUrls.length > 0) {
-                console.log(`[French-Anime] Found ${playerUrls.length} players on ${pageUrl}`);
+            if (allPlayerUrls.length > 0) {
+                console.log(`[French-Anime] Found ${allPlayerUrls.length} players on ${pageUrl}`);
             }
         } catch (err) {
             console.error(`[French-Anime] Failed to fetch ${pageUrl}: ${err.message}`);

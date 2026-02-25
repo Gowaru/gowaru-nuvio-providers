@@ -6,6 +6,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
+import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
 
 const BASE_URL = "https://animevostfr.org";
 
@@ -231,18 +232,45 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const title = await getTmdbTitle(tmdbId, mediaType);
     if (!title) return [];
 
+    // --- ARMSYNC Metadata Resolution ---
+    let targetEpisodes = [episode];
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const airDate = await getEpisodeAirDate(imdbId, season, episode);
+            if (airDate) {
+                const malData = await resolveMalMetadata(imdbId, airDate);
+                if (malData && malData.absoluteEpisode) {
+                    console.log(`[AnimeVOSTFR] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
+                    targetEpisodes.push(malData.absoluteEpisode);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[AnimeVOSTFR] ArmSync failed: ${e.message}`);
+    }
+    // ------------------------------------
+
     const searchResult = await searchAnime(title);
     if (!searchResult) return [];
 
-    // Find the episode URL from the series page
-    const episodeUrl = await findEpisodeUrl(searchResult.url, season, episode);
-    if (!episodeUrl) {
-        console.warn(`[AnimeVOSTFR] Episode S${season}E${episode} not found`);
-        return [];
+    const streams = [];
+    const foundEpisodes = new Set();
+
+    for (const ep of targetEpisodes) {
+        // Find the episode URL from the series page
+        const episodeUrl = await findEpisodeUrl(searchResult.url, season, ep);
+        if (episodeUrl && !foundEpisodes.has(episodeUrl)) {
+            foundEpisodes.add(episodeUrl);
+            const playerStreams = await extractPlayersFromEpisode(episodeUrl);
+            streams.push(...playerStreams);
+        }
     }
 
-    // Extract player URLs from the episode page
-    const streams = await extractPlayersFromEpisode(episodeUrl);
+    if (streams.length === 0) {
+        console.warn(`[AnimeVOSTFR] Episode S${season}E${episode} not found (targets: ${targetEpisodes.join(', ')})`);
+    }
+
     console.log(`[AnimeVOSTFR] Total streams found: ${streams.length}`);
     return streams;
 }

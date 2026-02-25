@@ -5,6 +5,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
+import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
 
 const BASE_URL = "https://vostfree.ws";
 
@@ -94,6 +95,25 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const title = await getTmdbTitle(tmdbId, mediaType);
     if (!title) return [];
 
+    // --- ARMSYNC Metadata Resolution ---
+    let targetEpisodes = [episode];
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const airDate = await getEpisodeAirDate(imdbId, season, episode);
+            if (airDate) {
+                const malData = await resolveMalMetadata(imdbId, airDate);
+                if (malData && malData.absoluteEpisode) {
+                    console.log(`[Vostfree] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
+                    targetEpisodes.push(malData.absoluteEpisode);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[Vostfree] ArmSync failed: ${e.message}`);
+    }
+    // ------------------------------------
+
     const animeUrl = await searchAnime(title);
     if (!animeUrl) return [];
 
@@ -101,15 +121,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         const html = await fetchText(animeUrl);
         const $ = cheerio.load(html);
 
-        const epNum = episode.toString();
-        const epNumPadded = epNum.padStart(2, '0');
         let buttonsId = null;
 
         $('select.new_player_selector option').each((i, el) => {
             const text = $(el).text();
-            if (text.includes(`Episode ${epNum}`) || text.includes(`Episode ${epNumPadded}`)) {
-                buttonsId = $(el).val();
-                return false;
+            for (const ep of targetEpisodes) {
+                const epS = ep.toString();
+                const epPadded = epS.padStart(2, '0');
+                if (text.includes(`Episode ${epS}`) || text.includes(`Episode ${epPadded}`)) {
+                    buttonsId = $(el).val();
+                    return false;
+                }
             }
         });
 

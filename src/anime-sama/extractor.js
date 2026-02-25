@@ -5,6 +5,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
+import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
 
 const BASE_URL = "https://anime-sama.tv";
 
@@ -84,6 +85,25 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const title = await getTmdbTitle(tmdbId, mediaType);
     if (!title) return [];
 
+    // --- ARMSYNC Metadata Resolution ---
+    let absoluteEpisode = episode;
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const airDate = await getEpisodeAirDate(imdbId, season, episode);
+            if (airDate) {
+                const malData = await resolveMalMetadata(imdbId, airDate);
+                if (malData && malData.absoluteEpisode) {
+                    console.log(`[Anime-Sama] ArmSync: Resolved S${season}E${episode} -> Absolute Ep ${malData.absoluteEpisode}`);
+                    absoluteEpisode = malData.absoluteEpisode;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[Anime-Sama] ArmSync resolution failed, falling back to episode ${episode}`);
+    }
+    // ------------------------------------
+
     const slug = toSlug(title);
     const languages = ['vostfr', 'vf'];
     const streams = [];
@@ -99,7 +119,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 const varName = match[1];
                 const arrayContent = match[2];
                 const urls = arrayContent.match(/'(.*?)'/g)?.map(u => u.slice(1, -1)) || [];
-                const playerUrl = urls[episode - 1];
+                
+                // Try both absolute and seasonal index
+                const playerUrl = urls[episode - 1] || urls[absoluteEpisode - 1];
+                
                 if (playerUrl && playerUrl.startsWith('http')) {
                     const stream = await resolveStream({
                         name: `Anime-Sama (${lang.toUpperCase()})`,
@@ -127,7 +150,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                                 const varName = retryMatch[1];
                                 const arrayContent = retryMatch[2];
                                 const urls = arrayContent.match(/'(.*?)'/g)?.map(u => u.slice(1, -1)) || [];
-                                const playerUrl = urls[episode - 1];
+                                
+                                const playerUrl = urls[episode - 1] || urls[absoluteEpisode - 1];
+                                
                                 if (playerUrl && playerUrl.startsWith('http')) {
                                     const stream = await resolveStream({
                                         name: `Anime-Sama (${retryLang.toUpperCase()})`,

@@ -4,8 +4,7 @@
 
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
-import { resolveStream } from '../utils/resolvers.js';
-
+import { resolveStream } from '../utils/resolvers.js';import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
 const BASE_URL = "https://v6.voiranime.com";
 
 /**
@@ -116,6 +115,25 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const title = await getTmdbTitle(tmdbId, mediaType);
     if (!title) return [];
 
+    // --- ARMSYNC Metadata Resolution ---
+    let targetEpisodes = [episode];
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const airDate = await getEpisodeAirDate(imdbId, season, episode);
+            if (airDate) {
+                const malData = await resolveMalMetadata(imdbId, airDate);
+                if (malData && malData.absoluteEpisode) {
+                    console.log(`[VoirAnime] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
+                    targetEpisodes.push(malData.absoluteEpisode);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[VoirAnime] ArmSync failed: ${e.message}`);
+    }
+    // ------------------------------------
+
     const animeUrl = await searchAnime(title);
     if (!animeUrl) return [];
 
@@ -125,7 +143,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
         const epNum = episode.toString();
         const paddings = ['', '0', '00', '000'];
-        const epPatterns = paddings.map(p => (p + epNum).slice(-Math.max(epNum.length, p.length)));
+        
+        // Use all target episode numbers (seasonal + absolute)
+        const epPatterns = [];
+        for (const ep of targetEpisodes) {
+            const epS = ep.toString();
+            paddings.forEach(p => epPatterns.push((p + epS).slice(-Math.max(epS.length, p.length))));
+        }
 
         let episodeUrl = null;
         $('.listing-chapters a, .list-chapter a, .wp-manga-chapter a').each((i, el) => {

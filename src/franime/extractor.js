@@ -5,6 +5,7 @@
 import { fetchText, fetchJson } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
+import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
 
 const BASE_URL = "https://franime.fr";
 const API_BASE = "https://api.franime.fr/api";
@@ -87,21 +88,54 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         return [];
     }
 
-    console.log(`[FRAnime] Found match: ${anime.title} (ID: ${anime.id})`);
+    // --- ARMSYNC Metadata Resolution ---
+    let absoluteEpisode = null;
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const airDate = await getEpisodeAirDate(imdbId, season, episode);
+            if (airDate) {
+                const malData = await resolveMalMetadata(imdbId, airDate);
+                if (malData && malData.absoluteEpisode) {
+                    console.log(`[FRAnime] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
+                    absoluteEpisode = malData.absoluteEpisode;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn(`[FRAnime] ArmSync failed: ${e.message}`);
+    }
+    // ------------------------------------
 
     const streams = [];
     const seasonIdx = season - 1;
     const epIdx = episode - 1;
 
-    const s = anime.saisons[seasonIdx];
-    if (!s) {
-        console.warn(`[FRAnime] Season ${season} not found for ${anime.title}`);
-        return [];
+    let targetS = anime.saisons[seasonIdx];
+    let targetEp = targetS ? targetS.episodes[epIdx] : null;
+
+    // If session/episode not found, try to find by absolute episode
+    if (!targetEp && absoluteEpisode && anime.saisons) {
+        let currentAbs = 0;
+        for (let sIdx = 0; sIdx < anime.saisons.length; sIdx++) {
+            const s = anime.saisons[sIdx];
+            if (s.episodes) {
+                for (let eIdx = 0; eIdx < s.episodes.length; eIdx++) {
+                    currentAbs++;
+                    if (currentAbs === absoluteEpisode) {
+                        targetS = s;
+                        targetEp = s.episodes[eIdx];
+                        console.log(`[FRAnime] ArmSync match: Found absolute episode ${absoluteEpisode} at S${sIdx + 1}E${eIdx + 1}`);
+                        break;
+                    }
+                }
+            }
+            if (targetEp) break;
+        }
     }
 
-    const ep = s.episodes[epIdx];
-    if (!ep) {
-        console.warn(`[FRAnime] Episode ${episode} not found in Season ${season}`);
+    if (!targetEp) {
+        console.warn(`[FRAnime] Episode S${season}E${episode} (or Abs ${absoluteEpisode}) not found for ${anime.title}`);
         return [];
     }
 
@@ -109,14 +143,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const languages = ['vo', 'vf'];
 
     for (const lang of languages) {
-        const langData = ep.lang[lang];
+        const langData = targetEp.lang[lang];
         if (!langData || !langData.lecteurs) continue;
 
         const langName = lang === 'vo' ? 'VOSTFR' : 'VF';
 
         for (let i = 0; i < langData.lecteurs.length; i++) {
             const playerName = langData.lecteurs[i];
-            const playerUrl = `${API_BASE}/anime/${anime.id}/${seasonIdx}/${epIdx}/${lang}/${i}`;
+            const playerUrl = `${API_BASE}/anime/${anime.id}/${anime.saisons.indexOf(targetS)}/${targetS.episodes.indexOf(targetEp)}/${lang}/${i}`;
 
             try {
                 // Fetch the player URL with required Referer

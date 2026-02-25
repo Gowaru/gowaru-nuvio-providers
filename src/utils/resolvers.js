@@ -17,7 +17,7 @@ const HEADERS = {
 async function safeFetch(url, options = {}) {
     try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
+        const timeout = setTimeout(() => controller.abort(), 12000);
         const response = await fetch(url, {
             ...options,
             headers: { ...HEADERS, ...options.headers },
@@ -55,10 +55,12 @@ export async function resolveSibnet(url) {
  * Vidmoly resolver
  */
 export async function resolveVidmoly(url) {
-    const response = await safeFetch(url);
+    const response = await safeFetch(url, { headers: { 'Referer': 'https://vidmoly.to/' } });
     if (!response) return url;
     const html = await response.text();
-    const match = html.match(/file\s*:\s*"([^"]+)"/);
+    const match = html.match(/file\s*:\s*"([^"]+\.m3u8)"/) || 
+                  html.match(/file\s*:\s*"([^"]+\.mp4)"/) ||
+                  html.match(/sources\s*:\s*\[\s*\{\s*file\s*:\s*"([^"]+)"/);
     if (match) return match[1];
     return url;
 }
@@ -70,7 +72,9 @@ export async function resolveUqload(url) {
     const response = await safeFetch(url, { headers: { 'Referer': 'https://uqload.com/' } });
     if (!response) return url;
     const html = await response.text();
-    const match = html.match(/sources\s*:\s*\["([^"]+)"\]/) || html.match(/src\s*:\s*"([^"]+\.(?:mp4|m3u8))"/);
+    const match = html.match(/sources\s*:\s*\["([^"]+\.(?:mp4|m3u8))"\]/) || 
+                  html.match(/src\s*:\s*"([^"]+\.(?:mp4|m3u8))"/) ||
+                  html.match(/file\s*:\s*"([^"]+\.(?:mp4|m3u8))"/);
     if (match) return match[1];
     return url;
 }
@@ -93,7 +97,7 @@ export async function resolveVoe(url) {
             try {
                 // simple base64 decode if env supports it
                 const b64 = videoUrl.split(',')[1] || videoUrl;
-                if (typeof atob !== 'undefined') videoUrl = atob(b64);
+                if (typeof atob === 'function') videoUrl = atob(b64);
             } catch (e) {}
         }
         return videoUrl;
@@ -109,7 +113,8 @@ export async function resolveMoon(url) {
     if (!response) return url;
     const html = await response.text();
     const match = html.match(/sources\s*:\s*\[\s*\{\s*"file"\s*:\s*"([^"]+)"/i) || 
-                  html.match(/file\s*:\s*"([^"]+)"/i);
+                  html.match(/file\s*:\s*"([^"]+)"/i) ||
+                  html.match(/src\s*:\s*"([^"]+\.m3u8)"/i);
     if (match) return match[1];
     return url;
 }
@@ -123,7 +128,8 @@ export async function resolveMyCloud(url) {
     if (!response) return url;
     const html = await response.text();
     const match = html.match(/file\s*:\s*"([^"]+)"/i) || 
-                  html.match(/source\s*:\s*"([^"]+)"/i);
+                  html.match(/source\s*:\s*"([^"]+)"/i) ||
+                  html.match(/video\s+src="([^"]+)"/i);
     if (match) return match[1];
     return url;
 }
@@ -136,7 +142,7 @@ export async function resolveFhd(url) {
     if (!response) return url;
     const html = await response.text();
     const match = html.match(/file\s*:\s*"([^"]+)"/i) || 
-                  html.match(/src\s*:\s*"([^"]+\.(?:mp4|m3u8))"/i);
+                  html.match(/src\s*:\s*"([^"]+\.(?:mp4|m3u8|mkv))"/i);
     if (match) return match[1];
     return url;
 }
@@ -173,15 +179,13 @@ export async function resolveStreamtape(url) {
     if (!response) return url;
     const html = await response.text();
     // Streamtape uses a complex multi-part obfuscation for its links
-    const match = html.match(/robotlink\.innerHTML\s*=\s*'([^']+)'/);
+    const match = html.match(/robotlink\.innerHTML\s*=\s*'([^']+)'\s*\+\s*'([^']+)'/);
     if (match) {
-        let link = match[1];
-        if (link.startsWith('//')) link = `https:${link}`;
+        let link = `https:${match[1]}${match[2].substring(3)}`;
         return link;
     }
-    // Alternative pattern for newer streamtape versions
-    const match2 = html.match(/video_link\s*:\s*"([^"]+)"/);
-    if (match2) return match[2];
+    const matchAlt = html.match(/id="robotlink">([^<]+)/);
+    if (matchAlt) return `https:${matchAlt[1]}`;
     
     return url;
 }
@@ -202,10 +206,21 @@ export async function resolveSendvid(url) {
  * Doodstream resolver
  */
 export async function resolveDood(url) {
-    const doodUrl = url.replace('/e/', '/d/');
-    const response = await safeFetch(doodUrl);
+    const baseUrl = "https://dood.to";
+    const response = await safeFetch(url, { headers: { 'Referer': baseUrl } });
     if (!response) return url;
     const html = await response.text();
+    
+    const passMatch = html.match(/\$.get\('\/pass_md5\/([^']+)'/);
+    if (passMatch) {
+        const passUrl = `${baseUrl}/pass_md5/${passMatch[1]}`;
+        const passRes = await safeFetch(passUrl, { headers: { 'Referer': url } });
+        if (passRes) {
+            const finalPart = await passRes.text();
+            return `${finalPart}z72899?token=${passMatch[1]}&expiry=${Date.now()}`;
+        }
+    }
+    
     const match = html.match(/window\.open\('([^']+)'\)/);
     if (match) return match[1];
     return url;
@@ -242,12 +257,13 @@ export async function resolveStream(stream) {
             resolvedUrl = await resolveMoon(originalUrl);
         } else if (urlLower.includes('mytv') || urlLower.includes('mycloud') || urlLower.includes('mclls.net')) {
             resolvedUrl = await resolveMyCloud(originalUrl);
+            newHeaders['Referer'] = 'https://mycloud.cc/';
         } else if (urlLower.includes('fhd') || urlLower.includes('fhd1')) {
             resolvedUrl = await resolveFhd(originalUrl);
         } else if (urlLower.includes('upstream.')) {
-            resolvedUrl = await resolveUpstream(originalUrl);
+            resolvedUrl = await resolveVidmoly(originalUrl); 
         } else if (urlLower.includes('vido.') || urlLower.includes('vidlo.')) {
-            resolvedUrl = await resolveVido(originalUrl);
+            resolvedUrl = await resolveVidmoly(originalUrl); 
         } else if (urlLower.includes('streamtape.com')) {
             resolvedUrl = await resolveStreamtape(originalUrl);
         } else if (urlLower.includes('sendvid.com')) {
