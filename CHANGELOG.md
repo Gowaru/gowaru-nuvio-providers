@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.12] - 2026-02-25
+
+### Fixed
+- **Global Search & Localization**: Fixed a major issue where popular animes (like "Attack on Titan") returned "no stream available" due to strict English title matching.
+- **Vostfree, French-Anime, Voiranime**: Updated TMDB fetching logic to retrieve both English (`en-US`) and French (`fr-FR`) titles. The scrapers now fallback to searching the French title if the English one yields no results.
+- **AnimeVOSTFR & Voiranime**: Added a search fallback mechanism. If the strict title filter eliminates all results but the site's search engine found matches (e.g., returning "Shingeki no Kyojin" for "Attack on Titan"), the scraper now trusts the search engine.
+- **Anime-Sama**: Fixed the search functionality which was broken due to site changes. The scraper now correctly uses their AJAX endpoint (`/template-php/defaut/fetch.php`) via POST request to retrieve anime slugs.
+- **French-Anime**: Fixed a regex bug in `parseEpisodeData` that prevented the detection of video links starting with `//` instead of `http://`.
+- **Global**: Fixed Node.js ESM compatibility issues by updating `cheerio` imports (`import * as cheerio from 'cheerio'`) across all providers.
+
 ## [1.1.11] - 2026-02-25
 
 ### Fixed

@@ -3,32 +3,41 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 const BASE_URL = "https://v6.voiranime.com";
 
 /**
- * Get the title of a media from TMDB ID
+ * Get the titles of a media from TMDB ID (English and French)
  */
-async function getTmdbTitle(tmdbId, mediaType) {
+async function getTmdbTitles(tmdbId, mediaType) {
     try {
-        // Use language=en-US to always get English titles
-        const url = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
-        const html = await fetchText(url);
-        const $ = cheerio.load(html);
+        const titles = [];
+        
+        // 1. English title
+        const urlEn = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
+        const htmlEn = await fetchText(urlEn);
+        const $en = cheerio.load(htmlEn);
+        let titleEn = $en('meta[property="og:title"]').attr('content') || $en('h1').first().text() || $en('h2').first().text();
+        if (titleEn && titleEn.includes(' (')) titleEn = titleEn.split(' (')[0];
+        if (titleEn && titleEn.includes(' - ')) titleEn = titleEn.split(' - ')[0];
+        if (titleEn) titles.push(titleEn.trim());
 
-        let title = $('meta[property="og:title"]').attr('content') || $('h1').first().text() || $('h2').first().text();
+        // 2. French title
+        const urlFr = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=fr-FR`;
+        const htmlFr = await fetchText(urlFr);
+        const $fr = cheerio.load(htmlFr);
+        let titleFr = $fr('meta[property="og:title"]').attr('content') || $fr('h1').first().text() || $fr('h2').first().text();
+        if (titleFr && titleFr.includes(' (')) titleFr = titleFr.split(' (')[0];
+        if (titleFr && titleFr.includes(' - ')) titleFr = titleFr.split(' - ')[0];
+        if (titleFr && titleFr.trim() !== titleEn?.trim()) titles.push(titleFr.trim());
 
-        if (title && title.includes(' (')) title = title.split(' (')[0];
-        if (title && title.includes(' - ')) title = title.split(' - ')[0];
-
-        title = title ? title.trim() : null;
-        console.log(`[VoirAnime] TMDB Title found: ${title}`);
-        return title;
+        console.log(`[VoirAnime] TMDB Titles found: ${titles.join(', ')}`);
+        return titles;
     } catch (e) {
-        console.error(`[VoirAnime] Failed to get title from TMDB: ${e.message}`);
-        return null;
+        console.error(`[VoirAnime] Failed to get titles from TMDB: ${e.message}`);
+        return [];
     }
 }
 
@@ -63,14 +72,19 @@ async function searchAnime(title) {
     const allSlugs = [...new Set([...slugs, ...withThe])];
     console.log(`[VoirAnime] Probing slugs: ${allSlugs.join(', ')}`);
 
+    const matches = [];
+
     for (const slug of allSlugs) {
         const url = `${BASE_URL}/anime/${slug}/`;
         try {
             await fetchText(url, { method: 'HEAD' });
             console.log(`[VoirAnime] Predicted slug found: ${slug}`);
-            return url;
+            matches.push({ title: title, url: url });
+            break; // Found a direct match, no need to check other slugs
         } catch (e) { /* Predict failed */ }
     }
+
+    if (matches.length > 0) return matches;
 
     try {
         const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(title)}`;
@@ -89,32 +103,30 @@ async function searchAnime(title) {
         const simplifiedTitle = normalize(title);
 
         console.log(`[VoirAnime] Search results: ${results.length}`);
-        let bestMatch = results.find(r => normalize(r.title) === simplifiedTitle);
+        
+        // Find all matches that contain the title
+        let searchMatches = results.filter(r => normalize(r.title).includes(simplifiedTitle));
 
-        if (!bestMatch) {
-            bestMatch = results.find(r => {
-                const rt = normalize(r.title);
-                return rt.includes(simplifiedTitle) && !rt.includes('film') && !rt.includes('log') && !rt.includes('kai');
-            });
+        if (searchMatches.length === 0 && results.length > 0) {
+            // Fallback: trust the search engine if exact match fails
+            searchMatches = results;
         }
 
-        if (!bestMatch) bestMatch = results[0];
-
-        if (bestMatch) {
-            console.log(`[VoirAnime] Selected from search: ${bestMatch.title} -> ${bestMatch.url}`);
-            return bestMatch.url;
+        if (searchMatches.length > 0) {
+            console.log(`[VoirAnime] Found ${searchMatches.length} matches for ${title}`);
+            return searchMatches;
         }
 
-        return null;
+        return [];
     } catch (e) {
         console.error(`[VoirAnime] Search error: ${e.message}`);
-        return null;
+        return [];
     }
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const title = await getTmdbTitle(tmdbId, mediaType);
-    if (!title) return [];
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    if (titles.length === 0) return [];
 
     // --- ARMSYNC Metadata Resolution ---
     let targetEpisodes = [episode];
@@ -131,7 +143,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    let matches = await searchAnime(title);
+    let matches = [];
+    for (const title of titles) {
+        matches = await searchAnime(title);
+        if (matches && matches.length > 0) break;
+    }
+    
     if (!matches || matches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned

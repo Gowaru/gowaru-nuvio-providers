@@ -3,33 +3,42 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
 const BASE_URL = "https://french-anime.com";
 
 /**
- * Get the title of a media from TMDB ID
+ * Get the titles of a media from TMDB ID (English and French)
  */
-async function getTmdbTitle(tmdbId, mediaType) {
+async function getTmdbTitles(tmdbId, mediaType) {
     try {
-        // Use language=en-US to always get English titles
-        const url = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
-        const html = await fetchText(url);
-        const $ = cheerio.load(html);
+        const titles = [];
+        
+        // 1. English title
+        const urlEn = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
+        const htmlEn = await fetchText(urlEn);
+        const $en = cheerio.load(htmlEn);
+        let titleEn = $en('meta[property="og:title"]').attr('content') || $en('h1').first().text() || $en('h2').first().text();
+        if (titleEn && titleEn.includes(' (')) titleEn = titleEn.split(' (')[0];
+        if (titleEn && titleEn.includes(' - ')) titleEn = titleEn.split(' - ')[0];
+        if (titleEn) titles.push(titleEn.trim());
 
-        let title = $('meta[property="og:title"]').attr('content') || $('h1').first().text() || $('h2').first().text();
+        // 2. French title
+        const urlFr = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=fr-FR`;
+        const htmlFr = await fetchText(urlFr);
+        const $fr = cheerio.load(htmlFr);
+        let titleFr = $fr('meta[property="og:title"]').attr('content') || $fr('h1').first().text() || $fr('h2').first().text();
+        if (titleFr && titleFr.includes(' (')) titleFr = titleFr.split(' (')[0];
+        if (titleFr && titleFr.includes(' - ')) titleFr = titleFr.split(' - ')[0];
+        if (titleFr && titleFr.trim() !== titleEn?.trim()) titles.push(titleFr.trim());
 
-        if (title && title.includes(' (')) title = title.split(' (')[0];
-        if (title && title.includes(' - ')) title = title.split(' - ')[0];
-
-        title = title ? title.trim() : null;
-        console.log(`[French-Anime] TMDB Title found: ${title}`);
-        return title;
+        console.log(`[French-Anime] TMDB Titles found: ${titles.join(', ')}`);
+        return titles;
     } catch (e) {
-        console.error(`[French-Anime] Failed to get title from TMDB: ${e.message}`);
-        return null;
+        console.error(`[French-Anime] Failed to get titles from TMDB: ${e.message}`);
+        return [];
     }
 }
 
@@ -107,17 +116,20 @@ function getPlayerName(url) {
 function parseEpisodeData(html, targetEpisode) {
     const streams = [];
     // Match pattern: episodeNumber!url1,url2,...
-    const regex = /(\d+)!((?:https?:\/\/[^,<\s]+)(?:,(?:https?:\/\/[^,<\s]+))*)/g;
+    const regex = /(\d+)!((?:(?:https?:)?\/\/[^,<\s]+)(?:,(?:(?:https?:)?\/\/[^,<\s]+))*)/g;
     let match;
 
     while ((match = regex.exec(html)) !== null) {
         const epNum = parseInt(match[1]);
         if (epNum === targetEpisode) {
-            const urls = match[2].split(',').filter(u => u.startsWith('http'));
-            for (const url of urls) {
-                const cleanUrl = url.trim();
-                if (cleanUrl.length > 10) {
-                    streams.push(cleanUrl);
+            const urls = match[2].split(',').filter(u => u.startsWith('http') || u.startsWith('//'));
+            for (let url of urls) {
+                url = url.trim();
+                if (url.startsWith('//')) {
+                    url = 'https:' + url;
+                }
+                if (url.length > 10) {
+                    streams.push(url);
                 }
             }
         }
@@ -127,8 +139,8 @@ function parseEpisodeData(html, targetEpisode) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const title = await getTmdbTitle(tmdbId, mediaType);
-    if (!title) return [];
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    if (titles.length === 0) return [];
 
     // --- ARMSYNC Metadata Resolution ---
     let targetEpisodes = [episode];
@@ -145,7 +157,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    let matches = await searchAnime(title);
+    let matches = [];
+    for (const title of titles) {
+        matches = await searchAnime(title);
+        if (matches && matches.length > 0) break;
+    }
+    
     if (!matches || matches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned

@@ -1,12 +1,12 @@
 {
   "name": "Gowaru's Repo",
-  "version": "1.1.11",
+  "version": "1.1.12",
   "scrapers": [
     {
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -30,7 +30,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -54,7 +54,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -78,7 +78,7 @@
       "id": "franime",
       "name": "FRAnime",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur FRAnime.",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -102,7 +102,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -126,7 +126,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",

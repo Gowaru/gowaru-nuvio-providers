@@ -3,7 +3,7 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
@@ -29,8 +29,14 @@ async function getTmdbTitle(tmdbId, mediaType) {
  */
 async function searchSlugs(title) {
     try {
-        const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(title)}`;
-        const html = await fetchText(searchUrl);
+        const html = await fetchText(`${BASE_URL}/template-php/defaut/fetch.php`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': BASE_URL
+            },
+            body: `query=${encodeURIComponent(title)}`
+        });
         const $ = cheerio.load(html);
         const slugs = [];
         $('a[href*="/catalogue/"]').each((i, el) => {

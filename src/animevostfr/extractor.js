@@ -68,7 +68,14 @@ async function searchAnime(title) {
         const simplifiedTitle = normalize(title);
 
         // Find all matches that contain the title
-        const matches = unique.filter(r => normalize(r.title).includes(simplifiedTitle));
+        let matches = unique.filter(r => normalize(r.title).includes(simplifiedTitle));
+
+        // If no exact match but we have search results, trust the search engine
+        // This helps with English/French title differences (e.g. "Attack on Titan" -> "L'Attaque des Titans")
+        if (matches.length === 0 && unique.length > 0) {
+            console.log(`[AnimeVOSTFR] No exact match for "${title}", falling back to ${unique.length} search results`);
+            matches = unique;
+        }
 
         if (matches.length > 0) {
             console.log(`[AnimeVOSTFR] Found ${matches.length} matches for ${title}`);
