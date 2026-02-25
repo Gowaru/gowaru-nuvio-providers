@@ -6,23 +6,9 @@ import { fetchText } from './http.js';
 import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
+import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://anime-sama.tv";
-
-/**
- * Get the title of a media from TMDB ID
- */
-async function getTmdbTitle(tmdbId, mediaType) {
-    try {
-        const url = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
-        const html = await fetchText(url);
-        const $ = cheerio.load(html);
-        let title = $('meta[property="og:title"]').attr('content') || $('h1').first().text();
-        if (title && title.includes(' (')) title = title.split(' (')[0];
-        if (title && title.includes(' - ')) title = title.split(' - ')[0];
-        return title ? title.trim() : null;
-    } catch (e) { return null; }
-}
 
 /**
  * Search for a slug on Anime-Sama
@@ -66,8 +52,9 @@ function getPlayerName(varName, url) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const title = await getTmdbTitle(tmdbId, mediaType);
-    if (!title) return [];
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    if (titles.length === 0) return [];
+    const title = titles[0]; // Primary title (EN)
 
     let absoluteEpisode = episode;
     try {
@@ -126,7 +113,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     if (streams.length === 0) {
-        const foundSlugs = await searchSlugs(title);
+        // Search with all title variations (EN, FR, Original romaji)
+        const foundSlugs = [];
+        for (const t of titles) {
+            const slugs = await searchSlugs(t);
+            slugs.forEach(s => { if (!foundSlugs.includes(s)) foundSlugs.push(s); });
+        }
         const checkedSlugs = new Set([slug]);
 
         for (const fSlug of foundSlugs) {

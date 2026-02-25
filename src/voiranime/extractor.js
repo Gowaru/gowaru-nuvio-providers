@@ -6,40 +6,8 @@ import { fetchText } from './http.js';
 import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
+import { getTmdbTitles } from '../utils/metadata.js';
 const BASE_URL = "https://v6.voiranime.com";
-
-/**
- * Get the titles of a media from TMDB ID (English and French)
- */
-async function getTmdbTitles(tmdbId, mediaType) {
-    try {
-        const titles = [];
-        
-        // 1. English title
-        const urlEn = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
-        const htmlEn = await fetchText(urlEn);
-        const $en = cheerio.load(htmlEn);
-        let titleEn = $en('meta[property="og:title"]').attr('content') || $en('h1').first().text() || $en('h2').first().text();
-        if (titleEn && titleEn.includes(' (')) titleEn = titleEn.split(' (')[0];
-        if (titleEn && titleEn.includes(' - ')) titleEn = titleEn.split(' - ')[0];
-        if (titleEn) titles.push(titleEn.trim());
-
-        // 2. French title
-        const urlFr = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=fr-FR`;
-        const htmlFr = await fetchText(urlFr);
-        const $fr = cheerio.load(htmlFr);
-        let titleFr = $fr('meta[property="og:title"]').attr('content') || $fr('h1').first().text() || $fr('h2').first().text();
-        if (titleFr && titleFr.includes(' (')) titleFr = titleFr.split(' (')[0];
-        if (titleFr && titleFr.includes(' - ')) titleFr = titleFr.split(' - ')[0];
-        if (titleFr && titleFr.trim() !== titleEn?.trim()) titles.push(titleFr.trim());
-
-        console.log(`[VoirAnime] TMDB Titles found: ${titles.join(', ')}`);
-        return titles;
-    } catch (e) {
-        console.error(`[VoirAnime] Failed to get titles from TMDB: ${e.message}`);
-        return [];
-    }
-}
 
 /**
  * Clean title to create a slug

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.13] - 2026-02-25
+
+### Fixed
+- **Critical: TMDB Title Resolution in App**: Replaced HTML scraping of the TMDB website with direct calls to the **TMDB JSON API** (`api.themoviedb.org/3`). The website scraping was returning empty results inside Nuvio (React Native / Hermes engine), causing all providers to return 0 streams. The JSON API is stable, fast, and returns structured data.
+- **New Shared Utility**: Created `src/utils/metadata.js` with a single `getTmdbTitles()` function used by all providers. This eliminates code duplication and improves maintainability.
+- **Richer Title Data**: The utility now fetches the English title, French translation, and original title (romaji if Latin-script) from TMDB in 2 API calls, giving providers 2-3 title variations to search with.
+
 ## [1.1.12] - 2026-02-25
 
 ### Fixed

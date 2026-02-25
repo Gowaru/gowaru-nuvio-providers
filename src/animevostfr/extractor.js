@@ -7,32 +7,9 @@ import { fetchText } from './http.js';
 import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
+import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://animevostfr.org";
-
-/**
- * Get the title of a media from TMDB ID
- */
-async function getTmdbTitle(tmdbId, mediaType) {
-    try {
-        // Use language=en-US to always get English titles
-        const url = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}?language=en-US`;
-        const html = await fetchText(url);
-        const $ = cheerio.load(html);
-
-        let title = $('meta[property="og:title"]').attr('content') || $('h1').first().text() || $('h2').first().text();
-
-        if (title && title.includes(' (')) title = title.split(' (')[0];
-        if (title && title.includes(' - ')) title = title.split(' - ')[0];
-
-        title = title ? title.trim() : null;
-        console.log(`[AnimeVOSTFR] TMDB Title found: ${title}`);
-        return title;
-    } catch (e) {
-        console.error(`[AnimeVOSTFR] Failed to get title from TMDB: ${e.message}`);
-        return null;
-    }
-}
 
 /**
  * Search for anime on AnimeVOSTFR
@@ -263,8 +240,8 @@ function getPlayerName(url) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const title = await getTmdbTitle(tmdbId, mediaType);
-    if (!title) return [];
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    if (titles.length === 0) return [];
 
     // --- ARMSYNC Metadata Resolution ---
     let targetEpisodes = [episode];
@@ -281,7 +258,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    let matches = await searchAnime(title);
+    let matches = [];
+    for (const t of titles) {
+        matches = await searchAnime(t);
+        if (matches && matches.length > 0) break;
+    }
     if (!matches || matches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned
