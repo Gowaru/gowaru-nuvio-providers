@@ -41,7 +41,7 @@ function getProvidersToBuild() {
     }
 
     return fs.readdirSync(srcDir, { withFileTypes: true })
-        .filter(d => d.isDirectory())
+        .filter(d => d.isDirectory() && d.name !== 'utils')
         .map(d => d.name);
 }
 

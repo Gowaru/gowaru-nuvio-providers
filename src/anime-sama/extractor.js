@@ -5,7 +5,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
-import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
+import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
 const BASE_URL = "https://anime-sama.tv";
 
@@ -78,6 +78,10 @@ function getPlayerName(varName, url) {
     if (url.includes('mycloud')) return 'MyCloud';
     if (url.includes('vidmoly')) return 'Vidmoly';
     if (url.includes('vido')) return 'Vido';
+    if (url.includes('voe')) return 'Voe';
+    if (url.includes('stape') || url.includes('streamtape')) return 'Streamtape';
+    if (url.includes('dood') || url.includes('ds2play')) return 'Doodstream';
+    if (url.includes('uqload') || url.includes('oneupload')) return 'Uqload';
     return `Player ${varName.toUpperCase()}`;
 }
 
@@ -90,13 +94,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     try {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
-            const airDate = await getEpisodeAirDate(imdbId, season, episode);
-            if (airDate) {
-                const malData = await resolveMalMetadata(imdbId, airDate);
-                if (malData && malData.absoluteEpisode) {
-                    console.log(`[Anime-Sama] ArmSync: Resolved S${season}E${episode} -> Absolute Ep ${malData.absoluteEpisode}`);
-                    absoluteEpisode = malData.absoluteEpisode;
-                }
+            const resolvedAbsolute = await getAbsoluteEpisode(imdbId, season, episode);
+            if (resolvedAbsolute) {
+                console.log(`[Anime-Sama] ArmSync: Resolved S${season}E${episode} -> Absolute Ep ${resolvedAbsolute}`);
+                absoluteEpisode = resolvedAbsolute;
             }
         }
     } catch (e) {

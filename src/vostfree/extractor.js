@@ -5,7 +5,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
-import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
+import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
 const BASE_URL = "https://vostfree.ws";
 
@@ -100,13 +100,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     try {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
-            const airDate = await getEpisodeAirDate(imdbId, season, episode);
-            if (airDate) {
-                const malData = await resolveMalMetadata(imdbId, airDate);
-                if (malData && malData.absoluteEpisode) {
-                    console.log(`[Vostfree] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
-                    targetEpisodes.push(malData.absoluteEpisode);
-                }
+            const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
+            if (absoluteEpisode) {
+                targetEpisodes.push(absoluteEpisode);
             }
         }
     } catch (e) {
@@ -164,8 +160,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                         url = `https://video.sibnet.ru/shell.php?videoid=${content}`;
                     } else if (playerName.toLowerCase().includes('vidmoly')) {
                         url = `https://vidmoly.to/embed-${content}.html`;
-                    } else if (playerName.toLowerCase().includes('uqload')) {
+                    } else if (playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) {
                         url = `https://uqload.com/embed-${content}.html`;
+                    } else if (playerName.toLowerCase().includes('sendvid')) {
+                        url = `https://sendvid.com/embed/${content}`;
+                    } else if (playerName.toLowerCase().includes('voe')) {
+                        url = `https://voe.sx/e/${content}`;
+                    } else if (playerName.toLowerCase().includes('dood')) {
+                        url = `https://dood.to/e/${content}`;
+                    } else if (playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) {
+                        url = `https://streamtape.com/e/${content}`;
                     }
                 }
 

@@ -4,7 +4,8 @@
 
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
-import { resolveStream } from '../utils/resolvers.js';import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
+import { resolveStream } from '../utils/resolvers.js';
+import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 const BASE_URL = "https://v6.voiranime.com";
 
 /**
@@ -120,13 +121,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     try {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
-            const airDate = await getEpisodeAirDate(imdbId, season, episode);
-            if (airDate) {
-                const malData = await resolveMalMetadata(imdbId, airDate);
-                if (malData && malData.absoluteEpisode) {
-                    console.log(`[VoirAnime] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
-                    targetEpisodes.push(malData.absoluteEpisode);
-                }
+            const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
+            if (absoluteEpisode) {
+                targetEpisodes.push(absoluteEpisode);
             }
         }
     } catch (e) {

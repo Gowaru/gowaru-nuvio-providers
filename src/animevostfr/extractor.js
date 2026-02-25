@@ -6,7 +6,7 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
-import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
+import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
 const BASE_URL = "https://animevostfr.org";
 
@@ -220,11 +220,13 @@ function getPlayerName(url) {
     if (url.includes('christopheruntilpoint') || url.includes('voe')) return 'Voe';
     if (url.includes('luluvid')) return 'Luluvid';
     if (url.includes('savefiles')) return 'Savefiles';
-    if (url.includes('uqload')) return 'Uqload';
+    if (url.includes('uqload') || url.includes('oneupload')) return 'Uqload';
     if (url.includes('hgcloud')) return 'HGCloud';
-    if (url.includes('doodstream') || url.includes('vvide0')) return 'Doodstream';
-    if (url.includes('myvi')) return 'MyVi';
+    if (url.includes('dood') || url.includes('ds2play')) return 'Doodstream';
+    if (url.includes('myvi') || url.includes('mytv')) return 'MyVi';
     if (url.includes('sendvid')) return 'Sendvid';
+    if (url.includes('stape') || url.includes('streamtape')) return 'Streamtape';
+    if (url.includes('moon')) return 'Moon';
     return 'Player';
 }
 
@@ -237,13 +239,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     try {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
-            const airDate = await getEpisodeAirDate(imdbId, season, episode);
-            if (airDate) {
-                const malData = await resolveMalMetadata(imdbId, airDate);
-                if (malData && malData.absoluteEpisode) {
-                    console.log(`[AnimeVOSTFR] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
-                    targetEpisodes.push(malData.absoluteEpisode);
-                }
+            const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
+            if (absoluteEpisode) {
+                targetEpisodes.push(absoluteEpisode);
             }
         }
     } catch (e) {

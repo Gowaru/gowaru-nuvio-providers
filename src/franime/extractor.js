@@ -5,7 +5,7 @@
 import { fetchText, fetchJson } from './http.js';
 import cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
-import { getImdbId, getEpisodeAirDate, resolveMalMetadata } from '../utils/armsync.js';
+import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
 const BASE_URL = "https://franime.fr";
 const API_BASE = "https://api.franime.fr/api";
@@ -93,14 +93,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     try {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
-            const airDate = await getEpisodeAirDate(imdbId, season, episode);
-            if (airDate) {
-                const malData = await resolveMalMetadata(imdbId, airDate);
-                if (malData && malData.absoluteEpisode) {
-                    console.log(`[FRAnime] ArmSync: S${season}E${episode} -> Absolute ${malData.absoluteEpisode}`);
-                    absoluteEpisode = malData.absoluteEpisode;
-                }
-            }
+            absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
         }
     } catch (e) {
         console.warn(`[FRAnime] ArmSync failed: ${e.message}`);
