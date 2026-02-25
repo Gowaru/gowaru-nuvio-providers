@@ -203,5 +203,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    return streams;
+    const validStreams = streams.filter(s => s && s.isDirect);
+    console.log(`[Vostfree] Total streams found: ${validStreams.length}`);
+    return validStreams;
 }

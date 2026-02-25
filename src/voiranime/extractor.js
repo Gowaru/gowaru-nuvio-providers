@@ -238,5 +238,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         } catch (e) {}
     }
 
-    return streams;
+    const validStreams = streams.filter(s => s && s.isDirect);
+    console.log(`[VoirAnime] Total streams found: ${validStreams.length}`);
+    return validStreams;
 }

@@ -102,15 +102,21 @@ async function findEpisodeUrl(seriesUrl, season, episode) {
         const epStr = String(episode);
         const epPadded = epStr.padStart(2, '0');
         
-        const patterns = [
-            new RegExp(`(?:^|[^0-9])${epStr}(?:$|[^0-9])`), // Matches " 1 ", "-1-", "ep1"
-            new RegExp(`episode-${epStr}(?:$|[^0-9])`, 'i'),
-            new RegExp(`episode-${epPadded}(?:$|[^0-9])`, 'i'),
-            new RegExp(`saison-${season}-episode-${epStr}(?:$|[^0-9])`, 'i')
+        const urlPatterns = [
+            new RegExp(`-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-ep-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-ep-${epPadded}(?:-vostfr|-vf|/|$)`, 'i')
+        ];
+
+        const textPatterns = [
+            new RegExp(`^\\s*Episode\\s+${epStr}\\s*$`, 'i'),
+            new RegExp(`^\\s*Ep\\s*${epStr}\\s*$`, 'i'),
+            new RegExp(`(?:^|[^0-9])${epStr}(?:$|[^0-9])`)
         ];
 
         // 1. Try to find match in URL first (more reliable)
-        for (const pattern of patterns) {
+        for (const pattern of urlPatterns) {
             const match = episodeLinks.find(l => pattern.test(l.url));
             if (match) {
                 console.log(`[AnimeVOSTFR] Found episode in URL: ${match.url}`);
@@ -119,7 +125,7 @@ async function findEpisodeUrl(seriesUrl, season, episode) {
         }
 
         // 2. Try to find match in link text
-        for (const pattern of patterns) {
+        for (const pattern of textPatterns) {
             const match = episodeLinks.find(l => pattern.test(l.text));
             if (match) {
                 console.log(`[AnimeVOSTFR] Found episode in text: ${match.url}`);
@@ -303,6 +309,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         console.warn(`[AnimeVOSTFR] Episode S${season}E${episode} not found (targets: ${targetEpisodes.join(', ')})`);
     }
 
-    console.log(`[AnimeVOSTFR] Total streams found: ${streams.length}`);
-    return streams;
+    const validStreams = streams.filter(s => s && s.isDirect);
+    console.log(`[AnimeVOSTFR] Total streams found: ${validStreams.length}`);
+    return validStreams;
 }
