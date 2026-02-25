@@ -91,7 +91,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 while ((match = varRegex.exec(jsContent)) !== null) {
                     const varName = match[1];
                     const urls = match[2].match(/['"](.*?)['"]/g)?.map(u => u.slice(1, -1)) || [];
-                    let playerUrl = jsUrl.includes(`saison${season}`) ? urls[episode - 1] : (urls[absoluteEpisode - 1] || urls[episode - 1]);
+                    
+                    let playerUrl = null;
+                    if (jsUrl.includes(`saison${season}`)) {
+                        playerUrl = urls[episode - 1];
+                    } else if (jsUrl.includes('saison1') || !jsUrl.includes('saison')) {
+                        // If we are on season 1 or root, and we want season > 1, we MUST use absolute episode
+                        if (season > 1 && absoluteEpisode !== episode) {
+                            playerUrl = urls[absoluteEpisode - 1];
+                        } else {
+                            playerUrl = urls[episode - 1];
+                        }
+                    }
                     
                     if (playerUrl && playerUrl.startsWith('http')) {
                         const stream = await resolveStream({
@@ -131,7 +142,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                         while ((match = varRegex.exec(jsContent)) !== null) {
                             const varName = match[1];
                             const urls = match[2].match(/['"](.*?)['"]/g)?.map(u => u.slice(1, -1)) || [];
-                            const playerUrl = jsUrl.includes(`saison${season}`) ? urls[episode - 1] : (urls[absoluteEpisode - 1] || urls[episode - 1]);
+                            
+                            let playerUrl = null;
+                            if (jsUrl.includes(`saison${season}`)) {
+                                playerUrl = urls[episode - 1];
+                            } else if (jsUrl.includes('saison1') || !jsUrl.includes('saison')) {
+                                if (season > 1 && absoluteEpisode !== episode) {
+                                    playerUrl = urls[absoluteEpisode - 1];
+                                } else {
+                                    playerUrl = urls[episode - 1];
+                                }
+                            }
                             
                             if (playerUrl && playerUrl.startsWith('http')) {
                                 const stream = await resolveStream({

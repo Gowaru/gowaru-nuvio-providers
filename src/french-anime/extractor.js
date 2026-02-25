@@ -136,7 +136,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
             const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
-            if (absoluteEpisode) {
+            if (absoluteEpisode && absoluteEpisode !== episode) {
                 targetEpisodes.push(absoluteEpisode);
             }
         }
@@ -145,43 +145,36 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    const searchResult = await searchAnime(title);
-    if (!searchResult) return [];
+    let matches = await searchAnime(title);
+    if (!matches || matches.length === 0) return [];
+
+    // Prioritize results that match the season if explicitly mentioned
+    matches = matches.sort((a, b) => {
+        const aT = a.title.toLowerCase();
+        const bT = b.title.toLowerCase();
+        const sMatch = `saison ${season}`;
+        const hasA = aT.includes(sMatch);
+        const hasB = bT.includes(sMatch);
+        if (hasA && !hasB) return -1;
+        if (!hasA && hasB) return 1;
+        return 0;
+    });
 
     const streams = [];
     const pagesChecked = new Set();
-    const pagesToCheck = [searchResult.url];
-
-    try {
-        const searchHtml = await fetchText(`${BASE_URL}/index.php?do=search`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': BASE_URL
-            },
-            body: `do=search&subaction=search&story=${encodeURIComponent(title)}`
-        });
-
-        const $ = cheerio.load(searchHtml);
-        const normalize = (s) => s.toLowerCase()
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-            .replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
-        const simplifiedTitle = normalize(title);
-
-        $('a.mov-t').each((i, el) => {
-            const h = $(el).attr('href');
-            const t = normalize($(el).text().trim());
-            if (h && h.includes('.html') && t.includes(simplifiedTitle)) {
-                if (!pagesToCheck.includes(h)) {
-                    pagesToCheck.push(h);
-                }
-            }
-        });
-    } catch (e) { /* Ignore duplicate search error */ }
+    const pagesToCheck = matches.map(m => m.url);
 
     for (const pageUrl of pagesToCheck) {
         if (pagesChecked.has(pageUrl)) continue;
         pagesChecked.add(pageUrl);
+
+        // Optimization: if the result is explicitly for a different season, 
+        // skip it unless targetEpisodes contains an absolute episode
+        const matchLower = pageUrl.toLowerCase();
+        const seasonMatch = matchLower.match(/saison[-_]?(\d+)/);
+        if (seasonMatch && parseInt(seasonMatch[1]) !== season && targetEpisodes.length === 1) {
+            continue;
+        }
 
         try {
             const html = await fetchText(pageUrl);

@@ -4,7 +4,7 @@
  */
 
 const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
 };
 
 const _atob = (str) => {
@@ -35,20 +35,31 @@ async function safeFetch(url, options = {}) {
 export function unpack(code) {
     try {
         if (!code.includes('p,a,c,k,e,d')) return code;
-        const packed = code.match(/}\s*\((.*)\)\s*$/);
-        if (!packed) return code;
-        const args = packed[1].match(/(".+"|\d+)/g);
-        if (args.length < 4) return code;
-        let [p, a, c, k] = [
-            args[0].replace(/^"|"$/g, ''),
-            parseInt(args[1]),
-            parseInt(args[2]),
-            args[3].replace(/^"|"$/g, '').split('|')
-        ];
-        const e = (c) => (c < a ? "" : e(parseInt(c / a))) + ((c = c % a) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
-        const dict = {};
-        while (c--) dict[e(c)] = k[c] || e(c);
-        return p.replace(/\b\w+\b/g, (w) => dict[w] || w);
+        
+        const packedRegex = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\).*?\}\s*\((.*?)\)\s*\)/gs;
+        let result = code;
+        let match;
+        
+        while ((match = packedRegex.exec(code)) !== null) {
+            try {
+                const argsStr = match[1];
+                const pMatch = argsStr.match(/^'(.*?)',\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\.split\('\|'\)/s);
+                if (!pMatch) continue;
+                
+                let p = pMatch[1].replace(/\\'/g, "'");
+                let a = parseInt(pMatch[2]);
+                let c = parseInt(pMatch[3]);
+                let k = pMatch[4].split('|');
+                
+                const e = (c) => (c < a ? "" : e(parseInt(c / a))) + ((c = c % a) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
+                const dict = {};
+                while (c--) dict[e(c)] = k[c] || e(c);
+                
+                const unpacked = p.replace(/\b\w+\b/g, (w) => dict[w] || w);
+                result = result.replace(match[0], unpacked);
+            } catch (e) {}
+        }
+        return result;
     } catch (err) { return code; }
 }
 
@@ -61,6 +72,7 @@ export async function resolveSibnet(url) {
         if (match) {
             let videoUrl = match[1];
             if (videoUrl.startsWith('//')) videoUrl = "https:" + videoUrl;
+            else if (videoUrl.startsWith('/')) videoUrl = "https://video.sibnet.ru" + videoUrl;
             return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
         }
     } catch (e) {}
@@ -107,7 +119,7 @@ export async function resolveVoe(url) {
         if (match) {
             let videoUrl = match[1] || match[0];
             if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
-            return { url: videoUrl };
+            return { url: videoUrl, headers: { "Referer": url } };
         }
     } catch (e) {}
     return { url };
@@ -163,7 +175,7 @@ export async function resolveLuluvid(url) {
         if (match) {
             let videoUrl = match[1];
             if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
-            return { url: videoUrl };
+            return { url: videoUrl, headers: { "Referer": url } };
         }
     } catch (e) {}
     return { url };
@@ -176,7 +188,7 @@ export async function resolveHGCloud(url) {
         const html = await res.text();
         // HGCloud often uses a direct m3u8 in a script or player config
         const match = html.match(/["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/);
-        if (match) return { url: match[1] };
+        if (match) return { url: match[1], headers: { "Referer": url } };
     } catch (e) {}
     return { url };
 }
@@ -196,7 +208,10 @@ export async function resolveDood(url) {
             if (passRes.ok) {
                 const content = await passRes.text();
                 const randomStr = Math.random().toString(36).substring(2, 12);
-                return { url: content + randomStr + "?token=" + token + "&expiry=" + Date.now() };
+                return { 
+                    url: content + randomStr + "?token=" + token + "&expiry=" + Date.now(),
+                    headers: { "Referer": `https://${domain}/` }
+                };
             }
         }
     } catch (e) {}
@@ -209,7 +224,7 @@ export async function resolveMoon(url) {
         if (!res) return { url };
         const html = await res.text();
         const match = html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/);
-        if (match) return { url: match[1] };
+        if (match) return { url: match[1], headers: { "Referer": url } };
     } catch (e) {}
     return { url };
 }
@@ -243,6 +258,17 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('luluvid.') || urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
         else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
         
+        // If a specific resolver found a different URL, it's the final direct link
+        if (result && result.url !== originalUrl) {
+            return {
+                ...stream,
+                url: result.url,
+                headers: { ...stream.headers, ...(result.headers || {}) },
+                isDirect: true,
+                originalUrl: originalUrl
+            };
+        }
+
         // 3. Generic Fallback & Recursive Peeling
         if (!result || result.url === originalUrl) {
             const res = await safeFetch(originalUrl, { headers: stream.headers });
@@ -285,15 +311,10 @@ export async function resolveStream(stream, depth = 0) {
         }
 
         if (result && result.url !== originalUrl && result.url.startsWith('http')) {
-            // Recurse once more to make sure the resolved result doesn't need further peeling
-            const finalResolution = await resolveStream({ 
-                ...stream, 
-                url: result.url,
-                headers: { ...stream.headers, ...(result.headers || {}) }
-            }, depth + 1);
-            
             return {
-                ...finalResolution,
+                ...stream,
+                url: result.url,
+                headers: { ...stream.headers, ...(result.headers || {}) },
                 isDirect: true,
                 originalUrl: originalUrl
             };

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.9] - 2026-02-25
+
+### Changed
+- **FRAnime**: Temporarily disabled the provider due to aggressive Cloudflare protection and Next.js architecture changes.
+- Updated all providers to version 1.1.9 in `manifest.json`.
+
 ## [1.1.8] - 2026-02-25
 
 ### Added
@@ -13,11 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic **P.A.C.K.E.R** unpacking at every level of the recursive resolution.
 
 ### Changed
+- **ArmSync Global Hardening**: Applied strict season prioritization and exact episode regex matching across **all** providers (`voiranime`, `vostfree`, `french-anime`, `anime-sama`).
 - **AnimeVOSTFR Hardening**: Refactored episode discovery to use strict Regex boundaries (`(?:^|[^0-9])`) to prevent incorrect episode matching (e.g., ep 1 matching ep 10).
 - **ArmSync Optimization**: Search results are now prioritized based on the target season to ensure better metadata accuracy.
 - Updated all providers to version 1.1.8 in `manifest.json`.
 
 ### Fixed
+- **Critical Resolver Fixes**: 
+  - Fixed the `unpack` function which was failing to decode P.A.C.K.E.R scripts when passed an entire HTML document. This restores functionality for **Vidmoly**, **Streamtape**, **Luluvid**, and **Doodstream**.
+  - Fixed a bug in `resolveStream` where it would recursively fetch the final video stream as HTML, causing timeouts and failures for non-standard URLs (like Doodstream).
+  - Added missing `Referer` headers for **Luluvid**, **Voe**, **HGCloud**, and **Moon** to bypass hotlink protection.
 - Fixed iframe nesting issues in **AnimeVOSTFR** (`trembed`) and **French-Anime** (`vido`).
 
 ## [1.1.7] - 2026-02-24

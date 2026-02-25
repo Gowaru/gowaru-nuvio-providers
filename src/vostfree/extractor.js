@@ -89,7 +89,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
             const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
-            if (absoluteEpisode) {
+            if (absoluteEpisode && absoluteEpisode !== episode) {
                 targetEpisodes.push(absoluteEpisode);
             }
         }
@@ -98,8 +98,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    const matches = await searchAnime(title);
+    let matches = await searchAnime(title);
     if (!matches || matches.length === 0) return [];
+
+    // Prioritize results that match the season if explicitly mentioned
+    matches = matches.sort((a, b) => {
+        const aT = a.title.toLowerCase();
+        const bT = b.title.toLowerCase();
+        const sMatch = `saison ${season}`;
+        const hasA = aT.includes(sMatch);
+        const hasB = bT.includes(sMatch);
+        if (hasA && !hasB) return -1;
+        if (!hasA && hasB) return 1;
+        return 0;
+    });
 
     const streams = [];
     const checkedUrls = new Set();
@@ -108,8 +120,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (checkedUrls.has(match.url)) continue;
         checkedUrls.add(match.url);
 
+        const matchLower = match.title.toLowerCase();
         const animeUrl = match.url;
         const lang = (match.title.toUpperCase().includes(' VF') || match.url.includes('/vf/')) ? 'VF' : 'VOSTFR';
+
+        // Optimization: if the result is explicitly for a different season, 
+        // skip it unless targetEpisodes contains an absolute episode
+        const seasonMatch = matchLower.match(/saison\s*(\d+)/);
+        if (seasonMatch && parseInt(seasonMatch[1]) !== season && targetEpisodes.length === 1) {
+            continue;
+        }
 
         try {
             const html = await fetchText(animeUrl);
@@ -122,7 +142,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 for (const ep of targetEpisodes) {
                     const epS = ep.toString();
                     const epPadded = epS.padStart(2, '0');
-                    if (text.includes(`Episode ${epS}`) || text.includes(`Episode ${epPadded}`)) {
+                    // Strict regex to avoid "Episode 1" matching "Episode 10"
+                    const regex = new RegExp(`(?:^|[^0-9])(?:Episode\\s*)?(?:${epS}|${epPadded})(?:$|[^0-9])`, 'i');
+                    if (regex.test(text)) {
                         buttonsId = $(el).val();
                         return false;
                     }

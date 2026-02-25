@@ -1,5 +1,81 @@
 /**
  * franime - Built from src/franime/
- * Generated: 2026-02-25T18:32:18.196Z
+ * Generated: 2026-02-25T20:33:48.806Z
  */
-var H=Object.create;var v=Object.defineProperty,B=Object.defineProperties,O=Object.getOwnPropertyDescriptor,J=Object.getOwnPropertyDescriptors,K=Object.getOwnPropertyNames,F=Object.getOwnPropertySymbols,z=Object.getPrototypeOf,M=Object.prototype.hasOwnProperty,V=Object.prototype.propertyIsEnumerable;var E=(t,n,e)=>n in t?v(t,n,{enumerable:!0,configurable:!0,writable:!0,value:e}):t[n]=e,m=(t,n)=>{for(var e in n||(n={}))M.call(n,e)&&E(t,e,n[e]);if(F)for(var e of F(n))V.call(n,e)&&E(t,e,n[e]);return t},w=(t,n)=>B(t,J(n));var G=(t,n)=>{for(var e in n)v(t,e,{get:n[e],enumerable:!0})},T=(t,n,e,s)=>{if(n&&typeof n=="object"||typeof n=="function")for(let r of K(n))!M.call(t,r)&&r!==e&&v(t,r,{get:()=>n[r],enumerable:!(s=O(n,r))||s.enumerable});return t};var Q=(t,n,e)=>(e=t!=null?H(z(t)):{},T(n||!t||!t.__esModule?v(e,"default",{value:t,enumerable:!0}):e,t)),X=t=>T(v({},"__esModule",{value:!0}),t);var f=(t,n,e)=>new Promise((s,r)=>{var i=u=>{try{l(e.next(u))}catch(a){r(a)}},c=u=>{try{l(e.throw(u))}catch(a){r(a)}},l=u=>u.done?s(u.value):Promise.resolve(u.value).then(i,c);l((e=e.apply(t,n)).next())});var gt={};G(gt,{getStreams:()=>wt});module.exports=X(gt);var Y={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",Accept:"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7","Accept-Language":"fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7","Cache-Control":"max-age=0",Connection:"keep-alive"};function R(e){return f(this,arguments,function*(t,n={}){console.log(`[FRAnime] Fetching: ${t}`);let s=yield fetch(t,m({headers:m(m({},Y),n.headers)},n));if(!s.ok)throw new Error(`HTTP error ${s.status} for ${t}`);return yield s.text()})}function U(e){return f(this,arguments,function*(t,n={}){let s=yield R(t,n);try{return JSON.parse(s)}catch(r){throw console.error(`[FRAnime] Failed to parse JSON from ${t}`),r}})}var q=Q(require("cheerio"));var Z={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"},I=t=>{try{return typeof atob=="function"?atob(t):Buffer.from(t,"base64").toString("binary")}catch(n){return t}};function d(e){return f(this,arguments,function*(t,n={}){try{let s=yield fetch(t,w(m({},n),{headers:m(m({},Z),n.headers),redirect:"follow"}));if(!s.ok)return null;let r=yield s.text();return{text:()=>Promise.resolve(r),ok:!0,url:s.url,headers:s.headers}}catch(s){return null}})}function $(t){try{if(!t.includes("p,a,c,k,e,d"))return t;let n=t.match(/}\s*\((.*)\)\s*$/);if(!n)return t;let e=n[1].match(/(".+"|\d+)/g);if(e.length<4)return t;let[s,r,i,c]=[e[0].replace(/^"|"$/g,""),parseInt(e[1]),parseInt(e[2]),e[3].replace(/^"|"$/g,"").split("|")],l=a=>(a<r?"":l(parseInt(a/r)))+((a=a%r)>35?String.fromCharCode(a+29):a.toString(36)),u={};for(;i--;)u[l(i)]=c[i]||l(i);return s.replace(/\b\w+\b/g,a=>u[a]||a)}catch(n){return t}}function tt(t){return f(this,null,function*(){try{let n=yield d(t,{headers:{Referer:"https://video.sibnet.ru/"}});if(!n)return{url:t};let e=yield n.text(),s=e.match(/src\s*:\s*["']([^"']+\.mp4)["']/)||e.match(/"url"\s*:\s*"([^"]+\.mp4)"/);if(s){let r=s[1];return r.startsWith("//")&&(r="https:"+r),{url:r,headers:{Referer:"https://video.sibnet.ru/"}}}}catch(n){}return{url:t}})}function et(t){return f(this,null,function*(){try{let n=yield d(t,{headers:{Referer:"https://vidmoly.to/"}});if(!n)return{url:t};let e=yield n.text();e.includes("eval(function(p,a,c,k,e,d)")&&(e=$(e));let s=e.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/);if(s)return{url:s[1],headers:{Referer:"https://vidmoly.to/"}}}catch(n){}return{url:t}})}function nt(t){return f(this,null,function*(){try{let n=yield d(t,{headers:{Referer:"https://uqload.com/"}});if(!n)return{url:t};let e=yield n.text(),s=e.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/)||e.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);if(s)return{url:s[1],headers:{Referer:"https://uqload.com/"}}}catch(n){}return{url:t}})}function st(t){return f(this,null,function*(){try{let n=yield d(t);if(!n)return{url:t};let e=yield n.text(),s=e.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);if(s){let i=yield d(s[1]);i&&(e=yield i.text())}let r=e.match(/'hls'\s*:\s*'([^']+)'/)||e.match(/"hls"\s*:\s*"([^"]+)"/)||e.match(/https?:\/\/[^"']+\.m3u8[^"']*/);if(r){let i=r[1]||r[0];return i.includes("base64")&&(i=I(i.split(",")[1]||i)),{url:i}}}catch(n){}return{url:t}})}function rt(t){return f(this,null,function*(){try{let n=yield d(t);if(!n)return{url:t};let e=yield n.text();e.includes("p,a,c,k,e,d")&&(e=$(e));let s=e.match(/robotlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*([^;]+)/);if(s){let r="https:"+s[1],i=s[2].split("+");for(let c of i){let l=c.match(/['"]([^'"]+)['"]/);if(l){let u=l[1],a=c.match(/substring\((\d+)\)/);a&&(u=u.substring(parseInt(a[1]))),r+=u}}return{url:r,headers:{Referer:"https://streamtape.com/"}}}}catch(n){}return{url:t}})}function it(t){return f(this,null,function*(){try{let n=yield d(t);if(!n)return{url:t};let e=yield n.text(),s=e.match(/video_source\s*:\s*["']([^"']+\.mp4[^"']*)["']/)||e.match(/source\s+src=["']([^"']+\.mp4[^"']*)["']/);if(s)return{url:s[1]}}catch(n){}return{url:t}})}function at(t){return f(this,null,function*(){try{let n=yield d(t);if(!n)return{url:t};let e=yield n.text();e.includes("p,a,c,k,e,d")&&(e=$(e));let s=e.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/)||e.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/);if(s){let r=s[1];return r.includes("base64")&&(r=I(r.split(",")[1]||r)),{url:r}}}catch(n){}return{url:t}})}function ot(t){return f(this,null,function*(){try{let n=yield d(t);if(!n)return{url:t};let s=(yield n.text()).match(/["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/);if(s)return{url:s[1]}}catch(n){}return{url:t}})}function ct(t){return f(this,null,function*(){var n;try{let e=((n=t.match(/https?:\/\/([^\/]+)/))==null?void 0:n[1])||"dood.to",s=yield d(t);if(!s)return{url:t};let r=yield s.text();r.includes("eval(function(p,a,c,k,e,d)")&&(r=$(r));let i=r.match(/\$\.get\(['"]\/pass_md5\/([^'"]+)['"]/);if(i){let c=i[1],l=`https://${e}/pass_md5/${c}`,u=yield fetch(l,{headers:{Referer:t}});if(u.ok){let a=yield u.text(),o=Math.random().toString(36).substring(2,12);return{url:a+o+"?token="+c+"&expiry="+Date.now()}}}}catch(e){}return{url:t}})}function lt(t){return f(this,null,function*(){try{let n=yield d(t);if(!n)return{url:t};let s=(yield n.text()).match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/);if(s)return{url:s[1]}}catch(n){}return{url:t}})}function S(t,n=0){return f(this,null,function*(){var r;if(n>3)return w(m({},t),{isDirect:!1});let e=t.url,s=e.toLowerCase();if(!e||e.includes("google-analytics")||e.includes("doubleclick"))return null;if(s.match(/\.(mp4|m3u8|mkv|webm)(\?.*)?$/)&&!s.includes("html"))return w(m({},t),{isDirect:!0});try{let i=null;if(s.includes("sibnet.ru")?i=yield tt(e):s.includes("vidmoly.")?i=yield et(e):s.includes("uqload.")||s.includes("oneupload.")?i=yield nt(e):s.includes("voe.")?i=yield st(e):s.includes("streamtape.com")||s.includes("stape")?i=yield rt(e):s.includes("dood")||s.includes("ds2play")?i=yield ct(e):s.includes("moonplayer")||s.includes("moon.")?i=yield lt(e):s.includes("sendvid.")?i=yield it(e):s.includes("luluvid.")||s.includes("lulu.")?i=yield at(e):(s.includes("hgcloud.")||s.includes("savefiles."))&&(i=yield ot(e)),!i||i.url===e){let c=yield d(e,{headers:t.headers});if(c){let l=yield c.text();l.includes("p,a,c,k,e,d")&&(l=$(l));let u=l.match(/https?:\/\/[^"']+\.m3u8[^"']*/)||l.match(/https?:\/\/[^"']+\.mp4[^"']*/)||l.match(/file\s*:\s*["']([^"']+)["']/);if(u){let a=u[1]||u[0];a.startsWith("//")&&(a="https:"+a),a.startsWith("http")&&!a.includes(ut)&&(i={url:a})}if(!i){let a=l.match(/<iframe\s+[^>]*src=["']([^"']+)["']/i);if(a){let o=a[1];if(o.startsWith("//")&&(o="https:"+o),o.startsWith("/")){let h=(r=e.match(/^https?:\/\/[^\/]+/))==null?void 0:r[0];h&&(o=h+o)}if(o.startsWith("http")&&o!==e)return console.log(`[Resolver] Peeling: Found nested iframe -> ${o}`),yield S(w(m({},t),{url:o}),n+1)}}}}if(i&&i.url!==e&&i.url.startsWith("http")){let c=yield S(w(m({},t),{url:i.url,headers:m(m({},t.headers),i.headers||{})}),n+1);return w(m({},c),{isDirect:!0,originalUrl:e})}}catch(i){}return w(m({},t),{isDirect:!1})})}var ut="googletagmanager";var ft="https://arm.haglund.dev/api/v2";var mt="https://v3-cinemeta.strem.io";function k(e){return f(this,arguments,function*(t,n={}){try{let s=new AbortController,r=setTimeout(()=>s.abort(),8e3),i=yield fetch(t,w(m({},n),{signal:s.signal}));return clearTimeout(r),i}catch(s){return console.error(`[ArmSync] Fetch failed: ${t}`,s.message),null}})}function L(t,n){return f(this,null,function*(){if(!t)return null;let e=yield k(`${ft}/themoviedb?id=${t}`);if(e)try{let i=yield e.json(),c=Array.isArray(i)?i[0]:i;if(c&&c.imdb)return c.imdb}catch(i){}let s=`https://www.themoviedb.org/${n==="movie"?"movie":"tv"}/${t}`,r=yield k(s);if(r){let c=(yield r.text()).match(/imdb\.com\/title\/(tt\d+)/);if(c)return c[1]}return null})}function W(t,n,e){return f(this,null,function*(){var a;if(!t||n===0)return null;let s=yield k(`${mt}/meta/series/${t}.json`);if(!s)return null;let r=yield s.json();if(!((a=r==null?void 0:r.meta)!=null&&a.videos))return null;let i=r.meta.videos.filter(o=>o.season>0&&o.episode>0).sort((o,h)=>o.season-h.season||o.episode-h.episode),c=[],l=new Set;for(let o of i){let h=`${o.season}-${o.episode}`;l.has(h)||(l.add(h),c.push(o))}let u=c.findIndex(o=>o.season==n&&o.episode==e);if(u!==-1){let o=u+1;return console.log(`[ArmSync] Resolved: S${n}E${e} -> Absolute ${o}`),o}return null})}var C="https://api.franime.fr/api",A=null;function ht(t,n){return f(this,null,function*(){try{let e=`https://www.themoviedb.org/${n==="movie"?"movie":"tv"}/${t}?language=en-US`,s=yield R(e),r=q.default.load(s),i=r('meta[property="og:title"]').attr("content")||r("h1").first().text()||r("h2").first().text();return i&&i.includes(" (")&&(i=i.split(" (")[0]),i&&i.includes(" - ")&&(i=i.split(" - ")[0]),i=i?i.trim():null,console.log(`[FRAnime] TMDB Title found: ${i}`),i}catch(e){return console.error(`[FRAnime] Failed to get title from TMDB: ${e.message}`),null}})}function dt(){return f(this,null,function*(){if(A)return A;try{return console.log("[FRAnime] Loading full anime list..."),A=yield U(`${C}/animes/`),console.log(`[FRAnime] Loaded ${A.length} animes.`),A}catch(t){return console.error(`[FRAnime] Failed to load anime list: ${t.message}`),[]}})}function pt(t,n){let e=r=>r.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[':!.,?]/g,"").replace(/\bthe\s+/g,"").replace(/\s+/g," ").trim(),s=e(n);return t.filter(r=>e(r.title).includes(s)||e(r.titleO||"").includes(s)||s.includes(e(r.title)))}function N(t,n,e,s){return f(this,null,function*(){let r=yield ht(t,n);if(!r)return[];let i=yield dt(),c=pt(i,r);if(c.length===0)return console.warn(`[FRAnime] No match found for "${r}" in anime list.`),[];let l=null;try{let a=yield L(t,n);a&&(l=yield W(a,e,s))}catch(a){console.warn(`[FRAnime] ArmSync failed: ${a.message}`)}let u=[];for(let a of c){let o=null,h=null;if(l&&a.saisons){let g=0;for(let p=0;p<a.saisons.length;p++){let x=a.saisons[p];if(x.episodes){for(let y=0;y<x.episodes.length;y++)if(g++,g===l){o=x,h=x.episodes[y];break}}if(h)break}}if(!h){let g=e-1,p=s-1;o=a.saisons?a.saisons[g]:null,h=o?o.episodes[p]:null}if(!h)continue;let _=["vo","vf"];for(let g of _){let p=h.lang[g];if(!p||!p.lecteurs)continue;let x=g==="vo"?"VOSTFR":"VF";for(let y=0;y<p.lecteurs.length;y++){let j=p.lecteurs[y],P=`${C}/anime/${a.id}/${a.saisons.indexOf(o)}/${o.episodes.indexOf(h)}/${g}/${y}`;try{let b=yield R(P,{headers:{Referer:"https://franime.fr/"}});if(b&&b.startsWith("http")){let D=yield S({name:`FRAnime (${x})`,title:`${j} Player - ${x}`,url:b,quality:"HD",headers:{Referer:"https://franime.fr/"}});D&&u.push(D)}}catch(b){}}}}return u})}function wt(t,n,e,s){return f(this,null,function*(){console.log(`[FRAnime] Request: ${n} ${t} S${e}E${s}`);try{return yield N(t,n,e,s)}catch(r){return console.error("[FRAnime] Error:",r),[]}})}
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __async = (__this, __arguments, generator) => {
+  return new Promise((resolve, reject) => {
+    var fulfilled = (value) => {
+      try {
+        step(generator.next(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var rejected = (value) => {
+      try {
+        step(generator.throw(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var step = (x) => x.done ? resolve(x.value) : Promise.resolve(x.value).then(fulfilled, rejected);
+    step((generator = generator.apply(__this, __arguments)).next());
+  });
+};
+
+// src/franime/index.js
+var index_exports = {};
+__export(index_exports, {
+  getStreams: () => getStreams
+});
+module.exports = __toCommonJS(index_exports);
+
+// src/franime/extractor.js
+var import_cheerio = __toESM(require("cheerio"));
+function extractStreams(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    console.warn(`[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes.`);
+    return [];
+  });
+}
+
+// src/franime/index.js
+function getStreams(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    console.log(`[FRAnime] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+    try {
+      const streams = yield extractStreams(tmdbId, mediaType, season, episode);
+      return streams;
+    } catch (error) {
+      console.error(`[FRAnime] Error:`, error);
+      return [];
+    }
+  });
+}
