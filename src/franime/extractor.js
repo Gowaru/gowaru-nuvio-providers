@@ -53,9 +53,9 @@ async function getAnimeList() {
 }
 
 /**
- * Find the best matching anime from the local list
+ * Find all matching animes from the local list
  */
-function findBestMatch(list, title) {
+function findAllMatches(list, title) {
     const normalize = (s) => s.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
         .replace(/[':!.,?]/g, '')
@@ -65,15 +65,12 @@ function findBestMatch(list, title) {
 
     const targetTitle = normalize(title);
 
-    // 1. Precise match on title or titleO
-    let match = list.find(a => normalize(a.title) === targetTitle || normalize(a.titleO || "") === targetTitle);
-
-    // 2. Includes match
-    if (!match) {
-        match = list.find(a => normalize(a.title).includes(targetTitle) || normalize(a.titleO || "").includes(targetTitle));
-    }
-
-    return match;
+    // Filter list for matches
+    return list.filter(a => 
+        normalize(a.title).includes(targetTitle) || 
+        normalize(a.titleO || "").includes(targetTitle) ||
+        targetTitle.includes(normalize(a.title))
+    );
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
@@ -81,9 +78,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (!title) return [];
 
     const animeList = await getAnimeList();
-    const anime = findBestMatch(animeList, title);
+    const matches = findAllMatches(animeList, title);
 
-    if (!anime) {
+    if (matches.length === 0) {
         console.warn(`[FRAnime] No match found for "${title}" in anime list.`);
         return [];
     }
@@ -101,77 +98,69 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     const streams = [];
-    let targetS = null;
-    let targetEp = null;
 
-    // 1. Prioritize Absolute Episode Match (Most reliable on FRAnime)
-    if (absoluteEpisode && anime.saisons) {
-        let currentAbs = 0;
-        for (let sIdx = 0; sIdx < anime.saisons.length; sIdx++) {
-            const s = anime.saisons[sIdx];
-            if (s.episodes) {
-                for (let eIdx = 0; eIdx < s.episodes.length; eIdx++) {
-                    currentAbs++;
-                    if (currentAbs === absoluteEpisode) {
-                        targetS = s;
-                        targetEp = s.episodes[eIdx];
-                        console.log(`[FRAnime] ArmSync: Matched Absolute ${absoluteEpisode} at S${sIdx + 1}E${eIdx + 1}`);
-                        break;
-                    }
-                }
-            }
-            if (targetEp) break;
-        }
-    }
+    for (const anime of matches) {
+        let targetS = null;
+        let targetEp = null;
 
-    // 2. Fallback to Seasonal Match if Absolute fails or is missing
-    if (!targetEp) {
-        const seasonIdx = season - 1;
-        const epIdx = episode - 1;
-        targetS = anime.saisons[seasonIdx];
-        targetEp = targetS ? targetS.episodes[epIdx] : null;
-    }
-
-    if (!targetEp) {
-        console.warn(`[FRAnime] Episode S${season}E${episode} not found for ${anime.title}`);
-        return [];
-    }
-
-    // Languages: vo (vostfr), vf
-    const languages = ['vo', 'vf'];
-
-    for (const lang of languages) {
-        const langData = targetEp.lang[lang];
-        if (!langData || !langData.lecteurs) continue;
-
-        const langName = lang === 'vo' ? 'VOSTFR' : 'VF';
-
-        for (let i = 0; i < langData.lecteurs.length; i++) {
-            const playerName = langData.lecteurs[i];
-            const playerUrl = `${API_BASE}/anime/${anime.id}/${anime.saisons.indexOf(targetS)}/${targetS.episodes.indexOf(targetEp)}/${lang}/${i}`;
-
-            try {
-                // Fetch the player URL with required Referer
-                const embedUrl = await fetchText(playerUrl, {
-                    headers: {
-                        "Referer": "https://franime.fr/"
-                    }
-                });
-
-                if (embedUrl && embedUrl.startsWith('http')) {
-                    const stream = await resolveStream({
-                        name: `FRAnime (${langName})`,
-                        title: `${playerName} Player`,
-                        url: embedUrl,
-                        quality: "HD",
-                        headers: {
-                            "Referer": "https://franime.fr/"
+        // 1. Prioritize Absolute Episode Match
+        if (absoluteEpisode && anime.saisons) {
+            let currentAbs = 0;
+            for (let sIdx = 0; sIdx < anime.saisons.length; sIdx++) {
+                const s = anime.saisons[sIdx];
+                if (s.episodes) {
+                    for (let eIdx = 0; eIdx < s.episodes.length; eIdx++) {
+                        currentAbs++;
+                        if (currentAbs === absoluteEpisode) {
+                            targetS = s;
+                            targetEp = s.episodes[eIdx];
+                            break;
                         }
-                    });
-                    streams.push(stream);
+                    }
                 }
-            } catch (err) {
-                console.error(`[FRAnime] Failed to fetch player ${i} for ${lang}: ${err.message}`);
+                if (targetEp) break;
+            }
+        }
+
+        // 2. Fallback to Seasonal Match
+        if (!targetEp) {
+            const seasonIdx = season - 1;
+            const epIdx = episode - 1;
+            targetS = anime.saisons ? anime.saisons[seasonIdx] : null;
+            targetEp = targetS ? targetS.episodes[epIdx] : null;
+        }
+
+        if (!targetEp) continue;
+
+        // Languages: vo (vostfr), vf
+        const languages = ['vo', 'vf'];
+
+        for (const lang of languages) {
+            const langData = targetEp.lang[lang];
+            if (!langData || !langData.lecteurs) continue;
+
+            const langName = lang === 'vo' ? 'VOSTFR' : 'VF';
+
+            for (let i = 0; i < langData.lecteurs.length; i++) {
+                const playerName = langData.lecteurs[i];
+                const playerUrl = `${API_BASE}/anime/${anime.id}/${anime.saisons.indexOf(targetS)}/${targetS.episodes.indexOf(targetEp)}/${lang}/${i}`;
+
+                try {
+                    const embedUrl = await fetchText(playerUrl, {
+                        headers: { "Referer": "https://franime.fr/" }
+                    });
+
+                    if (embedUrl && embedUrl.startsWith('http')) {
+                        const stream = await resolveStream({
+                            name: `FRAnime (${langName})`,
+                            title: `${playerName} Player - ${langName}`,
+                            url: embedUrl,
+                            quality: "HD",
+                            headers: { "Referer": "https://franime.fr/" }
+                        });
+                        if (stream) streams.push(stream);
+                    }
+                } catch (err) {}
             }
         }
     }

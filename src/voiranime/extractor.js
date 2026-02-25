@@ -131,89 +131,92 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    const animeUrl = await searchAnime(title);
-    if (!animeUrl) return [];
+    const matches = await searchAnime(title);
+    if (!matches || matches.length === 0) return [];
 
-    try {
-        const html = await fetchText(animeUrl);
-        const $ = cheerio.load(html);
+    const streams = [];
+    const checkedUrls = new Set();
 
-        const epNum = episode.toString();
-        const paddings = ['', '0', '00', '000'];
-        
-        // Use all target episode numbers (seasonal + absolute)
-        const epPatterns = [];
-        for (const ep of targetEpisodes) {
-            const epS = ep.toString();
-            paddings.forEach(p => epPatterns.push((p + epS).slice(-Math.max(epS.length, p.length))));
-        }
+    for (const match of matches) {
+        if (checkedUrls.has(match.url)) continue;
+        checkedUrls.add(match.url);
 
-        let episodeUrl = null;
-        $('.listing-chapters a, .list-chapter a, .wp-manga-chapter a').each((i, el) => {
-            const text = $(el).text().trim();
-            const href = $(el).attr('href');
-            for (const pattern of epPatterns) {
-                const regex = new RegExp(`(?:[^0-9]|^)${pattern}(?:[^0-9]|$)`);
-                if (regex.test(text) || regex.test(href)) {
-                    episodeUrl = href;
-                    return false;
+        try {
+            const animeUrl = match.url;
+            const lang = (match.title.toUpperCase().includes('VF') || animeUrl.includes('-vf')) ? 'VF' : 'VOSTFR';
+            
+            const html = await fetchText(animeUrl);
+            const $ = cheerio.load(html);
+
+            const paddings = ['', '0', '00'];
+            const epPatterns = [];
+            for (const ep of targetEpisodes) {
+                const epS = ep.toString();
+                paddings.forEach(p => epPatterns.push(p + epS));
+            }
+
+            let episodeUrl = null;
+            $('.listing-chapters a, .list-chapter a, .wp-manga-chapter a').each((i, el) => {
+                const text = $(el).text().trim();
+                const href = $(el).attr('href');
+                for (const pattern of epPatterns) {
+                    const regex = new RegExp(`(?:[^0-9]|^)${pattern}(?:[^0-9]|$)`);
+                    if (regex.test(text) || regex.test(href)) {
+                        episodeUrl = href;
+                        return false;
+                    }
+                }
+            });
+
+            if (!episodeUrl) continue;
+
+            const epRawHtml = await fetchText(episodeUrl);
+            const ep$ = cheerio.load(epRawHtml);
+
+            const hosts = [];
+            ep$('[name="host"] option, .host-select option').each((i, el) => {
+                const val = ep$(el).val();
+                if (val && val !== "Choisir un lecteur") hosts.push(val);
+            });
+
+            if (hosts.length === 0) {
+                const iframe = ep$('iframe[src*="embed"], iframe[src*="e/"]').first().attr('src');
+                if (iframe) {
+                    const stream = await resolveStream({
+                        name: `VoirAnime (${lang})`,
+                        title: `Default Player - ${lang}`,
+                        quality: "HD",
+                        url: iframe,
+                        headers: { "Referer": BASE_URL }
+                    });
+                    if (stream) streams.push(stream);
+                }
+            } else {
+                for (const host of hosts) {
+                    try {
+                        const hostUrl = `${episodeUrl}${episodeUrl.includes('?') ? '&' : '?'}host=${encodeURIComponent(host)}`;
+                        const hostHtml = await fetchText(hostUrl);
+                        const iframeMatch = hostHtml.match(/<iframe\s+.*?src="(https?:\/\/[^"]+)".*?><\/iframe>/i);
+                        let embedUrl = iframeMatch ? iframeMatch[1] : null;
+                        if (!embedUrl) {
+                            const scriptMatch = hostHtml.match(/https?:\/\/[^"']+\/(?:embed|e)\/[^"']+/);
+                            if (scriptMatch && !scriptMatch[0].includes('voiranime.com')) embedUrl = scriptMatch[0];
+                        }
+                        if (embedUrl) {
+                            const stream = await resolveStream({
+                                name: `VoirAnime (${lang})`,
+                                title: `${host} - ${lang}`,
+                                url: embedUrl,
+                                quality: "HD",
+                                headers: { "Referer": BASE_URL }
+                            });
+                            if (stream) streams.push(stream);
+                        }
+                    } catch (err) {}
                 }
             }
-        });
-
-        if (!episodeUrl) return [];
-
-        console.log(`[VoirAnime] Episode URL: ${episodeUrl}`);
-        const epRawHtml = await fetchText(episodeUrl);
-        const ep$ = cheerio.load(epRawHtml);
-
-        const streams = [];
-        const hosts = [];
-
-        ep$('[name="host"] option, .host-select option').each((i, el) => {
-            const val = ep$(el).val();
-            if (val && val !== "Choisir un lecteur") hosts.push(val);
-        });
-
-        if (hosts.length === 0) {
-            const iframe = ep$('iframe[src*="embed"], iframe[src*="e/"]').first().attr('src');
-            if (iframe) {
-                const stream = await resolveStream({
-                    name: "VoirAnime",
-                    title: "Default Player",
-                    quality: "HD",
-                    url: iframe,
-                    headers: { "Referer": BASE_URL }
-                });
-                streams.push(stream);
-            }
-        } else {
-            for (const host of hosts) {
-                try {
-                    const hostUrl = `${episodeUrl}${episodeUrl.includes('?') ? '&' : '?'}host=${encodeURIComponent(host)}`;
-                    const hostHtml = await fetchText(hostUrl);
-                    const iframeMatch = hostHtml.match(/<iframe\s+.*?src="(https?:\/\/[^"]+)".*?><\/iframe>/i);
-                    let embedUrl = iframeMatch ? iframeMatch[1] : null;
-                    if (!embedUrl) {
-                        const scriptMatch = hostHtml.match(/https?:\/\/[^"']+\/(?:embed|e)\/[^"']+/);
-                        if (scriptMatch && !scriptMatch[0].includes('voiranime.com')) embedUrl = scriptMatch[0];
-                    }
-                    if (embedUrl) {
-                        const stream = await resolveStream({
-                            name: `VoirAnime (${host})`,
-                            title: `${host} Player`,
-                            url: embedUrl,
-                            quality: "HD",
-                            headers: { "Referer": BASE_URL }
-                        });
-                        streams.push(stream);
-                    }
-                } catch (err) { /* Ignore */ }
-            }
-        }
-        return streams;
-    } catch (e) {
-        console.error(`[VoirAnime] Extraction error: ${e.message}`);
-        return [];
+        } catch (e) {}
     }
+
+    return streams;
 }

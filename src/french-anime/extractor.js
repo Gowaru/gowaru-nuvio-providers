@@ -67,27 +67,16 @@ async function searchAnime(title) {
 
         console.log(`[French-Anime] Search results: ${results.length}`);
 
-        // 1. Exact match (VOSTFR preferred)
-        let bestMatch = results.find(r =>
-            normalize(r.title).includes(simplifiedTitle) && r.url.includes('animes-vostfr'));
+        // Find all matches that contain the title
+        const matches = results.filter(r => normalize(r.title).includes(simplifiedTitle));
 
-        // 2. Exact match (any language)
-        if (!bestMatch) {
-            bestMatch = results.find(r => normalize(r.title).includes(simplifiedTitle));
+        if (matches.length > 0) {
+            console.log(`[French-Anime] Found ${matches.length} matches for ${title}`);
         }
-
-        // 3. Fallback to first result
-        if (!bestMatch) bestMatch = results[0];
-
-        if (bestMatch) {
-            console.log(`[French-Anime] Selected: ${bestMatch.title} -> ${bestMatch.url}`);
-            return bestMatch;
-        }
-
-        return null;
+        return matches;
     } catch (e) {
         console.error(`[French-Anime] Search error: ${e.message}`);
-        return null;
+        return [];
     }
 }
 

@@ -27,18 +27,21 @@ async function getTmdbTitle(tmdbId, mediaType) {
 /**
  * Search for a slug on Anime-Sama
  */
-async function searchSlug(title) {
+async function searchSlugs(title) {
     try {
         const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(title)}`;
         const html = await fetchText(searchUrl);
         const $ = cheerio.load(html);
-        const firstResult = $('a[href*="/catalogue/"]').first();
-        if (firstResult.length) {
-            const match = firstResult.attr('href').match(/\/catalogue\/([^/]+)\/?/);
-            if (match) return match[1];
-        }
-        return null;
-    } catch (e) { return null; }
+        const slugs = [];
+        $('a[href*="/catalogue/"]').each((i, el) => {
+            const h = $(el).attr('href');
+            const match = h.match(/\/catalogue\/([^/]+)\/?/);
+            if (match && !slugs.includes(match[1])) {
+                slugs.push(match[1]);
+            }
+        });
+        return slugs;
+    } catch (e) { return []; }
 }
 
 function toSlug(title) {
@@ -106,28 +109,43 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     if (streams.length === 0) {
-        const foundSlug = await searchSlug(title);
-        if (foundSlug && foundSlug !== slug) {
+        const foundSlugs = await searchSlugs(title);
+        const checkedSlugs = new Set([slug]);
+
+        for (const fSlug of foundSlugs) {
+            if (checkedSlugs.has(fSlug)) continue;
+            checkedSlugs.add(fSlug);
+
             for (const lang of languages) {
-                const retryUrl = `${BASE_URL}/catalogue/${foundSlug}/saison${season}/${lang}/episodes.js`;
-                try {
-                    const jsContent = await fetchText(retryUrl);
-                    const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[(.*?)\s*\]/gs;
-                    let match;
-                    while ((match = varRegex.exec(jsContent)) !== null) {
-                        const varName = match[1];
-                        const urls = match[2].match(/['"](.*?)['"]/g)?.map(u => u.slice(1, -1)) || [];
-                        const playerUrl = urls[episode - 1] || urls[absoluteEpisode - 1];
-                        if (playerUrl && playerUrl.startsWith('http')) {
-                            const stream = await resolveStream({
-                                name: `Anime-Sama (${lang.toUpperCase()})`,
-                                title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
-                                url: playerUrl, headers: { "Referer": BASE_URL }
-                            });
-                            streams.push(stream);
+                const retryPaths = [
+                    `${BASE_URL}/catalogue/${fSlug}/saison${season}/${lang}/episodes.js`,
+                    `${BASE_URL}/catalogue/${fSlug}/${lang}/episodes.js`
+                ];
+                if (season > 1 && absoluteEpisode) retryPaths.push(`${BASE_URL}/catalogue/${fSlug}/saison1/${lang}/episodes.js`);
+
+                for (const jsUrl of retryPaths) {
+                    try {
+                        const jsContent = await fetchText(jsUrl);
+                        const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[(.*?)\s*\]/gs;
+                        let match;
+                        while ((match = varRegex.exec(jsContent)) !== null) {
+                            const varName = match[1];
+                            const urls = match[2].match(/['"](.*?)['"]/g)?.map(u => u.slice(1, -1)) || [];
+                            const playerUrl = jsUrl.includes(`saison${season}`) ? urls[episode - 1] : (urls[absoluteEpisode - 1] || urls[episode - 1]);
+                            
+                            if (playerUrl && playerUrl.startsWith('http')) {
+                                const stream = await resolveStream({
+                                    name: `Anime-Sama (${lang.toUpperCase()})`,
+                                    title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
+                                    url: playerUrl,
+                                    quality: "HD",
+                                    headers: { "Referer": BASE_URL }
+                                });
+                                if (stream) streams.push(stream);
+                            }
                         }
-                    }
-                } catch (e) {}
+                    } catch (e) {}
+                }
             }
         }
     }

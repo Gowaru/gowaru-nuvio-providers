@@ -67,25 +67,16 @@ async function searchAnime(title) {
             .replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
         const simplifiedTitle = normalize(title);
 
-        // Prefer VOSTFR version
-        let bestMatch = unique.find(r =>
-            normalize(r.title).includes(simplifiedTitle) && (r.url.includes('vostfr') || r.url.includes('voir-')));
+        // Find all matches that contain the title
+        const matches = unique.filter(r => normalize(r.title).includes(simplifiedTitle));
 
-        // Fallback: any match
-        if (!bestMatch) {
-            bestMatch = unique.find(r => normalize(r.title).includes(simplifiedTitle));
+        if (matches.length > 0) {
+            console.log(`[AnimeVOSTFR] Found ${matches.length} matches for ${title}`);
         }
-
-        // Fallback: first result
-        if (!bestMatch && unique.length > 0) bestMatch = unique[0];
-
-        if (bestMatch) {
-            console.log(`[AnimeVOSTFR] Selected: ${bestMatch.title} -> ${bestMatch.url}`);
-        }
-        return bestMatch || null;
+        return matches;
     } catch (e) {
         console.error(`[AnimeVOSTFR] Search error: ${e.message}`);
-        return null;
+        return [];
     }
 }
 
@@ -107,32 +98,33 @@ async function findEpisodeUrl(seriesUrl, season, episode) {
 
         console.log(`[AnimeVOSTFR] Found ${episodeLinks.length} episode links`);
 
-        // Try to match episode number in URL
-        const epPatterns = [
-            `episode-${episode}/`,
-            `episode-${episode}`,
-            `saison-${season}-episode-${episode}`,
-            `-${season}-episode-${episode}`,
+        // Create strict regex patterns for the episode number
+        const epStr = String(episode);
+        const epPadded = epStr.padStart(2, '0');
+        
+        const patterns = [
+            new RegExp(`(?:^|[^0-9])${epStr}(?:$|[^0-9])`), // Matches " 1 ", "-1-", "ep1"
+            new RegExp(`episode-${epStr}(?:$|[^0-9])`, 'i'),
+            new RegExp(`episode-${epPadded}(?:$|[^0-9])`, 'i'),
+            new RegExp(`saison-${season}-episode-${epStr}(?:$|[^0-9])`, 'i')
         ];
 
-        for (const pattern of epPatterns) {
-            const match = episodeLinks.find(l => l.url.includes(pattern));
+        // 1. Try to find match in URL first (more reliable)
+        for (const pattern of patterns) {
+            const match = episodeLinks.find(l => pattern.test(l.url));
             if (match) {
-                console.log(`[AnimeVOSTFR] Found episode: ${match.url}`);
+                console.log(`[AnimeVOSTFR] Found episode in URL: ${match.url}`);
                 return match.url;
             }
         }
 
-        // Fallback: try to match by episode number at end of URL
-        const padded = String(episode).padStart(1, '0');
-        const match = episodeLinks.find(l => {
-            const urlLower = l.url.toLowerCase();
-            return urlLower.includes(`episode-${padded}/`) || urlLower.includes(`episode-${padded}`);
-        });
-
-        if (match) {
-            console.log(`[AnimeVOSTFR] Found episode (fallback): ${match.url}`);
-            return match.url;
+        // 2. Try to find match in link text
+        for (const pattern of patterns) {
+            const match = episodeLinks.find(l => pattern.test(l.text));
+            if (match) {
+                console.log(`[AnimeVOSTFR] Found episode in text: ${match.url}`);
+                return match.url;
+            }
         }
 
         return null;
@@ -240,7 +232,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         const imdbId = await getImdbId(tmdbId, mediaType);
         if (imdbId) {
             const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
-            if (absoluteEpisode) {
+            if (absoluteEpisode && absoluteEpisode !== episode) {
                 targetEpisodes.push(absoluteEpisode);
             }
         }
@@ -249,20 +241,62 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
-    const searchResult = await searchAnime(title);
-    if (!searchResult) return [];
+    let matches = await searchAnime(title);
+    if (!matches || matches.length === 0) return [];
+
+    // Prioritize results that match the season if explicitly mentioned
+    matches = matches.sort((a, b) => {
+        const aT = a.title.toLowerCase();
+        const bT = b.title.toLowerCase();
+        const sMatch = `saison ${season}`;
+        const hasA = aT.includes(sMatch);
+        const hasB = bT.includes(sMatch);
+        if (hasA && !hasB) return -1;
+        if (!hasA && hasB) return 1;
+        return 0;
+    });
 
     const streams = [];
-    const foundEpisodes = new Set();
+    const checkedEpisodeUrls = new Set();
+    const checkedSeriesUrls = new Set();
 
-    for (const ep of targetEpisodes) {
-        // Find the episode URL from the series page
-        const episodeUrl = await findEpisodeUrl(searchResult.url, season, ep);
-        if (episodeUrl && !foundEpisodes.has(episodeUrl)) {
-            foundEpisodes.add(episodeUrl);
-            const playerStreams = await extractPlayersFromEpisode(episodeUrl);
-            streams.push(...playerStreams);
+    for (const match of matches) {
+        if (checkedSeriesUrls.has(match.url)) continue;
+        checkedSeriesUrls.add(match.url);
+
+        const matchLower = match.title.toLowerCase();
+        const isVf = matchLower.includes(' vf') || match.url.includes('vf');
+        const langSuffix = isVf ? 'VF' : 'VOSTFR';
+
+        // Optimization: if the result is explicitly for a different season, 
+        // skip it unless targetEpisodes contains an absolute episode (which might be in any season page)
+        const seasonMatch = matchLower.match(/saison\s*(\d+)/);
+        if (seasonMatch && parseInt(seasonMatch[1]) !== season && targetEpisodes.length === 1) {
+            continue;
         }
+
+        for (const ep of targetEpisodes) {
+            // Find the episode URL from the series page
+            const episodeUrl = await findEpisodeUrl(match.url, season, ep);
+            if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
+                checkedEpisodeUrls.add(episodeUrl);
+                const playerStreams = await extractPlayersFromEpisode(episodeUrl);
+                
+                // Add language/episode context to names
+                const epType = ep === episode ? "" : ` (Abs ${ep})`;
+                playerStreams.forEach(s => {
+                    if (!s.name.includes('(')) {
+                        s.name = `AnimeVOSTFR (${langSuffix})`;
+                    }
+                    s.title = `${s.title}${epType}`;
+                });
+                
+                streams.push(...playerStreams);
+            }
+        }
+        
+        // If we found streams for the primary season, we can stop searching other entries 
+        // unless we want to be exhaustive. Let's be exhaustive for VF/VOSTFR balance.
     }
 
     if (streams.length === 0) {

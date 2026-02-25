@@ -117,7 +117,9 @@ export async function resolveStreamtape(url) {
     try {
         const res = await safeFetch(url);
         if (!res) return { url };
-        const html = await res.text();
+        let html = await res.text();
+        if (html.includes('p,a,c,k,e,d')) html = unpack(html);
+
         const match = html.match(/robotlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*([^;]+)/);
         if (match) {
             let videoUrl = "https:" + match[1];
@@ -131,8 +133,50 @@ export async function resolveStreamtape(url) {
                     videoUrl += val;
                 }
             }
+            return { url: videoUrl, headers: { "Referer": "https://streamtape.com/" } };
+        }
+    } catch (e) {}
+    return { url };
+}
+
+export async function resolveSendvid(url) {
+    try {
+        const res = await safeFetch(url);
+        if (!res) return { url };
+        const html = await res.text();
+        const match = html.match(/video_source\s*:\s*["']([^"']+\.mp4[^"']*)["']/) || 
+                      html.match(/source\s+src=["']([^"']+\.mp4[^"']*)["']/);
+        if (match) return { url: match[1] };
+    } catch (e) {}
+    return { url };
+}
+
+export async function resolveLuluvid(url) {
+    try {
+        const res = await safeFetch(url);
+        if (!res) return { url };
+        let html = await res.text();
+        if (html.includes('p,a,c,k,e,d')) html = unpack(html);
+
+        const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/) ||
+                      html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/);
+        if (match) {
+            let videoUrl = match[1];
+            if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
             return { url: videoUrl };
         }
+    } catch (e) {}
+    return { url };
+}
+
+export async function resolveHGCloud(url) {
+    try {
+        const res = await safeFetch(url);
+        if (!res) return { url };
+        const html = await res.text();
+        // HGCloud often uses a direct m3u8 in a script or player config
+        const match = html.match(/["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/);
+        if (match) return { url: match[1] };
     } catch (e) {}
     return { url };
 }
@@ -170,17 +214,24 @@ export async function resolveMoon(url) {
     return { url };
 }
 
-export async function resolveStream(stream) {
+export async function resolveStream(stream, depth = 0) {
+    if (depth > 3) return { ...stream, isDirect: false }; // Prevent infinite loops
+
     const originalUrl = stream.url;
     const urlLower = originalUrl.toLowerCase();
     
-    if (urlLower.match(/\.(mp4|m3u8|mkv|webm)(\?.*)?$/)) {
+    // 0. Skip known ad domains or empty URLs
+    if (!originalUrl || originalUrl.includes('google-analytics') || originalUrl.includes('doubleclick')) return null;
+
+    // 1. Check if it's already a direct video link
+    if (urlLower.match(/\.(mp4|m3u8|mkv|webm)(\?.*)?$/) && !urlLower.includes('html')) {
         return { ...stream, isDirect: true };
     }
 
     try {
         let result = null;
 
+        // 2. Specific Host Resolvers
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
         else if (urlLower.includes('vidmoly.')) result = await resolveVidmoly(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
@@ -188,21 +239,62 @@ export async function resolveStream(stream) {
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
         else if (urlLower.includes('dood') || urlLower.includes('ds2play')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('moon.')) result = await resolveMoon(originalUrl);
-        else {
-            const res = await safeFetch(originalUrl);
+        else if (urlLower.includes('sendvid.')) result = await resolveSendvid(originalUrl);
+        else if (urlLower.includes('luluvid.') || urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
+        else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
+        
+        // 3. Generic Fallback & Recursive Peeling
+        if (!result || result.url === originalUrl) {
+            const res = await safeFetch(originalUrl, { headers: stream.headers });
             if (res) {
-                const html = await res.text();
-                const m3u8 = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || html.match(/https?:\/\/[^"']+\.mp4[^"']*/);
-                if (m3u8) result = { url: m3u8[0] };
+                let html = await res.text();
+                // Check for P.A.C.K.E.R encoding
+                if (html.includes('p,a,c,k,e,d')) html = unpack(html);
+
+                // Look for direct media links in HTML
+                const m3u8 = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || 
+                             html.match(/https?:\/\/[^"']+\.mp4[^"']*/) ||
+                             html.match(/file\s*:\s*["']([^"']+)["']/);
+
+                if (m3u8) {
+                    let extractedUrl = m3u8[1] || m3u8[0];
+                    if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
+                    if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN)) {
+                        result = { url: extractedUrl };
+                    }
+                }
+
+                // Look for nested iframes (Peeling)
+                if (!result) {
+                    const iframeMatch = html.match(/<iframe\s+[^>]*src=["']([^"']+)["']/i);
+                    if (iframeMatch) {
+                        let iframeUrl = iframeMatch[1];
+                        if (iframeUrl.startsWith('//')) iframeUrl = "https:" + iframeUrl;
+                        if (iframeUrl.startsWith('/')) {
+                            const origin = originalUrl.match(/^https?:\/\/[^\/]+/)?.[0];
+                            if (origin) iframeUrl = origin + iframeUrl;
+                        }
+                        
+                        if (iframeUrl.startsWith('http') && iframeUrl !== originalUrl) {
+                            console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
+                            return await resolveStream({ ...stream, url: iframeUrl }, depth + 1);
+                        }
+                    }
+                }
             }
         }
 
         if (result && result.url !== originalUrl && result.url.startsWith('http')) {
-            return { 
+            // Recurse once more to make sure the resolved result doesn't need further peeling
+            const finalResolution = await resolveStream({ 
                 ...stream, 
-                url: result.url, 
+                url: result.url,
+                headers: { ...stream.headers, ...(result.headers || {}) }
+            }, depth + 1);
+            
+            return {
+                ...finalResolution,
                 isDirect: true,
-                headers: { ...stream.headers, ...(result.headers || {}) },
                 originalUrl: originalUrl
             };
         }
@@ -210,3 +302,5 @@ export async function resolveStream(stream) {
     
     return { ...stream, isDirect: false };
 }
+
+const BASE_URL_FORBIDDEN_PATTERN = "googletagmanager"; // Sample for generic filter
