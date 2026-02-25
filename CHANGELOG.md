@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.14] - 2026-02-25
+
+### Fixed
+- **Critical: cheerio module not available in app (root cause of "no stream available")**: Identified that at version 1.0.1 the build script correctly listed `cheerio-without-node-native` as an external module (provided by the Nuvio runtime). During refactoring, all `import cheerio from 'cheerio-without-node-native'` were changed to `import * as cheerio from 'cheerio'`, but `cheerio` was never provided by the Nuvio app. This caused a silent `require('cheerio')` crash on every provider, returning 0 streams.
+- **Fix**: Reverted all extractor cheerio imports back to `cheerio-without-node-native` (the module Nuvio actually provides) and restored it to `EXTERNAL_MODULES` in `build.js`.
+
 ## [1.1.13] - 2026-02-25
 
 ### Fixed

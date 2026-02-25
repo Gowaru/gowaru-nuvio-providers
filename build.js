@@ -20,6 +20,7 @@ const outDir = path.join(__dirname, 'providers');
 
 // Modules that the Nuvio app provides - don't bundle these
 const EXTERNAL_MODULES = [
+    'cheerio-without-node-native',
     'react-native-cheerio',
     'cheerio',
     'crypto-js',

@@ -1,6 +1,6 @@
 {
     "name": "nuvio-providers",
-    "version": "1.1.13",
+    "version": "1.1.14",
     "description": "Providers for Nuvio Streaming",
     "scripts": {
         "build": "node build.js",
@@ -20,6 +20,8 @@
     ],
     "license": "GPL-3.0",
     "dependencies": {
-        "crypto-js": "^4.2.0"
+        "cheerio-without-node-native": "^0.20.2",
+        "crypto-js": "^4.2.0",
+        "htmlparser2-without-node-native": "^3.9.2"
     }
 }
