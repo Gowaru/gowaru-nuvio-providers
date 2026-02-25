@@ -20,7 +20,6 @@ const outDir = path.join(__dirname, 'providers');
 
 // Modules that the Nuvio app provides - don't bundle these
 const EXTERNAL_MODULES = [
-    'cheerio-without-node-native',
     'react-native-cheerio',
     'cheerio',
     'crypto-js',
@@ -46,7 +45,7 @@ function getProvidersToBuild() {
         .map(d => d.name);
 }
 
-async function buildProvider(providerName) {
+async function buildProvider(providerName, minify = false) {
     const providerDir = path.join(srcDir, providerName);
     const entryPoint = path.join(providerDir, 'index.js');
     const outFile = path.join(outDir, `${providerName}.js`);
@@ -64,7 +63,7 @@ async function buildProvider(providerName) {
             format: 'cjs',              // CommonJS for module.exports compatibility
             platform: 'neutral',        // Works in both browser and node-like environments
             target: 'es2016',           // Transpile async/await to generators for Hermes
-            minify: false,              // Keep readable for debugging
+            minify: minify,             // Minify bundle
             sourcemap: false,
             external: EXTERNAL_MODULES,
             banner: {
@@ -123,10 +122,11 @@ async function transpileSingleFile(filename) {
 
 async function main() {
     const args = process.argv.slice(2);
+    const isMinify = args.includes('--minify');
 
     // Handle --transpile flag for single-file providers
     if (args.includes('--transpile')) {
-        const files = args.filter(a => a !== '--transpile' && !a.startsWith('-'));
+        const files = args.filter(a => a !== '--transpile' && a !== '--minify' && !a.startsWith('-'));
 
         if (files.length === 0) {
             // Transpile all .js files in providers/ that aren't from src/
@@ -162,7 +162,7 @@ async function main() {
         return;
     }
 
-    console.log(`\n📦 Building ${providers.length} provider(s)...\n`);
+    console.log(`\n📦 Building ${providers.length} provider(s)${isMinify ? ' (Minified)' : ''}...\n`);
 
     // Ensure output directory exists
     if (!fs.existsSync(outDir)) {
@@ -173,7 +173,7 @@ async function main() {
     let failed = 0;
 
     for (const provider of providers) {
-        const result = await buildProvider(provider);
+        const result = await buildProvider(provider, isMinify);
         if (result) success++;
         else failed++;
     }

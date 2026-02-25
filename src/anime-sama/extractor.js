@@ -3,7 +3,8 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio';
+import { resolveStream } from '../utils/resolvers.js';
 
 const BASE_URL = "https://anime-sama.tv";
 
@@ -100,13 +101,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 const urls = arrayContent.match(/'(.*?)'/g)?.map(u => u.slice(1, -1)) || [];
                 const playerUrl = urls[episode - 1];
                 if (playerUrl && playerUrl.startsWith('http')) {
-                    streams.push({
+                    const stream = await resolveStream({
                         name: `Anime-Sama (${lang.toUpperCase()})`,
                         title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
                         url: playerUrl,
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
+                    streams.push(stream);
                 }
             }
         } catch (e) {
@@ -127,13 +129,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                                 const urls = arrayContent.match(/'(.*?)'/g)?.map(u => u.slice(1, -1)) || [];
                                 const playerUrl = urls[episode - 1];
                                 if (playerUrl && playerUrl.startsWith('http')) {
-                                    streams.push({
+                                    const stream = await resolveStream({
                                         name: `Anime-Sama (${retryLang.toUpperCase()})`,
                                         title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
                                         url: playerUrl,
                                         quality: "HD",
                                         headers: { "Referer": BASE_URL }
                                     });
+                                    streams.push(stream);
                                 }
                             }
                         } catch (retryErr) { /* Ignore */ }

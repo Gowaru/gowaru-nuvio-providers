@@ -4,7 +4,8 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio';
+import { resolveStream } from '../utils/resolvers.js';
 
 const BASE_URL = "https://animevostfr.org";
 
@@ -190,13 +191,14 @@ async function extractPlayersFromEpisode(episodeUrl) {
                     const serverName = serverNames[i] || `Lecteur ${i + 1}`;
                     const playerName = getPlayerName(playerSrc);
 
-                    streams.push({
+                    const stream = await resolveStream({
                         name: `AnimeVOSTFR`,
                         title: `${playerName} (${serverName})`,
                         url: playerSrc,
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
+                    streams.push(stream);
                 }
             } catch (err) {
                 console.error(`[AnimeVOSTFR] Failed to resolve player ${i}: ${err.message}`);

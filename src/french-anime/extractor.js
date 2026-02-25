@@ -3,7 +3,8 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio';
+import { resolveStream } from '../utils/resolvers.js';
 
 const BASE_URL = "https://french-anime.com";
 
@@ -194,13 +195,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
             for (const url of playerUrls) {
                 const playerName = getPlayerName(url);
-                streams.push({
+                const stream = await resolveStream({
                     name: `French-Anime (${langName})`,
                     title: `${playerName} Player`,
                     url: url,
                     quality: "HD",
                     headers: { "Referer": BASE_URL }
                 });
+                streams.push(stream);
             }
 
             if (playerUrls.length > 0) {

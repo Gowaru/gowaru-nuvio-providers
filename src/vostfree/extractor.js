@@ -3,7 +3,8 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio';
+import { resolveStream } from '../utils/resolvers.js';
 
 const BASE_URL = "https://vostfree.ws";
 
@@ -125,8 +126,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
         console.log(`[Vostfree] Using buttons ID: ${buttonsId}`);
         const streams = [];
+        const playerElements = $(`#${buttonsId} div[id^="player_"]`).toArray();
 
-        $(`#${buttonsId} div[id^="player_"]`).each((i, el) => {
+        for (const el of playerElements) {
             const playerId = $(el).attr('id').replace('player_', '');
             const playerName = $(el).text().trim() || "Player";
 
@@ -146,16 +148,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 }
 
                 if (url.startsWith('http')) {
-                    streams.push({
+                    const stream = await resolveStream({
                         name: `Vostfree (${playerName})`,
                         title: `${playerName} Player`,
                         url: url,
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
+                    streams.push(stream);
                 }
             }
-        });
+        }
 
         return streams;
     } catch (e) {

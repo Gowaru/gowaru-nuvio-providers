@@ -3,7 +3,8 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio';
+import { resolveStream } from '../utils/resolvers.js';
 
 const BASE_URL = "https://v6.voiranime.com";
 
@@ -156,13 +157,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (hosts.length === 0) {
             const iframe = ep$('iframe[src*="embed"], iframe[src*="e/"]').first().attr('src');
             if (iframe) {
-                streams.push({
+                const stream = await resolveStream({
                     name: "VoirAnime",
                     title: "Default Player",
                     quality: "HD",
                     url: iframe,
                     headers: { "Referer": BASE_URL }
                 });
+                streams.push(stream);
             }
         } else {
             for (const host of hosts) {
@@ -176,13 +178,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                         if (scriptMatch && !scriptMatch[0].includes('voiranime.com')) embedUrl = scriptMatch[0];
                     }
                     if (embedUrl) {
-                        streams.push({
+                        const stream = await resolveStream({
                             name: `VoirAnime (${host})`,
                             title: `${host} Player`,
                             url: embedUrl,
                             quality: "HD",
                             headers: { "Referer": BASE_URL }
                         });
+                        streams.push(stream);
                     }
                 } catch (err) { /* Ignore */ }
             }

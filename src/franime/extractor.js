@@ -3,7 +3,8 @@
  */
 
 import { fetchText, fetchJson } from './http.js';
-import cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio';
+import { resolveStream } from '../utils/resolvers.js';
 
 const BASE_URL = "https://franime.fr";
 const API_BASE = "https://api.franime.fr/api";
@@ -126,7 +127,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 });
 
                 if (embedUrl && embedUrl.startsWith('http')) {
-                    streams.push({
+                    const stream = await resolveStream({
                         name: `FRAnime (${langName})`,
                         title: `${playerName} Player`,
                         url: embedUrl,
@@ -135,6 +136,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                             "Referer": "https://franime.fr/"
                         }
                     });
+                    streams.push(stream);
                 }
             } catch (err) {
                 console.error(`[FRAnime] Failed to fetch player ${i} for ${lang}: ${err.message}`);
