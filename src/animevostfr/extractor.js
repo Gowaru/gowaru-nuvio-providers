@@ -4,7 +4,7 @@
  */
 
 import { fetchText } from './http.js';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
@@ -83,7 +83,7 @@ async function searchAnime(title) {
 /**
  * Find the episode URL from the series page
  */
-async function findEpisodeUrl(seriesUrl, season, episode) {
+async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
     try {
         const html = await fetchText(seriesUrl);
         const $ = cheerio.load(html);
@@ -102,12 +102,36 @@ async function findEpisodeUrl(seriesUrl, season, episode) {
         const epStr = String(episode);
         const epPadded = epStr.padStart(2, '0');
         
-        const urlPatterns = [
+        // 1. Try to find match in URL first (more reliable)
+        // Sort patterns to prioritize season-specific matches
+        const sortedUrlPatterns = [
+            new RegExp(`-saison-${season}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-saison-${season}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-ep-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-ep-${epPadded}(?:-vostfr|-vf|/|$)`, 'i')
         ];
+
+        for (const pattern of sortedUrlPatterns) {
+            const match = episodeLinks.find(l => {
+                if (!pattern.test(l.url)) return false;
+                
+                // If we are looking for a relative episode, reject URLs that explicitly mention a different season
+                if (!isAbsolute) {
+                    const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
+                    if (seasonMatch && parseInt(seasonMatch[1]) !== season) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+            
+            if (match) {
+                console.log(`[AnimeVOSTFR] Found episode in URL: ${match.url}`);
+                return match.url;
+            }
+        }
 
         const textPatterns = [
             new RegExp(`^\\s*Episode\\s+${epStr}\\s*$`, 'i'),
@@ -115,18 +139,21 @@ async function findEpisodeUrl(seriesUrl, season, episode) {
             new RegExp(`(?:^|[^0-9])${epStr}(?:$|[^0-9])`)
         ];
 
-        // 1. Try to find match in URL first (more reliable)
-        for (const pattern of urlPatterns) {
-            const match = episodeLinks.find(l => pattern.test(l.url));
-            if (match) {
-                console.log(`[AnimeVOSTFR] Found episode in URL: ${match.url}`);
-                return match.url;
-            }
-        }
-
         // 2. Try to find match in link text
         for (const pattern of textPatterns) {
-            const match = episodeLinks.find(l => pattern.test(l.text));
+            const match = episodeLinks.find(l => {
+                if (!pattern.test(l.text)) return false;
+                
+                // If we are looking for a relative episode, reject URLs that explicitly mention a different season
+                if (!isAbsolute) {
+                    const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
+                    if (seasonMatch && parseInt(seasonMatch[1]) !== season) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+            
             if (match) {
                 console.log(`[AnimeVOSTFR] Found episode in text: ${match.url}`);
                 return match.url;
@@ -283,7 +310,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
         for (const ep of targetEpisodes) {
             // Find the episode URL from the series page
-            const episodeUrl = await findEpisodeUrl(match.url, season, ep);
+            const isAbsolute = ep !== episode;
+            const episodeUrl = await findEpisodeUrl(match.url, season, ep, isAbsolute);
             if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
                 checkedEpisodeUrls.add(episodeUrl);
                 const playerStreams = await extractPlayersFromEpisode(episodeUrl);

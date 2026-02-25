@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.11] - 2026-02-25
+
+### Fixed
+- **AnimeVOSTFR ArmSync**: Improved episode matching logic to correctly handle complex URL structures (e.g., `jujutsu-kaisen-2-saison-2-episode-10`). The scraper now strictly verifies that the season number in the URL matches the requested season when searching for relative episodes, preventing false positives from other seasons.
+
 ## [1.1.10] - 2026-02-25
 
 ### Fixed
