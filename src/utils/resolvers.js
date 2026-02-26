@@ -348,7 +348,11 @@ export async function resolveStream(stream, depth = 0) {
                 if (m3u8) {
                     let extractedUrl = m3u8[1] || m3u8[0];
                     if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
-                    if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN)) {
+                    
+                    // Filter out non-video extensions that might be caught by the generic 'file:' regex
+                    const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
+                    
+                    if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension) {
                         result = { url: extractedUrl };
                     }
                 }

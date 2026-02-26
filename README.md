@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.20-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.1.22-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -28,7 +28,7 @@ This bundle integrates 6 pillars of the French anime scene:
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
 | **Anime-Sama** | Massive catalog, daily updates. | VF / VOSTFR | ✅ |
-| **FRAnime** | Modern interface, fast API. | VF / VOSTFR | ✅ |
+| **FRAnime** | Modern interface, fast API. | VF / VOSTFR | ❌ |
 | **VoirAnime** | Comprehensive historical archive. | VF / VOSTFR | ✅ |
 | **Vostfree** | Specialist in streaming & downloads. | VF / VOSTFR | ✅ |
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |

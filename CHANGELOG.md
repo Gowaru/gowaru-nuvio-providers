@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.22] - 2026-02-26
+
+### Fixed
+- **Sibnet Player Fallback (Critical)**: Fixed an issue where dead Sibnet video links would cause the video player to crash on providers like Vostfree, Voiranime, and French-Anime. The generic stream resolver fallback regex was too broad and incorrectly matched a CSS file (`social-likes_classic.css`) on the Sibnet error page, treating it as a valid direct video stream. Added a filter to ignore non-video file extensions (`.css`, `.js`, `.html`, etc.) in the generic fallback resolver.
+
 ## [1.1.21] - 2026-02-26
 
 ### Fixed
