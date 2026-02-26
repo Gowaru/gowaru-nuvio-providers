@@ -3,7 +3,7 @@
  */
 
 import { fetchText, fetchJson } from './http.js';
-import * as cheerio from 'cheerio-without-node-native';
+import cheerio from 'cheerio-without-node-native';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
