@@ -120,15 +120,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             let buttonsId = null;
 
             $('select.new_player_selector option').each((i, el) => {
-                const text = $(el).text();
+                const text = $(el).text().trim();
                 for (const ep of targetEpisodes) {
-                    const epS = ep.toString();
-                    const epPadded = epS.padStart(2, '0');
-                    // Strict regex to avoid "Episode 1" matching "Episode 10"
-                    const regex = new RegExp(`(?:^|[^0-9])(?:Episode\\s*)?(?:${epS}|${epPadded})(?:$|[^0-9])`, 'i');
-                    if (regex.test(text)) {
-                        buttonsId = $(el).val();
-                        return false;
+                    const epNum = parseInt(ep, 10);
+                    // Vostfree pads ALL numbers to 2+ digits: "Episode 01", "Episode 010"
+                    // Extract the numeric part from the option text and compare directly
+                    const numMatch = text.match(/[Ee]pisode\s*(0*)(\d+)/i);
+                    if (numMatch) {
+                        const parsedEp = parseInt(numMatch[1] + numMatch[2], 10);
+                        if (parsedEp === epNum) {
+                            buttonsId = $(el).val();
+                            return false;
+                        }
                     }
                 }
             });

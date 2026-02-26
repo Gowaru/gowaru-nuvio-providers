@@ -1,5 +1,81 @@
 /**
  * franime - Built from src/franime/
- * Generated: 2026-02-25T23:09:39.623Z
+ * Generated: 2026-02-26T10:48:39.600Z
  */
-var p=Object.create;var o=Object.defineProperty;var w=Object.getOwnPropertyDescriptor;var g=Object.getOwnPropertyNames;var y=Object.getPrototypeOf,v=Object.prototype.hasOwnProperty;var x=(t,e)=>{for(var s in e)o(t,s,{get:e[s],enumerable:!0})},u=(t,e,s,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of g(e))!v.call(t,r)&&r!==s&&o(t,r,{get:()=>e[r],enumerable:!(n=w(e,r))||n.enumerable});return t};var A=(t,e,s)=>(s=t!=null?p(y(t)):{},u(e||!t||!t.__esModule?o(s,"default",{value:t,enumerable:!0}):s,t)),b=t=>u(o({},"__esModule",{value:!0}),t);var a=(t,e,s)=>new Promise((n,r)=>{var h=i=>{try{c(s.next(i))}catch(l){r(l)}},d=i=>{try{c(s.throw(i))}catch(l){r(l)}},c=i=>i.done?n(i.value):Promise.resolve(i.value).then(h,d);c((s=s.apply(t,e)).next())});var k={};x(k,{getStreams:()=>S});module.exports=b(k);var R=A(require("cheerio-without-node-native"));function m(t,e,s,n){return a(this,null,function*(){return console.warn("[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes."),[]})}function S(t,e,s,n){return a(this,null,function*(){console.log(`[FRAnime] Request: ${e} ${t} S${s}E${n}`);try{return yield m(t,e,s,n)}catch(r){return console.error("[FRAnime] Error:",r),[]}})}
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __async = (__this, __arguments, generator) => {
+  return new Promise((resolve, reject) => {
+    var fulfilled = (value) => {
+      try {
+        step(generator.next(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var rejected = (value) => {
+      try {
+        step(generator.throw(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var step = (x) => x.done ? resolve(x.value) : Promise.resolve(x.value).then(fulfilled, rejected);
+    step((generator = generator.apply(__this, __arguments)).next());
+  });
+};
+
+// src/franime/index.js
+var index_exports = {};
+__export(index_exports, {
+  getStreams: () => getStreams
+});
+module.exports = __toCommonJS(index_exports);
+
+// src/franime/extractor.js
+var cheerio = __toESM(require("cheerio-without-node-native"));
+function extractStreams(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    console.warn(`[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes.`);
+    return [];
+  });
+}
+
+// src/franime/index.js
+function getStreams(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    console.log(`[FRAnime] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+    try {
+      const streams = yield extractStreams(tmdbId, mediaType, season, episode);
+      return streams;
+    } catch (error) {
+      console.error(`[FRAnime] Error:`, error);
+      return [];
+    }
+  });
+}

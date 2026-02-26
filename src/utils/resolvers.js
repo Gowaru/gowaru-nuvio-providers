@@ -68,7 +68,11 @@ export async function resolveSibnet(url) {
         const res = await safeFetch(url, { headers: { 'Referer': 'https://video.sibnet.ru/' } });
         if (!res) return { url };
         const html = await res.text();
-        const match = html.match(/src\s*:\s*["']([^"']+\.mp4)["']/) || html.match(/"url"\s*:\s*"([^"]+\.mp4)"/);
+        // JWPlayer uses `file:` key; URL may have query params like ?mt=...&sig=...
+        const match =
+            html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) ||
+            html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) ||
+            html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
         if (match) {
             let videoUrl = match[1];
             if (videoUrl.startsWith('//')) videoUrl = "https:" + videoUrl;
@@ -81,25 +85,42 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        const res = await safeFetch(url, { headers: { 'Referer': 'https://vidmoly.to/' } });
+        const headers = { 'Referer': 'https://vidmoly.to/', 'Origin': 'https://vidmoly.to' };
+        let res = await safeFetch(url, { headers });
         if (!res) return { url };
         let html = await res.text();
+        // Follow JS window.location.replace() anti-bot redirect
+        const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
+                           html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+        if (jsRedirect && jsRedirect[1] !== url) {
+            res = await safeFetch(jsRedirect[1], { headers });
+            if (res) html = await res.text();
+        }
         if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
-        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/);
+        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
         if (match) return { url: match[1], headers: { "Referer": "https://vidmoly.to/" } };
     } catch (e) {}
     return { url };
 }
 
 export async function resolveUqload(url) {
-    try {
-        const res = await safeFetch(url, { headers: { 'Referer': 'https://uqload.com/' } });
-        if (!res) return { url };
-        const html = await res.text();
-        const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) || 
-                      html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
-        if (match) return { url: match[1], headers: { "Referer": "https://uqload.com/" } };
-    } catch (e) {}
+    // Normalize URL to try all known active domains
+    const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
+    const domains = ['uqload.co', 'uqload.com', 'uqload.io', 'uqloads.xyz', 'uqload.to'];
+    const baseRef = 'https://uqload.co/';
+    for (const domain of domains) {
+        try {
+            const tryUrl = `https://${domain}${normalizedPath}`;
+            const res = await safeFetch(tryUrl, { headers: { 'Referer': baseRef } });
+            if (!res) continue;
+            const html = await res.text();
+            const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
+                          html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/) ||
+                          html.match(/["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i);
+            if (match) return { url: match[1], headers: { "Referer": baseRef } };
+        } catch (e) {}
+    }
     return { url };
 }
 
@@ -153,12 +174,18 @@ export async function resolveStreamtape(url) {
 
 export async function resolveSendvid(url) {
     try {
-        const res = await safeFetch(url);
+        // Normalize: use embed URL for sendvid
+        const embedUrl = url.includes('/embed/') ? url : url.replace(/sendvid\.com\/([a-z0-9]+)/i, 'sendvid.com/embed/$1');
+        const res = await safeFetch(embedUrl, { headers: { 'Referer': 'https://sendvid.com/' } });
         if (!res) return { url };
         const html = await res.text();
-        const match = html.match(/video_source\s*:\s*["']([^"']+\.mp4[^"']*)["']/) || 
-                      html.match(/source\s+src=["']([^"']+\.mp4[^"']*)["']/);
-        if (match) return { url: match[1] };
+        // Try multiple extraction patterns
+        const match = html.match(/video_source\s*:\s*["']([^"']+\.mp4[^"']*)["|']/) ||
+                      html.match(/source\s+src=["']([^"']+\.mp4[^"']*)["|']/) ||
+                      html.match(/<source[^>]+src=["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/) ||
+                      html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["|']/) ||
+                      html.match(/["'](https?:\/\/[^"']+\.mp4[^"']*)["']/);
+        if (match) return { url: match[1], headers: { 'Referer': 'https://sendvid.com/' } };
     } catch (e) {}
     return { url };
 }
@@ -218,6 +245,33 @@ export async function resolveDood(url) {
     return { url };
 }
 
+export async function resolveMyTV(url) {
+    try {
+        // myvi.ru / mytv: try the embed page then look for mp4/m3u8
+        const res = await safeFetch(url, { headers: { 'Referer': 'https://www.myvi.ru/' } });
+        if (!res) return { url };
+        let html = await res.text();
+        if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
+        // Try JSON player config
+        const match = html.match(/["'](?:file|src|url|stream_url)["']\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/) ||
+                      html.match(/["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/) ||
+                      html.match(/source\s+src=["']([^"']+\.(?:mp4|m3u8)[^"']*)/);
+        if (match) return { url: match[1], headers: { 'Referer': 'https://www.myvi.ru/' } };
+        // Try API endpoint for myvi
+        const idMatch = url.match(/\/(?:embed\/|watch\/|video\/)([a-zA-Z0-9_-]+)/);
+        if (idMatch) {
+            const apiUrl = `https://www.myvi.ru/api/video/${idMatch[1]}`;
+            const apiRes = await safeFetch(apiUrl, { headers: { 'Referer': url } });
+            if (apiRes) {
+                const data = await apiRes.text();
+                const apiMatch = data.match(/["'](?:url|src|file)["']\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/);
+                if (apiMatch) return { url: apiMatch[1], headers: { 'Referer': 'https://www.myvi.ru/' } };
+            }
+        }
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveMoon(url) {
     try {
         const res = await safeFetch(url);
@@ -255,6 +309,7 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('dood') || urlLower.includes('ds2play')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('moon.')) result = await resolveMoon(originalUrl);
         else if (urlLower.includes('sendvid.')) result = await resolveSendvid(originalUrl);
+        else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
         else if (urlLower.includes('luluvid.') || urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
         else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
         
@@ -324,4 +379,4 @@ export async function resolveStream(stream, depth = 0) {
     return { ...stream, isDirect: false };
 }
 
-const BASE_URL_FORBIDDEN_PATTERN = "googletagmanager"; // Sample for generic filter
+const BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";

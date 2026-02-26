@@ -79,11 +79,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         for (const jsUrl of paths) {
             try {
                 const jsContent = await fetchText(jsUrl);
-                const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[(.*?)\s*\]/gs;
+                const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[([\s\S]*?)\s*\];/gm;
                 let match;
                 while ((match = varRegex.exec(jsContent)) !== null) {
                     const varName = match[1];
-                    const urls = match[2].match(/['"](.*?)['"]/g)?.map(u => u.slice(1, -1)) || [];
+                    const urls = match[2].match(/['"]([^'"]+)['"]/g)?.map(u => u.slice(1, -1)) || [];
                     
                     let playerUrl = null;
                     if (jsUrl.includes(`saison${season}`)) {
@@ -135,11 +135,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 for (const jsUrl of retryPaths) {
                     try {
                         const jsContent = await fetchText(jsUrl);
-                        const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[(.*?)\s*\]/gs;
+                        const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[([\s\S]*?)\s*\];/gm;
                         let match;
                         while ((match = varRegex.exec(jsContent)) !== null) {
                             const varName = match[1];
-                            const urls = match[2].match(/['"](.*?)['"]/g)?.map(u => u.slice(1, -1)) || [];
+                            const urls = match[2].match(/['"]([^'"]+)['"]/g)?.map(u => u.slice(1, -1)) || [];
                             
                             let playerUrl = null;
                             if (jsUrl.includes(`saison${season}`)) {

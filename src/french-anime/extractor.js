@@ -28,14 +28,31 @@ async function searchAnime(title) {
         const $ = cheerio.load(html);
         const results = [];
 
-        // Extract search results from mov-t links
-        $('a.mov-t').each((i, el) => {
-            const h = $(el).attr('href');
-            const t = $(el).text().trim();
-            if (h && h.includes('.html')) {
-                results.push({ title: t, url: h });
-            }
-        });
+        // Extract search results — try common DLE/theme selectors then fallback to any .html anchor
+        const selectors = ['a.mov-t', '.mov-t a', '.title a', 'h2 a', 'h3 a', '.short-story a'];
+        const seen = new Set();
+        for (const sel of selectors) {
+            $(sel).each((i, el) => {
+                const h = $(el).attr('href');
+                const t = $(el).text().trim();
+                if (h && h.includes('french-anime.com') && h.includes('.html') && t.length > 2 && !seen.has(h)) {
+                    seen.add(h);
+                    results.push({ title: t, url: h });
+                }
+            });
+            if (results.length > 0) break;
+        }
+        // Ultimate fallback: any external .html link in page
+        if (results.length === 0) {
+            $('a[href*="french-anime.com"][href*=".html"]').each((i, el) => {
+                const h = $(el).attr('href');
+                const t = $(el).text().trim();
+                if (h && t.length > 2 && !seen.has(h)) {
+                    seen.add(h);
+                    results.push({ title: t, url: h });
+                }
+            });
+        }
 
         const normalize = (s) => s.toLowerCase()
             .normalize("NFD").replace(/[\u0300-\u036f]/g, "")

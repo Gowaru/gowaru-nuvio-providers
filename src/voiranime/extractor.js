@@ -185,7 +185,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             });
 
             if (hosts.length === 0) {
-                const iframe = ep$('iframe[src*="embed"], iframe[src*="e/"]').first().attr('src');
+                // Catch any external iframe (not voiranime's own domain)
+                let iframe = null;
+                ep$('iframe').each((_, el) => {
+                    const src = ep$(el).attr('src') || '';
+                    if (src.startsWith('http') && !src.includes('voiranime.com')) {
+                        iframe = src; return false;
+                    }
+                });
                 if (iframe) {
                     const stream = await resolveStream({
                         name: `VoirAnime (${lang})`,
@@ -201,10 +208,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     try {
                         const hostUrl = `${episodeUrl}${episodeUrl.includes('?') ? '&' : '?'}host=${encodeURIComponent(host)}`;
                         const hostHtml = await fetchText(hostUrl);
-                        const iframeMatch = hostHtml.match(/<iframe\s+.*?src="(https?:\/\/[^"]+)".*?><\/iframe>/i);
+                        // Parse iframe src more flexibly (any attribute order)
+                        const iframeMatch = hostHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
                         let embedUrl = iframeMatch ? iframeMatch[1] : null;
                         if (!embedUrl) {
-                            const scriptMatch = hostHtml.match(/https?:\/\/[^"']+\/(?:embed|e)\/[^"']+/);
+                            // Fallback: scan for any external embed URL in the page source
+                            const scriptMatch = hostHtml.match(/https?:\/\/[^"'\s<>]+\/(?:embed|e|v|player)\/[^"'\s<>]+/);
                             if (scriptMatch && !scriptMatch[0].includes('voiranime.com')) embedUrl = scriptMatch[0];
                         }
                         if (embedUrl) {

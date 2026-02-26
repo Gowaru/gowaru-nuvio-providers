@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.15] - 2026-02-26
+
+### Fixed
+- **Vostfree – Episode matching (3-digit padding)**: Fixed a regex comparison bug where episodes ≥ 10 were never matched because the site formats them as `Episode 010` (zero-padded to 3 digits). The extractor now uses `parseInt` to compare the numeric value directly.
+- **Anime-Sama – varRegex multiline**: Fixed a regex that used a lazy `.*?` match inside a large JS array, causing it to silently fail on multi-line variable declarations. Replaced with `[\s\S]*?` and added a semicolon anchor to correctly capture the full array.
+- **VoirAnime – iframe fallback**: Broadened the iframe detection logic to catch any external iframe (not just `voiranime.com`), and made the host-page iframe regex more flexible to handle varied quote styles and attribute order.
+- **French-Anime – Search selector cascade**: Fixed the search scraper which returned 0 results due to the site removing the `a.mov-t` CSS class. The extractor now cascades through `a.mov-t`, `.mov-t a`, `.title a`, `h2 a`, `h3 a`, and finally any `<a>` pointing to a French-Anime URL.
+
+### Improved
+- **resolveVidmoly – Anti-bot JS redirect**: The resolver now detects `window.location.replace()` and `window.location.href` JS redirects (Vidmoly's JWT-based bot protection) and re-fetches the redirect target with proper `Referer`/`Origin` headers. Also broadened the video URL pattern to match both `file:` keys and raw `http` URLs.
+- **resolveVoe – Obfuscation handling**: Fixed a broken redirect regex (`['\"]+` typo). Added multi-pass `atob` scanning to decode VOE's XOR/base64-obfuscated HLS URLs. Added fallback to raw `m3u8` URL pattern. Added `Referer` header throughout.
+- **resolveSendvid – HTML5 source extraction**: Normalizes the URL to the `/embed/hash` form, adds `<source src=>` HTML5 video element pattern and `file:` key pattern alongside the original patterns. Added `Referer` header.
+- **resolveUqload – Dead domain fallback**: The original `uqload.com` domain is defunct. The resolver now iterates through 5 known domains (`uqload.co`, `.com`, `.io`, `uqloads.xyz`, `.to`) and returns the first successful extraction.
+
+### Added
+- **resolveMyTV**: New resolver for `myvi.ru` / `mytv` embeds. Tries embed-page extraction with P.A.C.K.E.R unpacking, then falls back to the `/api/video/{id}` JSON endpoint. Dispatched automatically in `resolveStream` for any URL containing `myvi.` or `mytv.`.
+
 ## [1.1.14] - 2026-02-25
 
 ### Fixed
