@@ -11,7 +11,7 @@ import { extractStreams } from './extractor.js';
  * @param {number} season - Season number (null for movies)
  * @param {number} episode - Episode number (null for movies)
  */
-export async function getStreams(tmdbId, mediaType, season, episode) {
+async function getStreams(tmdbId, mediaType, season, episode) {
     console.log(`[VoirAnime] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
 
     try {
@@ -22,3 +22,5 @@ export async function getStreams(tmdbId, mediaType, season, episode) {
         return [];
     }
 }
+
+module.exports = { getStreams };

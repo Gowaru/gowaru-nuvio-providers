@@ -11,14 +11,16 @@ import { extractStreams } from './extractor.js';
  * @param {number} season - Season number (null for movies)
  * @param {number} episode - Episode number (null for movies)
  */
-export async function getStreams(tmdbId, mediaType, season, episode) {
-    console.log(`[Vostfree] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+async function getStreams(tmdbId, mediaType, season, episode) {
+    console.log(`[VostFree] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
         return streams;
     } catch (error) {
-        console.error(`[Vostfree] Error:`, error);
+        console.error(`[VostFree] Error:`, error);
         return [];
     }
 }
+
+module.exports = { getStreams };
