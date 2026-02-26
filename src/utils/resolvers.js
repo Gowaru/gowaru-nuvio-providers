@@ -15,12 +15,17 @@ const _atob = (str) => {
 };
 
 async function safeFetch(url, options = {}) {
+    let controller, timeout;
     try {
+        controller = new AbortController();
+        timeout = setTimeout(() => controller.abort(), 10000);
         const response = await fetch(url, {
             ...options,
             headers: { ...HEADERS, ...options.headers },
-            redirect: 'follow'
+            redirect: 'follow',
+            signal: controller.signal
         });
+        clearTimeout(timeout);
         if (!response.ok) return null;
         const html = await response.text();
         return { 
@@ -29,7 +34,10 @@ async function safeFetch(url, options = {}) {
             url: response.url,
             headers: response.headers
         };
-    } catch (e) { return null; }
+    } catch (e) { 
+        if (timeout) clearTimeout(timeout);
+        return null; 
+    }
 }
 
 export function unpack(code) {

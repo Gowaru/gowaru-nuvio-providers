@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.17] - 2026-02-27
+
+### Fixed
+- **resolvers.js – safeFetch missing timeout (critical)**: `safeFetch` had no `AbortController` / timeout, so any slow or hanging resolver host (Sibnet, MyVi, Vidmoly…) would stall the entire `resolveStream` call indefinitely. An `AbortController` with a 10-second deadline is now applied to every `safeFetch` call; timed-out requests are treated as `null` (stream skipped), which unblocks providers like Anime-Sama and French-Anime that were stuck at stream resolution.
+- **VoirAnime – extractBaseSlug picks OVA/film pages (critical)**: `extractBaseSlug` was only stripping numeric/language suffixes; slugs like `shingeki-no-kyojin-chronicle` passed through unmodified, were probed first, returned HTTP 200, and caused the extractor to return the wrong page (an OVA/film) instead of the main series. A `SPECIAL_SLUG_RE` guard now returns `null` for slugs containing known special-content keywords (`chronicle`, `ova`, `oav`, `gaiden`, `film`, `movie`, `lost-girls`, `kakusei`, `zenpen`, `kouhen`, `specials`, `hors-serie`, `memories`, `recap`, `compilation`), so those URLs are silently skipped during base-slug derivation and probing falls through to the correct main-series slug.
+
 ## [1.1.16] - 2026-02-26
 
 ### Fixed

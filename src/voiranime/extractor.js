@@ -24,12 +24,17 @@ function toSlug(title) {
 /**
  * Extract the base slug from a VoirAnime URL (strips season/vf suffixes)
  * e.g. ".../shingeki-no-kyojin-3-vf/" -> "shingeki-no-kyojin"
+ * Returns null for OVA/special/film slugs so they are skipped.
  */
+const SPECIAL_SLUG_RE = /(?:chronicle|ova|oav|gaiden|film|movie|lost-girls|kakusei|zenpen|kouhen|specials?|hors-serie|memories|recap|recaps|compilation)(?:-|$)/i;
 function extractBaseSlug(url) {
     const m = url.match(/\/anime\/([^/]+)\//); 
     if (!m) return null;
+    const slug = m[1];
+    // Skip slugs belonging to OVAs, films, specials, etc.
+    if (SPECIAL_SLUG_RE.test(slug)) return null;
     // Strip trailing -N, -N-vf, -vf, -vostfr suffixes
-    return m[1]
+    return slug
         .replace(/-(?:the-final-season|saison-\d+|\d+|vf|vostfr|part-\d+|cour-\d+)(?:-(?:vf|vostfr))?$/i, '')
         .replace(/-+$/, '');
 }
