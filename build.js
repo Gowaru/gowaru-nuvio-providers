@@ -20,7 +20,7 @@ const outDir = path.join(__dirname, 'providers');
 
 // Modules that the Nuvio app provides - don't bundle these
 const EXTERNAL_MODULES = [
-    'cheerio-without-node-native',
+    
     'react-native-cheerio',
     'cheerio',
     'crypto-js',
@@ -63,6 +63,7 @@ async function buildProvider(providerName, minify = false) {
             outfile: outFile,
             format: 'cjs',              // CommonJS for module.exports compatibility
             platform: 'neutral',        // Works in both browser and node-like environments
+            mainFields: ['browser', 'module', 'main'], // Fix for cheerio-without-node-native
             target: 'es2016',           // Transpile async/await to generators for Hermes
             minify: minify,             // Minify bundle
             sourcemap: false,
