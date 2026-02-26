@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.16] - 2026-02-26
+
+### Fixed
+- **VoirAnime – Season-aware slug prediction**: `searchAnime` now accepts a `season` parameter. For S1 it probes the bare slug (`shingeki-no-kyojin`); for later seasons it tries `{slug}-{N}`, `{slug}-{N}-vostfr`, `{slug}-{N}-vf`, `{slug}-saison-{N}`, etc. This resolves a systematic failure where S1 pages were never found because the site's keyword search omits them from results.
+- **VoirAnime – Base-slug derivation from search results**: When keyword search returns season-specific pages (e.g. `shingeki-no-kyojin-3-vf`), the extractor now strips the season/language suffix to obtain the base slug, then probes season-specific variants directly. This allows S1 to be found even when it never appears in search results.
+- **VoirAnime – Season scoring on search results**: Search result URLs are now scored by season relevance (e.g. a URL without any season suffix scores higher when looking for S1; a URL with `-N-` in it scores higher for SN). Wrong-season pages are deprioritised.
+- **AnimeVOSTFR – Episode URL pattern mismatch (critical)**: `findEpisodeUrl` was only looking for `-saison-{N}-episode-{EP}` patterns, but the site's real URL structure uses `-{N}-episode-{EP}` (no "saison" word). The correct pattern is now tried first; the old "saison" pattern is kept as a legacy fallback.
+- **AnimeVOSTFR – Title language ordering**: Added FR-first `titlesOrdered` sorting. The site's search engine returns the login/home page (16 KB) for English queries; searching with the French title (e.g. "L'Attaque des Titans") reliably returns the correct anime pages.
+
 ## [1.1.15] - 2026-02-26
 
 ### Fixed
