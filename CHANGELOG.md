@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.19] - 2026-02-26
+
+### Fixed
+- **Build System - Cheerio Bundling (Critical)**: Removed `cheerio-without-node-native` from `EXTERNAL_MODULES` in `build.js` and added `mainFields: ['browser', 'module', 'main']` to the esbuild configuration. This forces the library to be bundled directly into the providers. Previously, providers like VoirAnime, VostFree, AnimeVostfr, and French-Anime crashed instantly in the Nuvio app because they relied on `cheerio` for search, which the app environment did not provide. Anime-Sama only worked partially because it only used `cheerio` as a fallback.
+
+## [1.1.18] - 2026-02-26
+
+### Fixed
+- **Provider Exports - Nuvio Compatibility (Critical)**: Standardized the export syntax across all providers (`voiranime`, `vostfree`, `animevostfr`, `french-anime`) to use `module.exports = { getStreams };` instead of ES6 `export async function`. The ES6 syntax was being transpiled by esbuild into an object with an `__esModule` flag, which the Nuvio app's plugin loader could not read, resulting in empty stream arrays despite successful scraping.
+
+## [1.1.19] - 2026-02-26
+
+### Fixed
+- **Build System - Cheerio Bundling (Critical)**: Removed `cheerio-without-node-native` from `EXTERNAL_MODULES` in `build.js` and added `mainFields: ['browser', 'module', 'main']` to the esbuild configuration. This forces the library to be bundled directly into the providers. Previously, providers like VoirAnime, VostFree, AnimeVostfr, and French-Anime crashed instantly in the Nuvio app because they relied on `cheerio` for search, which the app environment did not provide. Anime-Sama only worked partially because it only used `cheerio` as a fallback.
+
+## [1.1.18] - 2026-02-26
+
+### Fixed
+- **Provider Exports - Nuvio Compatibility (Critical)**: Standardized the export syntax across all providers (`voiranime`, `vostfree`, `animevostfr`, `french-anime`) to use `module.exports = { getStreams };` instead of ES6 `export async function`. The ES6 syntax was being transpiled by esbuild into an object with an `__esModule` flag, which the Nuvio app's plugin loader could not read, resulting in empty stream arrays despite successful scraping.
+
 ## [1.1.17] - 2026-02-27
 
 ### Fixed
