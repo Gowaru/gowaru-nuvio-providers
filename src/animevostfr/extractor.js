@@ -87,10 +87,16 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
         const epPadded = epStr.padStart(2, '0');
         
         // 1. Try to find match in URL first (more reliable)
-        // Sort patterns to prioritize season-specific matches
+        // AnimeVOSTFR URL format: {slug}-{season_num}-episode-{ep_num}  (no "saison" word)
+        // Also support legacy pattern with "saison" word
         const sortedUrlPatterns = [
+            // Primary: no "saison" word (real URL format: -1-episode-1)
+            new RegExp(`-${season}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-${season}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
+            // Legacy: with "saison" word
             new RegExp(`-saison-${season}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-saison-${season}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
+            // No season number in URL (single-season animes)
             new RegExp(`-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-ep-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
@@ -160,58 +166,78 @@ async function extractPlayersFromEpisode(episodeUrl) {
         const html = await fetchText(episodeUrl);
         const $ = cheerio.load(html);
 
-        // Get server names from TPlayerNv tabs
-        const serverNames = [];
+        // Get server names and their tab IDs from TPlayerNv
+        const serverNames = {};
         $('.TPlayerNv li').each((i, el) => {
-            serverNames.push($(el).text().trim());
+            const tabId = $(el).attr('data-tplayernv') || $(el).attr('id') || `Opt${i+1}`;
+            serverNames[tabId] = $(el).text().trim() || `Lecteur ${i + 1}`;
         });
 
-        // Get trembed data-src URLs from TPlayerTb divs
-        const trembedUrls = [];
+        // Collect trembed/iframe URLs from each TPlayerTb
+        // Structure: <div class="TPlayerTb" id="OptN">
+        //              <iframe src="?trembed=0&trid=TERM_ID&trtype=2" .../>
+        //              OR <div class="lazy-player" data-src="?trembed=..."/>
+        const trembedEntries = [];
+        $('.TPlayerTb, .TPlayer .TPlayerTb').each((i, el) => {
+            const tabId = $(el).attr('id') || `Opt${i+1}`;
+            const serverName = serverNames[tabId] || `Lecteur ${i + 1}`;
 
-        // First tab may be an iframe directly (Current)
-        $('.TPlayerTb').each((i, el) => {
             const iframe = $(el).find('iframe');
-            const lazyDiv = $(el).find('.lazy-player');
+            const lazyDiv = $(el).find('.lazy-player, [data-src]');
 
+            let src = null;
             if (iframe.length && iframe.attr('src')) {
-                trembedUrls.push(iframe.attr('src'));
+                src = iframe.attr('src');
             } else if (lazyDiv.length && lazyDiv.attr('data-src')) {
-                trembedUrls.push(lazyDiv.attr('data-src'));
+                src = lazyDiv.attr('data-src');
             }
+            if (src) trembedEntries.push({ src, serverName });
         });
 
-        console.log(`[AnimeVOSTFR] Found ${trembedUrls.length} player tabs`);
+        // If no TPlayerTb found, try any iframe with trembed param directly
+        if (trembedEntries.length === 0) {
+            $('iframe[src*="trembed"]').each((i, el) => {
+                const src = $(el).attr('src');
+                if (src) trembedEntries.push({ src, serverName: `Lecteur ${i + 1}` });
+            });
+        }
 
-        // Resolve each trembed URL to get final player URL
-        for (let i = 0; i < trembedUrls.length; i++) {
+        console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
+
+        // Resolve each trembed URL to get the real player iframe
+        for (const entry of trembedEntries) {
             try {
-                let trembedUrl = trembedUrls[i];
-                if (trembedUrl.startsWith('/')) {
-                    trembedUrl = BASE_URL + trembedUrl;
-                }
+                let trembedUrl = entry.src;
+                if (trembedUrl.startsWith('/')) trembedUrl = BASE_URL + trembedUrl;
+                else if (trembedUrl.startsWith('?')) trembedUrl = BASE_URL + '/' + trembedUrl;
+                if (!trembedUrl.startsWith('http')) continue;
 
-                const embedHtml = await fetchText(trembedUrl);
+                const embedHtml = await fetchText(trembedUrl, { headers: { 'Referer': episodeUrl } });
                 const $embed = cheerio.load(embedHtml);
 
-                // Find the iframe src inside the embed page
-                const playerSrc = $embed('iframe').attr('src');
+                // Find the real player iframe src
+                let playerSrc = $embed('iframe').first().attr('src') ||
+                                $embed('[data-src]').first().attr('data-src');
+
+                if (!playerSrc) {
+                    // fallback: look for any external http URL in embed HTML
+                    const extMatch = embedHtml.match(/(?:src|href)=["'](https?:\/\/(?!animevostfr)[^"']+)["']/i);
+                    if (extMatch) playerSrc = extMatch[1];
+                }
 
                 if (playerSrc && playerSrc.startsWith('http')) {
-                    const serverName = serverNames[i] || `Lecteur ${i + 1}`;
                     const playerName = getPlayerName(playerSrc);
-
                     const stream = await resolveStream({
                         name: `AnimeVOSTFR`,
-                        title: `${playerName} (${serverName})`,
+                        title: `${playerName} (${entry.serverName})`,
                         url: playerSrc,
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
-                    streams.push(stream);
+                    if (stream) streams.push(stream);
                 }
             } catch (err) {
-                console.error(`[AnimeVOSTFR] Failed to resolve player ${i}: ${err.message}`);
+                console.error(`[AnimeVOSTFR] Failed to resolve player "${entry.serverName}": ${err.message}`);
             }
         }
     } catch (e) {
@@ -243,6 +269,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (titles.length === 0) return [];
 
+    // Sort titles: French titles first (AnimeVOSTFR is French-language, search works better with FR)
+    const isFrenchTitle = (t) => /[àâéèêëîïôùûüçœæ']/i.test(t);
+    const titlesOrdered = [
+        ...titles.filter(isFrenchTitle),
+        ...titles.filter(t => !isFrenchTitle(t))
+    ];
+
     // --- ARMSYNC Metadata Resolution ---
     let targetEpisodes = [episode];
     try {
@@ -259,7 +292,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     let matches = [];
-    for (const t of titles) {
+    for (const t of titlesOrdered) {
         matches = await searchAnime(t);
         if (matches && matches.length > 0) break;
     }

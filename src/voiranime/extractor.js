@@ -22,70 +22,120 @@ function toSlug(title) {
 }
 
 /**
- * Search for the anime slug on VoirAnime
+ * Extract the base slug from a VoirAnime URL (strips season/vf suffixes)
+ * e.g. ".../shingeki-no-kyojin-3-vf/" -> "shingeki-no-kyojin"
  */
-async function searchAnime(title) {
-    const slugs = [
-        toSlug(title),
-        toSlug(title.replace(/'s/gi, '')),
-        toSlug(title.replace(/'s/gi, 's'))
-    ];
+function extractBaseSlug(url) {
+    const m = url.match(/\/anime\/([^/]+)\//); 
+    if (!m) return null;
+    // Strip trailing -N, -N-vf, -vf, -vostfr suffixes
+    return m[1]
+        .replace(/-(?:the-final-season|saison-\d+|\d+|vf|vostfr|part-\d+|cour-\d+)(?:-(?:vf|vostfr))?$/i, '')
+        .replace(/-+$/, '');
+}
 
-    const withThe = [];
-    slugs.forEach(s => {
-        if (s.startsWith('the-')) withThe.push(s.substring(4));
-        else withThe.push('the-' + s);
-    });
+/**
+ * Search for the anime slug on VoirAnime
+ * @param {string} title
+ * @param {number} season
+ */
+async function searchAnime(title, season = 1) {
+    const baseSlug = toSlug(title);
+    const baseSlugNoThe = baseSlug.startsWith('the-') ? baseSlug.substring(4) : baseSlug;
 
-    const allSlugs = [...new Set([...slugs, ...withThe])];
-    console.log(`[VoirAnime] Probing slugs: ${allSlugs.join(', ')}`);
+    // Season-aware slug candidates
+    const slugCandidates = [];
+    if (season === 1) {
+        // For S1, try the bare slug without season suffix
+        slugCandidates.push(baseSlug, baseSlugNoThe);
+        // Also try with season 1 explicit
+        slugCandidates.push(`${baseSlug}-1`, `${baseSlug}-1-vostfr`, `${baseSlug}-saison-1`);
+    } else {
+        // For later seasons try numbered variants first
+        slugCandidates.push(
+            `${baseSlug}-${season}`, `${baseSlug}-${season}-vostfr`, `${baseSlug}-${season}-vf`,
+            `${baseSlug}-saison-${season}`,
+            `${baseSlug}-the-final-season`, // common S4 alias
+            baseSlug, baseSlugNoThe
+        );
+    }
+    // Also try without 's
+    const slugNoApost = toSlug(title.replace(/'s/gi, ''));
+    if (slugNoApost !== baseSlug) slugCandidates.push(slugNoApost);
 
-    const matches = [];
+    const allSlugs = [...new Set(slugCandidates.filter(Boolean))];
+    console.log(`[VoirAnime] Probing slugs (S${season}): ${allSlugs.join(', ')}`);
 
     for (const slug of allSlugs) {
         const url = `${BASE_URL}/anime/${slug}/`;
         try {
             await fetchText(url, { method: 'HEAD' });
             console.log(`[VoirAnime] Predicted slug found: ${slug}`);
-            matches.push({ title: title, url: url });
-            break; // Found a direct match, no need to check other slugs
+            return [{ title: title, url: url }];
         } catch (e) { /* Predict failed */ }
     }
 
-    if (matches.length > 0) return matches;
-
+    // Fallback: keyword search
     try {
         const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(title)}`;
         const html = await fetchText(searchUrl);
         const $ = cheerio.load(html);
 
         const results = [];
-        $('.post-title a').each((i, el) => {
-            results.push({
-                title: $(el).text().trim(),
-                url: $(el).attr('href')
-            });
+        $('.post-title a, .c-image-hover a, h3.h5 a').each((i, el) => {
+            const href = $(el).attr('href') || '';
+            if (href.includes('/anime/') && !href.includes('/feed/')) {
+                results.push({ title: $(el).text().trim(), url: href });
+            }
         });
 
-        const normalize = (s) => s.toLowerCase().replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
+        console.log(`[VoirAnime] Search results: ${results.length}`);
+        if (results.length === 0) return [];
+
+        // Try to derive the base slug from search results and probe season-specific URLs
+        const baseSlugsFromSearch = [...new Set(results.map(r => extractBaseSlug(r.url)).filter(Boolean))];
+        for (const bs of baseSlugsFromSearch) {
+            const seasonSlugs = season === 1
+                ? [bs, `${bs}-1`, `${bs}-1-vostfr`]
+                : [`${bs}-${season}`, `${bs}-${season}-vostfr`, `${bs}-${season}-vf`, `${bs}-saison-${season}`];
+            for (const sl of seasonSlugs) {
+                const url = `${BASE_URL}/anime/${sl}/`;
+                try {
+                    await fetchText(url, { method: 'HEAD' });
+                    console.log(`[VoirAnime] Derived slug found: ${sl}`);
+                    return [{ title: title, url: url }];
+                } catch (e) { /* try next */ }
+            }
+        }
+
+        // Filter search results by season relevance
+        const normalize = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
         const simplifiedTitle = normalize(title);
 
-        console.log(`[VoirAnime] Search results: ${results.length}`);
-        
-        // Find all matches that contain the title
-        let searchMatches = results.filter(r => normalize(r.title).includes(simplifiedTitle));
+        // Season-score: higher = better match for requested season
+        const scored = results.map(r => {
+            const u = r.url.toLowerCase();
+            let score = 0;
+            if (season === 1) {
+                // Penalise URLs that explicitly have a season > 1
+                const m = u.match(/\/anime\/[^/]+-(?:saison-)?(\d+)(?:-vf|-vostfr)?\//);
+                const urlSeason = m ? parseInt(m[1]) : null;
+                if (urlSeason && urlSeason > 1) score -= 10;
+                else if (!urlSeason) score += 5; // No season number = likely base/S1
+            } else {
+                if (u.includes(`-${season}-`) || u.includes(`-${season}/`) || u.includes(`-saison-${season}`)) score += 10;
+                else if (u.includes(`-${season}`)) score += 5;
+            }
+            if (normalize(r.title).includes(simplifiedTitle)) score += 3;
+            return { ...r, score };
+        }).filter(r => r.score >= 0).sort((a, b) => b.score - a.score);
 
-        if (searchMatches.length === 0 && results.length > 0) {
-            // Fallback: trust the search engine if exact match fails
-            searchMatches = results;
+        if (scored.length > 0) {
+            console.log(`[VoirAnime] Best search match (score=${scored[0].score}): ${scored[0].url}`);
+            return scored;
         }
 
-        if (searchMatches.length > 0) {
-            console.log(`[VoirAnime] Found ${searchMatches.length} matches for ${title}`);
-            return searchMatches;
-        }
-
-        return [];
+        return results;
     } catch (e) {
         console.error(`[VoirAnime] Search error: ${e.message}`);
         return [];
@@ -112,8 +162,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     let matches = [];
+    // Try titles in order: EN first, then FR (slug "shingeki-no-kyojin" found via EN search results)
     for (const title of titles) {
-        matches = await searchAnime(title);
+        matches = await searchAnime(title, season);
         if (matches && matches.length > 0) break;
     }
     

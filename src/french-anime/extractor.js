@@ -127,6 +127,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (titles.length === 0) return [];
 
+    // French-Anime is a French site — try FR title first, then EN
+    const titlesOrdered = [...titles].sort((a, b) => {
+        // Heuristic: titles with accents/apostrophes are more likely French
+        const aFr = /[àâéèêëîïôùûüç']/i.test(a) ? -1 : 1;
+        const bFr = /[àâéèêëîïôùûüç']/i.test(b) ? -1 : 1;
+        return aFr - bFr;
+    });
+
     // --- ARMSYNC Metadata Resolution ---
     let targetEpisodes = [episode];
     try {
@@ -143,7 +151,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     let matches = [];
-    for (const title of titles) {
+    for (const title of titlesOrdered) {
         matches = await searchAnime(title);
         if (matches && matches.length > 0) break;
     }

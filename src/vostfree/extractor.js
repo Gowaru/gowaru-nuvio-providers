@@ -15,39 +15,67 @@ const BASE_URL = "https://vostfree.ws";
  */
 async function searchAnime(title) {
     try {
-        const formData = `do=search&subaction=search&story=${encodeURIComponent(title)}`;
-        const html = await fetchText(`${BASE_URL}/index.php?do=search`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': BASE_URL
-            },
-            body: formData
-        });
-
-        const $ = cheerio.load(html);
         const results = [];
+        const seen = new Set();
 
-        $('.title a, .search-result-item a, .movie-title a').each((i, el) => {
-            const h = $(el).attr('href');
-            if (h && (h.includes('.html') || h.includes('/anime/'))) {
-                results.push({
-                    title: $(el).text().trim() || $(el).attr('title'),
-                    url: h
-                });
+        const add = (h, t) => {
+            if (h && h.length > 10 && t && t.length > 2 && !seen.has(h)) {
+                seen.add(h);
+                results.push({ title: t, url: h.startsWith('http') ? h : BASE_URL + h });
             }
-        });
+        };
 
-        const normalize = (s) => s.toLowerCase().replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
+        // --- Method 1: POST search (returns targeted results) ---
+        try {
+            const postHtml = await fetchText(`${BASE_URL}/index.php?do=search`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': BASE_URL,
+                    'Origin': BASE_URL,
+                },
+                body: `do=search&subaction=search&story=${encodeURIComponent(title)}`
+            });
+            const $ = cheerio.load(postHtml);
+            // POST results: links ending in .htm / .html / numeric slugs
+            $('a[href]').each((i, el) => {
+                const h = $(el).attr('href') || '';
+                const t = $(el).text().trim() || $(el).attr('title') || '';
+                if ((h.includes(BASE_URL) || h.startsWith('/')) && t.length > 2 &&
+                    !h.includes('/category/') && !h.includes('/page/') && !h.includes('?do=') && !h.includes('#') &&
+                    (/\.\w{2,4}$/.test(h) || /\/\d+/.test(h))) {
+                    add(h, t);
+                }
+            });
+        } catch (e) { /* POST failed, fall through to GET */ }
+
+        // --- Method 2: GET /?s= (broader search) ---
+        if (results.length === 0) {
+            const getHtml = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`);
+            const $ = cheerio.load(getHtml);
+            const selectors = ['.post-title a', '.film-name a', 'h2.title a', 'h3.title a', '.title a'];
+            for (const sel of selectors) {
+                $(sel).each((i, el) => {
+                    const h = $(el).attr('href') || '';
+                    const t = $(el).text().trim() || $(el).attr('title') || '';
+                    if (h.includes(BASE_URL) && t.length > 2 &&
+                        !h.includes('/category/') && !h.includes('/page/')) {
+                        add(h, t);
+                    }
+                });
+                if (results.length > 0) break;
+            }
+        }
+
+        const normalize = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, '').replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
         const simplifiedTitle = normalize(title);
 
         console.log(`[Vostfree] Results found: ${results.length}`);
 
-        // Find all matches that contain the title
         const matches = results.filter(r => normalize(r.title).includes(simplifiedTitle));
 
         if (matches.length > 0) {
-            console.log(`[Vostfree] Found ${matches.length} matches for ${title}`);
+            console.log(`[Vostfree] Found ${matches.length} matches for "${title}"`);
         }
         return matches;
     } catch (e) {
@@ -59,6 +87,14 @@ async function searchAnime(title) {
 export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (titles.length === 0) return [];
+
+    // Vostfree is French — try romaji/Japanese-derived titles first (Shingeki, not Attack on Titan),
+    // then French, then English. Sort: non-ASCII/romaji first, then FR, then EN.
+    const titlesOrdered = [...titles].sort((a, b) => {
+        const aJp = /[^\x00-\x7F]/.test(a) ? -1 : (/[àâéèêëîïôùûüç'L']/i.test(a) ? 0 : 1);
+        const bJp = /[^\x00-\x7F]/.test(b) ? -1 : (/[àâéèêëîïôùûüç'L']/i.test(b) ? 0 : 1);
+        return aJp - bJp;
+    });
 
     // --- ARMSYNC Metadata Resolution ---
     let targetEpisodes = [episode];
@@ -76,7 +112,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     let matches = [];
-    for (const title of titles) {
+    for (const title of titlesOrdered) {
         matches = await searchAnime(title);
         if (matches && matches.length > 0) break;
     }
