@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.20] - 2026-02-26
+
+### Fixed
+- **Revert Cheerio Bundling (Critical)**: Reverted the changes from v1.1.19 that bundled `cheerio-without-node-native` into the providers. Bundling cheerio caused a total regression in the Nuvio app, likely due to incompatible syntax for the Hermes engine. The app natively provides `cheerio-without-node-native`, so it should remain in `EXTERNAL_MODULES`. The export syntax fix from v1.1.18 should be sufficient to resolve the original issue.
+
 ## [1.1.19] - 2026-02-26
 
 ### Fixed
