@@ -150,7 +150,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -174,7 +174,7 @@
       "id": "jetanimes",
       "name": "JetAnimes",
       "description": "Regarder vos animes en streaming sur JetAnimes.",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
