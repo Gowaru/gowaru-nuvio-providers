@@ -1,6 +1,6 @@
 {
   "name": "Gowaru's Repo",
-  "version": "1.1.23",
+  "version": "1.1.24",
   "scrapers": [
     {
       "id": "anime-sama",
@@ -135,6 +135,54 @@
       "filename": "providers/animevostfr.js",
       "enabled": true,
       "logo": "https://animevostfr.org/wp-content/uploads/luffy-icon.jpg",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "animesultra",
+      "name": "AnimesUltra",
+      "description": "Animes en streaming VOSTFR et VF.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/animesultra.js",
+      "enabled": true,
+      "logo": "https://animesultra.org/templates/animeultra/images/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "jetanimes",
+      "name": "JetAnimes",
+      "description": "Regarder vos animes en streaming sur JetAnimes.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/jetanimes.js",
+      "enabled": true,
+      "logo": "https://vww.jetanimes.com/wp-content/uploads/2018/12/android-chrome-192x192.png",
       "contentLanguage": [
         "fr"
       ],
