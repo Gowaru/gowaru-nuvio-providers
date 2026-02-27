@@ -149,3 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial implementation of the 6 main providers (Anime-Sama, VoirAnime, Vostfree, FRAnime, French-Anime, AnimeVOSTFR).
 - Base build system using `esbuild`.
+
+### [1.1.24] - 2026-02-27
+#### Added
+- Added AnimesUltra provider (Supports VOSTFR and VF directly via AJAX fetching).
+- Added JetAnimes provider boilerplate (Note: Site seems heavily gated/faked by Ad links redirecting to secured.lol, keeping it active in case of future legitimate Dooplay uploads).
