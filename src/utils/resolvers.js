@@ -93,21 +93,23 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        const headers = { 'Referer': 'https://vidmoly.to/', 'Origin': 'https://vidmoly.to' };
-        let res = await safeFetch(url, { headers });
+        // Vidmoly.net often has Cloudflare Turnstile, use vidmoly.me instead
+        const fetchUrl = url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.me');
+        const headers = { 'Referer': 'https://vidmoly.me/', 'Origin': 'https://vidmoly.me' };
+        let res = await safeFetch(fetchUrl, { headers });
         if (!res) return { url };
         let html = await res.text();
         // Follow JS window.location.replace() anti-bot redirect
         const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
                            html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
-        if (jsRedirect && jsRedirect[1] !== url) {
+        if (jsRedirect && jsRedirect[1] !== fetchUrl) {
             res = await safeFetch(jsRedirect[1], { headers });
             if (res) html = await res.text();
         }
         if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
         const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                       html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-        if (match) return { url: match[1], headers: { "Referer": "https://vidmoly.to/" } };
+        if (match) return { url: match[1], headers: { "Referer": "https://vidmoly.me/" } };
     } catch (e) {}
     return { url };
 }
@@ -115,8 +117,8 @@ export async function resolveVidmoly(url) {
 export async function resolveUqload(url) {
     // Normalize URL to try all known active domains
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
-    const domains = ['uqload.co', 'uqload.com', 'uqload.io', 'uqloads.xyz', 'uqload.to'];
-    const baseRef = 'https://uqload.co/';
+    const domains = ['uqload.is', 'uqload.co', 'uqload.com', 'uqload.io', 'uqloads.xyz', 'uqload.to'];
+    const baseRef = 'https://uqload.is/';
     for (const domain of domains) {
         try {
             const tryUrl = `https://${domain}${normalizedPath}`;
@@ -124,8 +126,7 @@ export async function resolveUqload(url) {
             if (!res) continue;
             const html = await res.text();
             const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
-                          html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/) ||
-                          html.match(/["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i);
+                          html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
             if (match) return { url: match[1], headers: { "Referer": baseRef } };
         } catch (e) {}
     }
