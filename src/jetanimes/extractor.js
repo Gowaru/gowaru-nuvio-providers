@@ -170,12 +170,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
+    // Filter out unresolved iframes to prevent ExoPlayer crashing
     const validStreams = [];
     for (const s of streams) {
         const resolved = await resolveStream(s);
         if (resolved && resolved.isDirect) {
-            validStreams.push(resolved);
-        } else if (resolved) {
             validStreams.push(resolved);
         }
     }

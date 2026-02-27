@@ -154,15 +154,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    // Resolve streams using Nuvio's robust resolveStream
+    // Filter out unresolved iframes to prevent ExoPlayer crashing (error 23003)
     const validStreams = [];
     for (const s of streams) {
         const resolved = await resolveStream(s);
         if (resolved && resolved.isDirect) {
             validStreams.push(resolved);
-        } else if (resolved) {
-            // It could be an iframe fallback depending on Nuvio implementations
-            validStreams.push(resolved); 
         }
     }
 
