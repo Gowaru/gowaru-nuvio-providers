@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.23] - 2026-02-27
+
+### Fixed
+- **Vidmoly Resolver**: Updated the resolver to bypass Cloudflare Turnstile by using the `vidmoly.me` domain instead of `.net`, `.to`, `.ru`, or `.is`. Added proper `Referer` and `Origin` headers to ensure the video stream is correctly extracted.
+- **Uqload Resolver**: Updated the domain list to include the new active domain `uqload.is` to fix broken video links.
+- **Build System**: Recompiled all providers with minification enabled to reduce file size and improve load times in the Nuvio app.
+
 ## [1.1.22] - 2026-02-26
 
 ### Fixed
