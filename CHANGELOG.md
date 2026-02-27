@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.26] - 2026-02-27
+
+### Fixed
+- **Player Playback Crashes**: Fixed ExoPlayer exception (`23003` / `error_code_parsing_container_unsupported`) affecting `AnimesUltra` and `JetAnimes`. The extractors were incorrectly bypassing the `isDirect` filter, pushing raw HTML web pages to the player instead of resolving them strictly into direct video streams (.mp4, .mkv, .m3u8).
+
+## [1.1.26] - 2026-02-27
+
+### Fixed
+- **Player Playback Crashes**: Fixed ExoPlayer exception (`23003` / `error_code_parsing_container_unsupported`) affecting `AnimesUltra` and `JetAnimes`. The extractors were incorrectly bypassing the `isDirect` filter, pushing raw HTML web pages to the player instead of resolving them strictly into direct video streams (.mp4, .mkv, .m3u8).
+
+
+## [1.1.26] - 2026-02-27
+
+### Fixed
+- **Player Playback Crashes**: Fixed ExoPlayer exception (`23003` / `error_code_parsing_container_unsupported`) affecting `AnimesUltra` and `JetAnimes`. The extractors were incorrectly bypassing the `isDirect` filter, pushing raw HTML web pages to the player instead of resolving them strictly into direct video streams.
+
+## [1.1.25] - 2026-02-27
+
+### Changed
+- **Global Provider Update**: Improved the stream sorting algorithm across all providers to prioritize French dubs (VF) over Japanese with French subtitles (VOSTFR). When both versions are available, VF will now be the first choice.
+
+## [1.1.24] - 2026-02-27
+
+### Added
+- **New Provider**: Added [AnimesUltra](https://animesultra.org) to support parsing and extracting direct video streams.
+- **New Provider**: Added [JetAnimes](https://on.jetanimes.com) (marked with a warning due to heavy proxying/redirects).
+- **Core HTTP Module**: Standardized `http.js` across all newly added sources to bypass Cloudflare 403 blocks in the Hermes engine.
+
 ## [1.1.23] - 2026-02-27
 
 ### Fixed

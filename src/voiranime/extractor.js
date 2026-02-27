@@ -290,5 +290,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const validStreams = streams.filter(s => s && s.isDirect);
     console.log(`[VoirAnime] Total streams found: ${validStreams.length}`);
+    
+    // Sort streams to prioritize VF (French) over VOSTFR
+    validStreams.sort((a, b) => {
+        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
+        const aIsVf = isVf(a.name) || isVf(a.title);
+        const bIsVf = isVf(b.name) || isVf(b.title);
+        
+        if (aIsVf && !bIsVf) return -1;
+        if (!aIsVf && bIsVf) return 1;
+        return 0;
+    });
+
     return validStreams;
 }
