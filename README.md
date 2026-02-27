@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.22-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.1.24-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -23,24 +23,28 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 6 pillars of the French anime scene:
+This bundle integrates 8 pillars of the French anime scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
 | **Anime-Sama** | Massive catalog, daily updates. | VF / VOSTFR | ✅ |
+| **AnimesUltra** | Complete catalog based on DataLife Engine. | VF / VOSTFR | ✅ |
 | **FRAnime** | Modern interface, fast API. | VF / VOSTFR | ❌ |
 | **VoirAnime** | Comprehensive historical archive. | VF / VOSTFR | ✅ |
 | **Vostfree** | Specialist in streaming & downloads. | VF / VOSTFR | ✅ |
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
+| **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ⚠️ |
+
+*(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
 ---
 
 ## 🛠️ Technical Features
 
-- **Universal Resolver**: Includes an automatic resolution engine for popular hosts (**Sibnet, Vidmoly, Uqload, Voe, Sendvid**). No more `ExoPlaybackException` errors!
+- **Universal Resolver**: Includes an automatic resolution engine for popular hosts (**Sibnet, Vidmoly, Uqload, Voe, Sendvid, VidCDN...**). No more `ExoPlaybackException` errors!
 - **Mobile Optimized**: "Embed" (HTML) links are transformed into direct video links (`.mp4`, `.m3u8`) for native compatibility with Android/iOS players.
-- **ESM -> CJS Transpilation**: Modern source code (ES6+) automatically converted for the **Hermes** JavaScript engine.
+- **ESM -> CJS Transpilation & Minification**: Modern source code (ES6+) automatically converted, optimized and minified for the **Hermes** JavaScript engine.
 - **Security Check**: Regular dependency audits to ensure vulnerability-free code.
 
 ---
@@ -56,7 +60,7 @@ nuvio-providers/
 │   └── [provider]/
 │       ├── index.js        # Entry point (exports getStreams)
 │       └── extractor.js    # HTML/API extraction logic
-├── providers/              # Compiled files (do not edit directly)
+├── providers/              # Compiled and minified files (do not edit directly)
 ├── manifest.json           # Plugin registry
 └── build.js                # Bundling script (based on esbuild)
 ```
@@ -73,7 +77,7 @@ nuvio-providers/
 
 3. **Build**:
    ```bash
-   # Build all plugins
+   # Build and minify all plugins
    npm run build
 
    # Build in watch mode (development)
@@ -81,8 +85,9 @@ nuvio-providers/
    ```
 
 ### Code Conventions
-- Use `cheerio` for HTML parsing.
+- Use `cheerio` (imported as `cheerio-without-node-native`) for HTML parsing.
 - Import `resolveStream` from `../utils/resolvers.js` to process your final URLs.
+- Always use `fetchText` or `fetchJson` wrappers located in standard `http.js` utilities to inject correct headers and avoid Cloudflare blocks.
 - Prefer `fetch` (Hermes compatible) over heavy external libraries.
 
 ---
