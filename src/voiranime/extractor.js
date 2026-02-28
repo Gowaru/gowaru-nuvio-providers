@@ -53,8 +53,8 @@ async function searchAnime(title, season = 1) {
     if (season === 1) {
         // For S1, try the bare slug without season suffix
         slugCandidates.push(baseSlug, baseSlugNoThe);
-        // Also try with season 1 explicit
-        slugCandidates.push(`${baseSlug}-1`, `${baseSlug}-1-vostfr`, `${baseSlug}-saison-1`);
+        // Also try with season 1 explicit and VF explicit (since some S1 are split logic or VF forced)
+        slugCandidates.push(`${baseSlug}-1`, `${baseSlug}-1-vostfr`, `${baseSlug}-saison-1`, `${baseSlug}-vf`, `${baseSlug}-1-vf`);
     } else {
         // For later seasons try numbered variants first
         slugCandidates.push(
@@ -71,14 +71,17 @@ async function searchAnime(title, season = 1) {
     const allSlugs = [...new Set(slugCandidates.filter(Boolean))];
     console.log(`[VoirAnime] Probing slugs (S${season}): ${allSlugs.join(', ')}`);
 
+    const validPredictions = [];
     for (const slug of allSlugs) {
         const url = `${BASE_URL}/anime/${slug}/`;
         try {
             await fetchText(url, { method: 'HEAD' });
             console.log(`[VoirAnime] Predicted slug found: ${slug}`);
-            return [{ title: title, url: url }];
+            validPredictions.push({ title: title + (slug.includes('vostfr') ? ' VOSTFR' : (slug.includes('vf') ? ' VF' : '')), url: url });
         } catch (e) { /* Predict failed */ }
     }
+    
+    if (validPredictions.length > 0) return validPredictions;
 
     // Fallback: keyword search
     try {
@@ -101,7 +104,7 @@ async function searchAnime(title, season = 1) {
         const baseSlugsFromSearch = [...new Set(results.map(r => extractBaseSlug(r.url)).filter(Boolean))];
         for (const bs of baseSlugsFromSearch) {
             const seasonSlugs = season === 1
-                ? [bs, `${bs}-1`, `${bs}-1-vostfr`]
+                ? [bs, `${bs}-vf`, `${bs}-1`, `${bs}-1-vostfr`, `${bs}-1-vf`]
                 : [`${bs}-${season}`, `${bs}-${season}-vostfr`, `${bs}-${season}-vf`, `${bs}-saison-${season}`];
             for (const sl of seasonSlugs) {
                 const url = `${BASE_URL}/anime/${sl}/`;

@@ -30,7 +30,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.1.26",
+      "version": "1.1.27",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -150,7 +150,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
@@ -174,7 +174,7 @@
       "id": "jetanimes",
       "name": "JetAnimes",
       "description": "Regarder vos animes en streaming sur JetAnimes.",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",

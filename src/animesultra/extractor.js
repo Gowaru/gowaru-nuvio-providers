@@ -115,29 +115,58 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             
             const $ = cheerio.load(html);
 
-            // Fetch the servers relevant for our matched episodes
-            $('.player_box').each((i, el) => {
-                const idAttr = $(el).attr('id'); // e.g. content_player_1vidc
-                if (!idAttr) return;
+            // Find all matching episode links
+            const epHrefs = [];
+            $('.ep-item').each((i, el) => {
+                const epNum = $(el).attr('data-number');
+                if (epNum && targetEpisodes.map(e => parseInt(e, 10)).includes(parseInt(epNum, 10))) {
+                    const href = $(el).attr('href');
+                    if (href) epHrefs.push(href);
+                }
+            });
 
-                const matchId = idAttr.match(/content_player_(\d+)([a-zA-Z0-9]+)/);
-                if (matchId) {
-                    const boxEpNum = parseInt(matchId[1], 10);
-                    
-                    if (targetEpisodes.map(e => parseInt(e, 10)).includes(boxEpNum)) {
-                        const serverCode = matchId[2];
-                        let url = $(el).text().trim() || $(el).find('iframe').attr('src');
-                        
-                        if (url && url.startsWith('http')) {
-                            // Convert vidcdn or other recognized players if needed
-                            // For AnimesUltra, the code sends raw text as link
-                            let serverName = serverCode.toLowerCase().includes('vidc') ? 'VidCDN' : serverCode;
+            if (epHrefs.length === 0) {
+                console.warn(`[AnimesUltra] Episodes ${targetEpisodes.join(',')} not found for ${match.title}`);
+                continue;
+            }
+
+            for (const epHref of epHrefs) {
+                // Fetch the specific episode page to see which servers belong to it
+                const epRes = await fetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
+                const epHtml = await epRes.text();
+                const $ep = cheerio.load(epHtml);
+
+                // Extract the server IDs
+                const serverIds = [];
+                $ep('.server-item').each((i, el) => {
+                    const sId = $ep(el).attr('data-server-id');
+                    if (sId) serverIds.push(sId);
+                });
+
+                // Fetch the links from the original full-story html using these server IDs
+                for (const sId of serverIds) {
+                    const box = $(`#content_player_${sId}`);
+                    if (box.length > 0) {
+                        let url = box.text().trim() || box.find('iframe').attr('src');
+                        if (url && (url.startsWith('http') || /^[0-9]+$/.test(url))) {
                             
-                            // We don't resolve directly here, we let resolveStream handle it, 
-                            // it can handle most generic domains like dood, streamtape, vidmoly, sibnet, or myvi etc
-                            // the resolvers.js from utils handles play.vidcdn.xyz 
-                            // Wait, does resolvers.js have vidcdn support? Usually direct iframe wrap.
-                            
+                            // Sibnet often appears as raw ID
+                            if (/^[0-9]+$/.test(url)) {
+                                url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
+                            }
+
+                            let serverName = "Serveur";
+                            const snameLower = $ep(`.server-item[data-server-id="${sId}"]`).text().trim();
+                            if (snameLower) {
+                                serverName = snameLower;
+                            } else {
+                                if (sId.toLowerCase().includes('sen')) serverName = "Sendvid";
+                                else if (sId.toLowerCase().includes('my')) serverName = "Mytv";
+                                else if (sId.toLowerCase().includes('vidc')) serverName = "VidCDN";
+                                else if (sId.toLowerCase() === '20' || url.includes('sibnet.ru')) serverName = "Sibnet";
+                                else serverName = `Srv_${sId}`;
+                            }
+
                             streams.push({
                                 name: `AnimesUltra (${lang})`,
                                 title: `${serverName} - ${lang}`,
@@ -148,7 +177,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                         }
                     }
                 }
-            });
+            }
         } catch (e) {
             console.error(`[AnimesUltra] Extract error: ${e.message}`);
         }
