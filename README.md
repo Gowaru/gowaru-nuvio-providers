@@ -23,10 +23,11 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 8 pillars of the French anime scene:
+This bundle integrates 9 pillars of the French anime scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
+| **Sekai** | Specialized in big anime series. Ultra-fast direct streams. | VF / VOSTFR | ✅ |
 | **Anime-Sama** | Massive catalog, daily updates. | VF / VOSTFR | ✅ |
 | **AnimesUltra** | Complete catalog based on DataLife Engine. | VF / VOSTFR | ✅ |
 | **FRAnime** | Modern interface, fast API. | VF / VOSTFR | ❌ |
