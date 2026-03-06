@@ -8,7 +8,7 @@ import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-const BASE_URL = "https://anime-sama.tv";
+const BASE_URL = "https://anime-sama.to";
 
 /**
  * Search for a slug on Anime-Sama
@@ -54,7 +54,7 @@ function getPlayerName(varName, url) {
 export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (titles.length === 0) return [];
-    const title = titles[0]; // Primary title (EN)
+    const title = titles[0];
 
     let absoluteEpisode = episode;
     try {
