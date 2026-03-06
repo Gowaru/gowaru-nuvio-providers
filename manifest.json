@@ -1,12 +1,12 @@
 {
   "name": "Gowaru's Repo",
-  "version": "1.1.26",
+  "version": "1.1.29",
   "scrapers": [
     {
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.26",
+      "version": "1.1.27",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",
