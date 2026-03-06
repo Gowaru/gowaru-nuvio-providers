@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Anime-Sama**: Updated base domain from `anime-sama.tv` to `anime-sama.to`.
 
+## [1.1.29] - 2026-03-06
+
+### Fixed
+- **Anime-Sama**: Updated base domain from `anime-sama.tv` to `anime-sama.to`.
+
 ## [1.1.28] - 2026-03-02
 
 ### Added
