@@ -1,10 +1,11 @@
 {
     "$schema": "https://json.schemastore.org/package.json",
     "name": "nuvio-providers",
-    "version": "1.1.27",
+    "version": "1.1.29",
     "description": "Providers for Nuvio Streaming",
     "scripts": {
         "build": "node build.js",
+        "build:minify": "node build.js --minify",
         "build:watch": "nodemon --watch src -e js,json --exec 'node build.js'",
         "build:provider": "node build.js",
         "serve": "node server.js"

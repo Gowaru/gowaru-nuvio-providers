@@ -98,4 +98,4 @@ nuvio-providers/
 This project is distributed under the **GPL-3.0** license. See the [LICENSE](LICENSE) file for more details.
 
 ---
-*Maintained with ❤️ by Gowaru.*
+*Maintained by Gowaru.*
