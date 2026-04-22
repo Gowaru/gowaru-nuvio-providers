@@ -65,10 +65,36 @@ export async function getTmdbTitles(tmdbId, mediaType) {
                 titles.push(titleFr);
             }
         }
+
+        // 3. Alternative titles (covers Romaji, English aliases, etc.)
+        const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+        const altRes = await safeFetch(altUrl);
+        if (altRes) {
+            const altData = await altRes.json();
+            const altList = type === 'movie' ? altData.titles : altData.results;
+            if (altList && Array.isArray(altList)) {
+                // Priority: Romaji or English, then everything else in latin alphabet
+                const isLatin = (str) => /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()]+$/.test(str);
+                
+                altList.forEach(alt => {
+                    const t = alt.title?.trim();
+                    if (t && !titles.some(existing => existing.toLowerCase() === t.toLowerCase()) && isLatin(t)) {
+                        if (alt.type === 'Romaji' || alt.iso_3166_1 === 'US' || alt.iso_3166_1 === 'FR') {
+                            // Insert near the top, after the primary names
+                            titles.splice(1, 0, t);
+                        } else {
+                            titles.push(t);
+                        }
+                    }
+                });
+            }
+        }
     } catch (e) {
         console.error(`[Metadata] TMDB API error: ${e.message}`);
     }
 
-    console.log(`[Metadata] Titles for ${tmdbId}: ${titles.join(' | ')}`);
-    return titles;
+    // Deduplicate array completely
+    const uniqueTitles = [...new Set(titles)];
+    console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(' | ')}`);
+    return uniqueTitles;
 }
