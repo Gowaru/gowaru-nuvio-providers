@@ -7,7 +7,7 @@ import cheerio from "cheerio-without-node-native";
 import { resolveStream } from "../utils/resolvers.js";
 import { getImdbId, getAbsoluteEpisode } from "../utils/armsync.js";
 import { getTmdbTitles } from "../utils/metadata.js";
-const BASE_URL = "https://voiranime.tv";
+const BASE_URL = "https://voir-anime.to";
 
 /**
  * Clean title to create a slug
@@ -331,7 +331,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
           if (stream) streams.push(stream);
         }
       } else {
-        for (const host of hosts) {
+        const hostPromises = hosts.map(async (host) => {
           try {
             const hostUrl = `${episodeUrl}${episodeUrl.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`;
             const hostHtml = await fetchText(hostUrl);
@@ -349,16 +349,21 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 embedUrl = scriptMatch[0];
             }
             if (embedUrl) {
-              const stream = await resolveStream({
+              return resolveStream({
                 name: `VoirAnime (${lang})`,
                 title: `${host} - ${lang}`,
                 url: embedUrl,
                 quality: "HD",
                 headers: { Referer: BASE_URL },
               });
-              if (stream) streams.push(stream);
             }
           } catch (err) {}
+          return null;
+        });
+
+        const resolvedHosts = await Promise.all(hostPromises);
+        for (const stream of resolvedHosts) {
+          if (stream) streams.push(stream);
         }
       }
     } catch (e) {}

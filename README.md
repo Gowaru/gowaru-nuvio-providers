@@ -17,6 +17,10 @@ To use these providers in your Nuvio app:
    ```text
    https://raw.githubusercontent.com/Gowaru/gowaru-nuvio-providers/refs/heads/main/
    ```
+   or 
+   ```text
+   https://bit.ly/nuvio-gowaru
+   ```
 3. Refresh and enable the desired plugins.
 
 ---

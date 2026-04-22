@@ -1,5 +1,7 @@
+## 1.1.31
+- **VoirAnime** : Applying concurrent asynchronous resolution (`Promise.all`) to video player scrapings to avoid blocked timeouts from NodeJS and clients.
 ## 1.1.30
-- **Anime-Sama / General** : Correction du bug de plantage/timeout causé par la recherche séquentielle de liens morts (Uqload, Vidmoly, etc.). Résolution asynchrone concurrente (`Promise.all`) implémentée pour des chargements instantanés et aucune limite de timeout dans les applications.
+- **Anime-Sama / General** : Fixed a crash/timeout bug caused by sequential dead link searches (Uqload, Vidmoly, etc.). A concurrent asynchronous resolution (`Promise.all`) has been implemented for instant loading and no timeout limits in applications.
 
 # Changelog
 
