@@ -1,3 +1,6 @@
+## 1.1.30
+- **Anime-Sama / General** : Correction du bug de plantage/timeout causé par la recherche séquentielle de liens morts (Uqload, Vidmoly, etc.). Résolution asynchrone concurrente (`Promise.all`) implémentée pour des chargements instantanés et aucune limite de timeout dans les applications.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
