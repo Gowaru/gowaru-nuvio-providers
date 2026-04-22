@@ -115,22 +115,48 @@ export async function resolveVidmoly(url) {
 }
 
 export async function resolveUqload(url) {
-    // Normalize URL to try all known active domains
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
-    const domains = ['uqload.is', 'uqload.co', 'uqload.com', 'uqload.io', 'uqloads.xyz', 'uqload.to'];
-    const baseRef = 'https://uqload.is/';
-    for (const domain of domains) {
-        try {
-            const tryUrl = `https://${domain}${normalizedPath}`;
-            const res = await safeFetch(tryUrl, { headers: { 'Referer': baseRef } });
-            if (!res) continue;
-            const html = await res.text();
-            const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
-                          html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
-            if (match) return { url: match[1], headers: { "Referer": baseRef } };
-        } catch (e) {}
-    }
-    return { url };
+    const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || 'uqload.co';
+    const uniqueDomains = [...new Set([originalDomain, 'uqload.co', 'oneupload.to'])];
+    const baseRef = 'https://uqload.co/';
+    
+    // Check domains concurrently to avoid long serial timeouts
+    return new Promise((resolve) => {
+        let failures = 0;
+        let resolved = false;
+
+        const checkDomain = async (domain) => {
+            try {
+                const tryUrl = `https://${domain}${normalizedPath}`;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 4000); // Fast fail 4s
+                
+                const res = await fetch(tryUrl, {
+                    headers: { ...HEADERS, 'Referer': baseRef },
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                
+                if (res && res.ok) {
+                    const html = await res.text();
+                    const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
+                                  html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
+                    if (match && !resolved) {
+                        resolved = true;
+                        resolve({ url: match[1], headers: { "Referer": baseRef } });
+                        return;
+                    }
+                }
+            } catch (e) {}
+            
+            failures++;
+            if (failures === uniqueDomains.length && !resolved) {
+                resolve({ url }); // All failed
+            }
+        };
+
+        uniqueDomains.forEach(checkDomain);
+    });
 }
 
 export async function resolveVoe(url) {

@@ -1,29 +1,29 @@
 {
-    "$schema": "https://json.schemastore.org/package.json",
-    "name": "nuvio-providers",
-    "version": "1.1.29",
-    "description": "Providers for Nuvio Streaming",
-    "scripts": {
-        "build": "node build.js",
-        "build:minify": "node build.js --minify",
-        "build:watch": "nodemon --watch src -e js,json --exec 'node build.js'",
-        "build:provider": "node build.js",
-        "serve": "node server.js"
-    },
-    "devDependencies": {
-        "cheerio": "^1.2.0",
-        "esbuild": "^0.27.3",
-        "nodemon": "^3.1.0"
-    },
-    "keywords": [
-        "nuvio",
-        "streaming",
-        "providers"
-    ],
-    "license": "GPL-3.0",
-    "dependencies": {
-        "cheerio-without-node-native": "^0.20.2",
-        "crypto-js": "^4.2.0",
-        "htmlparser2-without-node-native": "^3.9.2"
-    }
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "nuvio-providers",
+  "version": "1.1.30",
+  "description": "Providers for Nuvio Streaming",
+  "scripts": {
+    "build": "node build.js",
+    "build:minify": "node build.js --minify",
+    "build:watch": "nodemon --watch src -e js,json --exec 'node build.js'",
+    "build:provider": "node build.js",
+    "serve": "node server.js"
+  },
+  "devDependencies": {
+    "cheerio": "^1.2.0",
+    "esbuild": "^0.27.3",
+    "nodemon": "^3.1.0"
+  },
+  "keywords": [
+    "nuvio",
+    "streaming",
+    "providers"
+  ],
+  "license": "GPL-3.0",
+  "dependencies": {
+    "cheerio-without-node-native": "^0.20.2",
+    "crypto-js": "^4.2.0",
+    "htmlparser2-without-node-native": "^3.9.2"
+  }
 }

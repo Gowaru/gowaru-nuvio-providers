@@ -68,6 +68,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const slug = toSlug(title);
     const languages = ['vostfr', 'vf'];
     const streams = [];
+    const promises = [];
 
     for (const lang of languages) {
         const paths = [
@@ -98,19 +99,23 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     }
                     
                     if (playerUrl && playerUrl.startsWith('http')) {
-                        const stream = await resolveStream({
+                        const promise = resolveStream({
                             name: `Anime-Sama (${lang.toUpperCase()})`,
                             title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
                             url: playerUrl,
                             quality: "HD",
                             headers: { "Referer": BASE_URL }
                         });
-                        streams.push(stream);
+                        promises.push(promise);
                     }
                 }
             } catch (e) {}
         }
     }
+    
+    // Resolve all primary streams concurrently
+    const resolvedFirstBatch = await Promise.all(promises);
+    streams.push(...resolvedFirstBatch.filter(s => s != null));
 
     if (streams.length === 0) {
         // Search with all title variations (EN, FR, Original romaji)
@@ -120,6 +125,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             slugs.forEach(s => { if (!foundSlugs.includes(s)) foundSlugs.push(s); });
         }
         const checkedSlugs = new Set([slug]);
+        const fallbackPromises = [];
 
         for (const fSlug of foundSlugs) {
             if (checkedSlugs.has(fSlug)) continue;
@@ -153,20 +159,22 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                             }
                             
                             if (playerUrl && playerUrl.startsWith('http')) {
-                                const stream = await resolveStream({
+                                const promise = resolveStream({
                                     name: `Anime-Sama (${lang.toUpperCase()})`,
                                     title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
                                     url: playerUrl,
                                     quality: "HD",
                                     headers: { "Referer": BASE_URL }
                                 });
-                                if (stream) streams.push(stream);
+                                fallbackPromises.push(promise);
                             }
                         }
                     } catch (e) {}
                 }
             }
         }
+        const resolvedFallbacks = await Promise.all(fallbackPromises);
+        streams.push(...resolvedFallbacks.filter(s => s != null));
     }
     
     const validStreams = streams.filter(s => s && s.isDirect);
