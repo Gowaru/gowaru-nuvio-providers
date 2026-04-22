@@ -1,3 +1,6 @@
+## 1.1.32
+- **Global / Metadata** : Integrated TMDB `/alternative_titles` API to fetch Japanese/Romaji titles officially instead of just the English baseline. Providers like VoirAnime, Anime-Sama, French-Anime now perfectly hit matches like `Rokudenashi Majutsu Koushi to Akashic Records` when requested from the English TMDB ID entry.
+
 ## 1.1.31
 - **VoirAnime** : Applying concurrent asynchronous resolution (`Promise.all`) to video player scrapings to avoid blocked timeouts from NodeJS and clients.
 ## 1.1.30
