@@ -143,9 +143,12 @@ async function fetchTmdbApi(tmdbId, mediaType, season, episode) {
         return processSource(link.decoded_url || link.url, link.quality, 'Direct', link.language);
     });
 
-    const results = await Promise.allSettled(tasks);
+    const results = await Promise.all(tasks.map(t => t.catch(e => {
+        console.error(`[Movix] Task failed: ${e.message}`);
+        return null;
+    })));
     for (const r of results) {
-        if (r.status === 'fulfilled' && r.value) streams.push(r.value);
+        if (r) streams.push(r);
     }
 
     return streams;
@@ -179,9 +182,12 @@ async function fetchFStream(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const results = await Promise.allSettled(tasks);
+    const results = await Promise.all(tasks.map(t => t.catch(e => {
+        console.error(`[Movix] FStream task failed: ${e.message}`);
+        return null;
+    })));
     for (const r of results) {
-        if (r.status === 'fulfilled' && r.value) streams.push(r.value);
+        if (r) streams.push(r);
     }
 
     return streams;
@@ -192,14 +198,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     console.log(`[Movix] Starting extraction for ${mediaType} ${tmdbId}`);
 
     // We fetch Direct API first as it's the best, others in parallel as fallbacks
-    const results = await Promise.allSettled([
-        fetchTmdbApi(tmdbId, mediaType, season, episode),
-        fetchFStream(tmdbId, mediaType, season, episode)
+    const results = await Promise.all([
+        fetchTmdbApi(tmdbId, mediaType, season, episode).catch(e => {
+            console.error(`[Movix] fetchTmdbApi failed: ${e.message}`);
+            return [];
+        }),
+        fetchFStream(tmdbId, mediaType, season, episode).catch(e => {
+            console.error(`[Movix] fetchFStream failed: ${e.message}`);
+            return [];
+        })
     ]);
 
     const streams = [];
     for (const r of results) {
-        if (r.status === 'fulfilled') streams.push(...r.value);
+        if (Array.isArray(r)) streams.push(...r);
     }
 
     // Deduplicate
