@@ -2,6 +2,8 @@
  * HTTP Utilities for Movix
  */
 
+const PROXY_URL = 'https://proxy.gowaru.app/';
+
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
@@ -15,10 +17,11 @@ export const HEADERS = {
 };
 
 export async function fetchJson(url, options = {}) {
-    console.log(`[Movix] Fetching: ${url}`);
+    const proxiedUrl = PROXY_URL + url;
+    console.log(`[Movix] Fetching (proxied): ${url}`);
 
     try {
-        const response = await fetch(url, {
+        const response = await fetch(proxiedUrl, {
             headers: {
                 ...HEADERS,
                 ...options.headers
@@ -26,7 +29,7 @@ export async function fetchJson(url, options = {}) {
         });
 
         if (!response.ok) {
-            console.log(`[Movix] HTTP ${response.status} for ${url}`);
+            console.log(`[Movix] HTTP ${response.status} for ${url} (via proxy)`);
             return null;
         }
 
@@ -34,11 +37,11 @@ export async function fetchJson(url, options = {}) {
         try {
             return JSON.parse(text);
         } catch (e) {
-            console.log(`[Movix] JSON parse error for ${url}`);
+            console.log(`[Movix] JSON parse error for ${url}. Content length: ${text.length}`);
             return null;
         }
     } catch (e) {
-        console.log(`[Movix] Fetch error: ${e.message}`);
+        console.log(`[Movix] Fetch error for ${url}: ${e.message}`);
         return null;
     }
 }
