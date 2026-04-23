@@ -122,7 +122,8 @@ async function processSource(url, label, provider, lang) {
         title: `[${langTag(lang)}] ${provider} - ${playerName(url, label)}`,
         url: finalUrl,
         quality: 'HD',
-        headers: PLAYBACK_HEADERS
+        headers: PLAYBACK_HEADERS,
+        isDirect: isDirectUrl(finalUrl) || finalUrl !== url
     };
 }
 
