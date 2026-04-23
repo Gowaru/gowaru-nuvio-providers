@@ -1,6 +1,6 @@
 {
   "name": "Gowaru's Repo",
-  "version": "1.1.38",
+  "version": "1.1.39",
   "scrapers": [
     {
       "id": "anime-sama",
@@ -222,7 +222,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films et Séries en VF et VOSTFR.",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "tv",

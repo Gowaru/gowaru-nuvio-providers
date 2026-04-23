@@ -1,5 +1,6 @@
 ## 1.1.38
 - **Global**: Updated `http.js` to use `https://proxy.gowaru.app` instead of `https://api.proxy.gowaru.app`.
+- **Movix**: Migrated to a new direct TMDB API for 100% reliable stream extraction and added proxy support.
 
 ## 1.1.37
 - **Movix**: Fixed the extraction of video links.
@@ -95,16 +96,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Provider Exports - Nuvio Compatibility (Critical)**: Standardized the export syntax across all providers (`voiranime`, `vostfree`, `animevostfr`, `french-anime`) to use `module.exports = { getStreams };` instead of ES6 `export async function`. The ES6 syntax was being transpiled by esbuild into an object with an `__esModule` flag, which the Nuvio app's plugin loader could not read, resulting in empty stream arrays despite successful scraping.
 
-## [1.1.19] - 2026-02-26
-
-### Fixed
-- **Build System - Cheerio Bundling (Critical)**: Removed `cheerio-without-node-native` from `EXTERNAL_MODULES` in `build.js` and added `mainFields: ['browser', 'module', 'main']` to the esbuild configuration. This forces the library to be bundled directly into the providers. Previously, providers like VoirAnime, VostFree, AnimeVostfr, and French-Anime crashed instantly in the Nuvio app because they relied on `cheerio` for search, which the app environment did not provide. Anime-Sama only worked partially because it only used `cheerio` as a fallback.
-
-## [1.1.18] - 2026-02-26
-
-### Fixed
-- **Provider Exports - Nuvio Compatibility (Critical)**: Standardized the export syntax across all providers (`voiranime`, `vostfree`, `animevostfr`, `french-anime`) to use `module.exports = { getStreams };` instead of ES6 `export async function`. The ES6 syntax was being transpiled by esbuild into an object with an `__esModule` flag, which the Nuvio app's plugin loader could not read, resulting in empty stream arrays despite successful scraping.
-
 ## [1.1.17] - 2026-02-27
 
 ### Fixed
@@ -135,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **resolveUqload – Dead domain fallback**: The original `uqload.com` domain is defunct. The resolver now iterates through 5 known domains (`uqload.co`, `.com`, `.io`, `uqloads.xyz`, `.to`) and returns the first successful extraction.
 
 ### Added
-- **resolveMyTV**: New resolver for `myvi.ru` / `mytv` embeds. Tries embed-page extraction with P.A.C.K.E.R unpacking, then falls back to the `/api/video/{id}` JSON endpoint. Dispatched automatically in `resolveStream` for any URL containing `myvi.` or `mytv.`.
+- **resolveMyTV**: New resolver for `myvi.ru` / `mytv` embeds. Tries embed-page extraction with P.A.CK.E.R unpacking, then falls back to the `/api/video/{id}` JSON endpoint. Dispatched automatically in `resolveStream` for any URL containing `myvi.` or `mytv.`.
 
 ## [1.1.14] - 2026-02-25
 
@@ -207,8 +198,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial implementation of the 6 main providers (Anime-Sama, VoirAnime, Vostfree, FRAnime, French-Anime, AnimeVOSTFR).
 - Base build system using `esbuild`.
-
-### [1.1.24] - 2026-02-27
-#### Added
-- Added AnimesUltra provider (Supports VOSTFR and VF directly via AJAX fetching).
-- Added JetAnimes provider boilerplate (Note: Site seems heavily gated/faked by Ad links redirecting to secured.lol, keeping it active in case of future legitimate Dooplay uploads).
