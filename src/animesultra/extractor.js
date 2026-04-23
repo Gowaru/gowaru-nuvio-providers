@@ -185,8 +185,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     // Filter out unresolved iframes to prevent ExoPlayer crashing (error 23003)
     const validStreams = [];
-    for (const s of streams) {
-        const resolved = await resolveStream(s);
+    const streamPromises = streams.map(s => resolveStream(s).catch(() => null));
+    const resolvedArray = await Promise.all(streamPromises);
+    for (const resolved of resolvedArray) {
         if (resolved && resolved.isDirect) {
             validStreams.push(resolved);
         }

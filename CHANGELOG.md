@@ -1,3 +1,11 @@
+## 1.1.35
+- **French-Anime**: Applied `Promise.all` to video link resolutions to fix blocking/timeout issues.
+- **Vostfree**: Applied `Promise.all` to iframes.
+- **AnimeVOSTFR**: Applied `Promise.all` to iframes.
+- **AnimesUltra**: Applied `Promise.all` to iframes.
+- **JetAnimes**: Applied `Promise.all` to iframes.
+- **Global**: The generated stream title now systematically includes the **"VF"** or **"VOSTFR"** designation for all clips (Anime-Sama, French-Anime, VoirAnime, Vostfree, AnimeVOSTFR, etc.) to resolve the differentiation issue in the Nuvio application.
+
 ## 1.1.32
 - **Global / Metadata** : Integrated TMDB `/alternative_titles` API to fetch Japanese/Romaji titles officially instead of just the English baseline. Providers like VoirAnime, Anime-Sama, French-Anime now perfectly hit matches like `Rokudenashi Majutsu Koushi to Akashic Records` when requested from the English TMDB ID entry.
 

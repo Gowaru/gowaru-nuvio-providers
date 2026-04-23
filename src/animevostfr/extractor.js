@@ -205,12 +205,12 @@ async function extractPlayersFromEpisode(episodeUrl) {
         console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
 
         // Resolve each trembed URL to get the real player iframe
-        for (const entry of trembedEntries) {
+        const trembedPromises = trembedEntries.map(async (entry) => {
             try {
                 let trembedUrl = entry.src;
                 if (trembedUrl.startsWith('/')) trembedUrl = BASE_URL + trembedUrl;
                 else if (trembedUrl.startsWith('?')) trembedUrl = BASE_URL + '/' + trembedUrl;
-                if (!trembedUrl.startsWith('http')) continue;
+                if (!trembedUrl.startsWith('http')) return null;
 
                 const embedHtml = await fetchText(trembedUrl, { headers: { 'Referer': episodeUrl } });
                 const $embed = cheerio.load(embedHtml);
@@ -234,11 +234,17 @@ async function extractPlayersFromEpisode(episodeUrl) {
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
-                    if (stream) streams.push(stream);
+                    return stream;
                 }
             } catch (err) {
                 console.error(`[AnimeVOSTFR] Failed to resolve player "${entry.serverName}": ${err.message}`);
             }
+            return null;
+        });
+
+        const playerStreams = await Promise.all(trembedPromises);
+        for (const stream of playerStreams) {
+            if (stream) streams.push(stream);
         }
     } catch (e) {
         console.error(`[AnimeVOSTFR] Error extracting players: ${e.message}`);
@@ -343,7 +349,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     if (!s.name.includes('(')) {
                         s.name = `AnimeVOSTFR (${langSuffix})`;
                     }
-                    s.title = `${s.title}${epType}`;
+                    if (!s.title.includes(langSuffix)) {
+                        s.title = `${s.title}${epType} - ${langSuffix}`;
+                    } else {
+                        s.title = `${s.title}${epType}`;
+                    }
                 });
                 
                 streams.push(...playerStreams);

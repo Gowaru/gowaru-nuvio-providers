@@ -86,6 +86,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             const html = await fetchText(match.url, { headers: { "User-Agent": "Mozilla/5.0" } });
             const $ = cheerio.load(html);
             
+            const langName = match.title.toUpperCase().includes('VF') ? 'VF' : 'VOSTFR';
+
             // JetAnimes represents eps like '1 - 1' meaning Season 1, Ep 1
             let epLinks = [];
             $('.episodios li').each((i, el) => {
@@ -151,8 +153,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                                 if (iframeMatch) url = iframeMatch[1];
                                 
                                 streams.push({
-                                    name: `JetAnimes`,
-                                    title: server.name,
+                                    name: `JetAnimes (${langName})`,
+                                    title: `${server.name} - ${langName}`,
                                     url: url,
                                     quality: "HD",
                                     headers: { "Referer": BASE_URL }
@@ -172,8 +174,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     // Filter out unresolved iframes to prevent ExoPlayer crashing
     const validStreams = [];
-    for (const s of streams) {
-        const resolved = await resolveStream(s);
+    const streamPromises = streams.map(s => resolveStream(s).catch(() => null));
+    const resolvedArray = await Promise.all(streamPromises);
+    for (const resolved of resolvedArray) {
         if (resolved && resolved.isDirect) {
             validStreams.push(resolved);
         }
