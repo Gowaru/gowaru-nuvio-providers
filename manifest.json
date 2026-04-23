@@ -1,6 +1,6 @@
 {
   "name": "Gowaru's Repo",
-  "version": "1.1.35",
+  "version": "1.1.36",
   "scrapers": [
     {
       "id": "anime-sama",
@@ -207,6 +207,30 @@
       "filename": "providers/sekai.js",
       "enabled": true,
       "logo": "https://sekai.one/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "movix",
+      "name": "Movix",
+      "description": "Films et Séries en VF et VOSTFR.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv",
+        "movie"
+      ],
+      "filename": "providers/movix.js",
+      "enabled": true,
+      "logo": "https://movix.cash/movix.png",
       "contentLanguage": [
         "fr"
       ],

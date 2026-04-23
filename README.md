@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.31-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.1.36-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -16,10 +16,6 @@ To use these providers in your Nuvio app:
 2. Add the following URL in the "Repository" section:
    ```text
    https://raw.githubusercontent.com/Gowaru/gowaru-nuvio-providers/refs/heads/main/
-   ```
-   or 
-   ```text
-   https://bit.ly/nuvio-gowaru
    ```
 3. Refresh and enable the desired plugins.
 
@@ -40,6 +36,7 @@ This bundle integrates 9 pillars of the French anime scene:
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
 | **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ⚠️ |
+| **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | ⚠️ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
