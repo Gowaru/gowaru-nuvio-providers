@@ -1,3 +1,6 @@
+## 1.1.37
+- **Movix**: Fixed the extraction of video links.
+
 ## 1.1.36
 - **Movix**: Added new provider for parsing movies and TV series in French and with French subtitles. The extractor supports direct video link resolution for improved compatibility with Nuvio's player.
 
