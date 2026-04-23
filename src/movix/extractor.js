@@ -1,5 +1,16 @@
 import { fetchJson } from './http.js';
-import { getImdbId as fallbackImdbId } from '../utils/armsync.js';
+
+const COMMON_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Origin': 'https://movix.cash',
+    'Referer': 'https://movix.cash/',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-site',
+    'DNT': '1'
+};
 
 export async function extractStreams(options) {
     const { title, year, season, episode, tmdbId, isAnime, type } = options;
@@ -9,13 +20,6 @@ export async function extractStreams(options) {
         console.log(`[Movix] No TMDB ID provided for ${title}`);
         return streams;
     }
-
-    const headers = {
-        "Origin": "https://movix.cash",
-        "Referer": "https://movix.cash/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-    };
 
     const isMovie = type === 'movie';
     const endpoints = isMovie 
@@ -35,14 +39,17 @@ export async function extractStreams(options) {
         let l = (lang || '').toLowerCase();
         let tag = (l === 'vff' || l === 'vfq' || l === 'vf') ? 'VF' : 
                   (l === 'vostfr' || l === 'vost') ? 'VOSTFR' : 
-                  (l === 'default') ? 'MULTI' : (lang || 'VF').toUpperCase();
+                  (l === 'default' || l === 'multi') ? 'MULTI' : (lang || 'VF').toUpperCase();
         return `Movix - ${server} - ${tag}`;
     };
 
     await Promise.allSettled(endpoints.map(async (url) => {
         try {
-            const data = await fetchJson(url, { headers });
-            if (!data) return;
+            const data = await fetchJson(url, { headers: COMMON_HEADERS });
+            if (!data || data.success === false) {
+                console.log(`[Movix] API returned no success for ${url}`);
+                return;
+            }
 
             let provider = "Unknown";
             if (url.includes('fstream')) provider = "FStream";
@@ -50,19 +57,27 @@ export async function extractStreams(options) {
             else if (url.includes('cpasmal')) provider = "Cpasmal";
 
             if (isMovie) {
+                // FStream movies
                 if (provider === "FStream" && data.players) {
                     for (const lang of Object.keys(data.players)) {
                         for (const item of data.players[lang]) {
                             if (item.url) streams.push({ server: formatTitle(item.player || provider, lang), title: formatTitle(item.player || provider, lang), url: item.url, quality: item.quality || "720p" });
                         }
                     }
-                } else if (provider === "Wiflix" && data.links) {
-                    for (const lang of Object.keys(data.links)) {
-                        for (const item of data.links[lang]) {
-                            if (item.url) streams.push({ server: formatTitle(item.name || provider, lang), title: formatTitle(item.name || provider, lang), url: item.url, quality: item.quality || "720p" });
+                } 
+                // Wiflix movies (can be in 'players' or 'links')
+                else if (provider === "Wiflix") {
+                    const links = data.players || data.links;
+                    if (links) {
+                        for (const lang of Object.keys(links)) {
+                            for (const item of links[lang]) {
+                                if (item.url) streams.push({ server: formatTitle(item.name || provider, lang), title: formatTitle(item.name || provider, lang), url: item.url, quality: item.quality || "720p" });
+                            }
                         }
                     }
-                } else if (provider === "Cpasmal" && data.links) {
+                } 
+                // Cpasmal movies
+                else if (provider === "Cpasmal" && data.links) {
                     for (const lang of Object.keys(data.links)) {
                         for (const item of data.links[lang]) {
                             if (item.url) streams.push({ server: formatTitle(item.server || provider, lang), title: formatTitle(item.server || provider, lang), url: item.url, quality: "720p" });
@@ -70,6 +85,7 @@ export async function extractStreams(options) {
                     }
                 }
             } else {
+                // FStream TV
                 if (provider === "FStream" && data.episodes && data.episodes[episode]) {
                     const epData = data.episodes[episode];
                     if (epData.languages) {
@@ -79,14 +95,18 @@ export async function extractStreams(options) {
                             }
                         }
                     }
-                } else if (provider === "Wiflix" && data.episodes && data.episodes[episode]) {
+                } 
+                // Wiflix TV
+                else if (provider === "Wiflix" && data.episodes && data.episodes[episode]) {
                     const epLangs = data.episodes[episode];
                     for (const lang of Object.keys(epLangs)) {
                         for (const item of epLangs[lang]) {
                             if (item.url) streams.push({ server: formatTitle(item.name || provider, lang), title: formatTitle(item.name || provider, lang), url: item.url, quality: item.quality || "720p" });
                         }
                     }
-                } else if (provider === "Cpasmal" && data.links) { // Cpasmal TV returns links directly for the episode
+                } 
+                // Cpasmal TV
+                else if (provider === "Cpasmal" && data.links) {
                     for (const lang of Object.keys(data.links)) {
                         for (const item of data.links[lang]) {
                             if (item.url) streams.push({ server: formatTitle(item.server || provider, lang), title: formatTitle(item.server || provider, lang), url: item.url, quality: "720p" });
@@ -101,3 +121,4 @@ export async function extractStreams(options) {
 
     return streams;
 }
+
