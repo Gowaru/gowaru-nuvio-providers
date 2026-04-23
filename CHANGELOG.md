@@ -1,3 +1,6 @@
+## 1.1.38
+- **Global**: Updated `http.js` to use `https://proxy.gowaru.app` instead of `https://api.proxy.gowaru.app`.
+
 ## 1.1.37
 - **Movix**: Fixed the extraction of video links.
 
