@@ -17,11 +17,10 @@ export const HEADERS = {
 };
 
 export async function fetchJson(url, options = {}) {
-    const proxiedUrl = PROXY_URL + url;
-    console.log(`[Movix] Fetching (proxied): ${url}`);
+    console.log(`[Movix] Fetching: ${url}`);
 
     try {
-        const response = await fetch(proxiedUrl, {
+        const response = await fetch(url, {
             headers: {
                 ...HEADERS,
                 ...options.headers
@@ -29,7 +28,7 @@ export async function fetchJson(url, options = {}) {
         });
 
         if (!response.ok) {
-            console.log(`[Movix] HTTP ${response.status} for ${url} (via proxy)`);
+            console.log(`[Movix] HTTP ${response.status} for ${url}`);
             return null;
         }
 
