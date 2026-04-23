@@ -247,26 +247,32 @@ function formatStreams(epSources) {
     const streams = [];
     if(epSources.episodeHD) {
         streams.push({
-             server: "Sekai-HD",
-             link: epSources.episodeHD,
+             name: "Sekai (VOSTFR)",
+             title: "Sekai-HD - VOSTFR",
+             url: epSources.episodeHD,
              quality: "1080p",
-             type: "mp4"
+             isDirect: true,
+             headers: { "Referer": BASE_URL }
         });
     }
     if(epSources.episode) {
         streams.push({
-             server: "Sekai-SD",
-             link: epSources.episode,
+             name: "Sekai (VOSTFR)",
+             title: "Sekai-SD - VOSTFR",
+             url: epSources.episode,
              quality: "720p",
-             type: "mp4"
+             isDirect: true,
+             headers: { "Referer": BASE_URL }
         });
     }
     if(epSources.episodeLow) {
         streams.push({
-             server: "Sekai-LOW",
-             link: epSources.episodeLow,
+             name: "Sekai (VOSTFR)",
+             title: "Sekai-LOW - VOSTFR",
+             url: epSources.episodeLow,
              quality: "360p",
-             type: "mp4"
+             isDirect: true,
+             headers: { "Referer": BASE_URL }
         });
     }
     return streams;

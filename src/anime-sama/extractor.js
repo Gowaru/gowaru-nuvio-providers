@@ -101,7 +101,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     if (playerUrl && playerUrl.startsWith('http')) {
                         const promise = resolveStream({
                             name: `Anime-Sama (${lang.toUpperCase()})`,
-                            title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
+                            title: `${getPlayerName(varName, playerUrl)} - Ep ${episode} - ${lang.toUpperCase()}`,
                             url: playerUrl,
                             quality: "HD",
                             headers: { "Referer": BASE_URL }
@@ -161,7 +161,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                             if (playerUrl && playerUrl.startsWith('http')) {
                                 const promise = resolveStream({
                                     name: `Anime-Sama (${lang.toUpperCase()})`,
-                                    title: `${getPlayerName(varName, playerUrl)} - Ep ${episode}`,
+                                    title: `${getPlayerName(varName, playerUrl)} - Ep ${episode} - ${lang.toUpperCase()}`,
                                     url: playerUrl,
                                     quality: "HD",
                                     headers: { "Referer": BASE_URL }

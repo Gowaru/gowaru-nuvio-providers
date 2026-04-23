@@ -180,7 +180,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             console.log(`[Vostfree] Using buttons ID: ${buttonsId} for ${lang}`);
             const playerElements = $(`#${buttonsId} div[id^="player_"]`).toArray();
 
-            for (const el of playerElements) {
+            const playerPromises = playerElements.map(async (el) => {
                 const playerId = $(el).attr('id').replace('player_', '');
                 const playerName = $(el).text().trim() || "Player";
 
@@ -208,16 +208,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     }
 
                     if (url.startsWith('http')) {
-                        const stream = await resolveStream({
-                            name: `Vostfree (${lang})`,
-                            title: `${playerName} - ${lang}`,
-                            url: url,
-                            quality: "HD",
-                            headers: { "Referer": BASE_URL }
-                        });
-                        if (stream) streams.push(stream);
+                        try {
+                            const stream = await resolveStream({
+                                name: `Vostfree (${lang})`,
+                                title: `${playerName} - ${lang}`,
+                                url: url,
+                                quality: "HD",
+                                headers: { "Referer": BASE_URL }
+                            });
+                            return stream;
+                        } catch(e) { return null; }
                     }
                 }
+                return null;
+            });
+
+            const results = await Promise.all(playerPromises);
+            for (const stream of results) {
+                if (stream) streams.push(stream);
             }
         } catch (e) {
             console.error(`[Vostfree] Match handle error: ${e.message}`);

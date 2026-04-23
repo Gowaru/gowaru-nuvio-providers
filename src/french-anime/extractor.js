@@ -202,16 +202,23 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 allPlayerUrls.push(...playerUrls);
             }
 
-            for (const url of allPlayerUrls) {
+            const hostPromises = allPlayerUrls.map(async (url) => {
                 const playerName = getPlayerName(url);
-                const stream = await resolveStream({
-                    name: `French-Anime (${langName})`,
-                    title: `${playerName} Player`,
-                    url: url,
-                    quality: "HD",
-                    headers: { "Referer": BASE_URL }
-                });
-                streams.push(stream);
+                try {
+                    return await resolveStream({
+                        name: `French-Anime (${langName})`,
+                        title: `${playerName} - ${langName}`,
+                        url: url,
+                        quality: "HD",
+                        headers: { "Referer": BASE_URL }
+                    });
+                } catch(e) {
+                    return null;
+                }
+            });
+            const results = await Promise.all(hostPromises);
+            for (const stream of results) {
+                if (stream) streams.push(stream);
             }
 
             if (allPlayerUrls.length > 0) {
