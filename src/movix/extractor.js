@@ -1,95 +1,103 @@
 import { fetchJson } from './http.js';
 import { getImdbId as fallbackImdbId } from '../utils/armsync.js';
 
-const TMDB_API_KEY = 'f3d757824f08ea2cff45eb8f47ca3a1e';
-
-async function getImdbId(tmdbId, type) {
-    try {
-        const typeStr = type === 'movie' ? 'movie' : 'tv';
-        const url = `https://api.themoviedb.org/3/${typeStr}/${tmdbId}/external_ids?api_key=${TMDB_API_KEY}`;
-        const data = await fetchJson(url);
-        if (data && data.imdb_id) {
-            return data.imdb_id;
-        }
-    } catch(e) {
-        console.error(`[Movix] TMDB API error:`, e.message);
-    }
-    
-    // Fallback to armsync
-    return await fallbackImdbId(tmdbId, type);
-}
-
 export async function extractStreams(options) {
     const { title, year, season, episode, tmdbId, isAnime, type } = options;
     const streams = [];
 
-    let resolvedType = type === 'movie' ? 'movie' : 'tv';
-    let imdbId = await getImdbId(tmdbId, resolvedType);
-    if (!imdbId) {
-        console.log(`[Movix] No IMDB ID resolved for TMDB ${tmdbId}`);
+    if (!tmdbId) {
+        console.log(`[Movix] No TMDB ID provided for ${title}`);
         return streams;
     }
 
-    let headers = {
+    const headers = {
         "Origin": "https://movix.cash",
         "Referer": "https://movix.cash/",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json"
     };
 
-    try {
-        if (resolvedType === 'movie') {
-            const url = `https://api.movix.cash/api/imdb/movie/${imdbId}`;
+    const isMovie = type === 'movie';
+    const endpoints = isMovie 
+        ? [
+            `https://api.movix.cash/api/fstream/movie/${tmdbId}`,
+            `https://api.movix.cash/api/wiflix/movie/${tmdbId}`,
+            `https://api.movix.cash/api/cpasmal/movie/${tmdbId}`
+          ]
+        : [
+            `https://api.movix.cash/api/fstream/tv/${tmdbId}/season/${season}`,
+            `https://api.movix.cash/api/wiflix/tv/${tmdbId}/${season}`,
+            `https://api.movix.cash/api/cpasmal/tv/${tmdbId}/${season}/${episode}`
+          ];
+
+    // Helper to format provider title
+    const formatTitle = (server, lang) => {
+        let l = (lang || '').toLowerCase();
+        let tag = (l === 'vff' || l === 'vfq' || l === 'vf') ? 'VF' : 
+                  (l === 'vostfr' || l === 'vost') ? 'VOSTFR' : 
+                  (l === 'default') ? 'MULTI' : (lang || 'VF').toUpperCase();
+        return `Movix - ${server} - ${tag}`;
+    };
+
+    await Promise.allSettled(endpoints.map(async (url) => {
+        try {
             const data = await fetchJson(url, { headers });
-            
-            if (data && data.player_links) {
-                for (const player of data.player_links) {
-                    if (player.link) {
-                        streams.push({
-                            server: player.player || 'Inconnu',
-                            title: `${title} - VF`, // Films on movix API don't specify language in the response easily, assume VF
-                            url: player.link,
-                            quality: '1080p'
-                        });
+            if (!data) return;
+
+            let provider = "Unknown";
+            if (url.includes('fstream')) provider = "FStream";
+            else if (url.includes('wiflix')) provider = "Wiflix";
+            else if (url.includes('cpasmal')) provider = "Cpasmal";
+
+            if (isMovie) {
+                if (provider === "FStream" && data.players) {
+                    for (const lang of Object.keys(data.players)) {
+                        for (const item of data.players[lang]) {
+                            if (item.url) streams.push({ server: formatTitle(item.player || provider, lang), title: formatTitle(item.player || provider, lang), url: item.url, quality: item.quality || "720p" });
+                        }
+                    }
+                } else if (provider === "Wiflix" && data.links) {
+                    for (const lang of Object.keys(data.links)) {
+                        for (const item of data.links[lang]) {
+                            if (item.url) streams.push({ server: formatTitle(item.name || provider, lang), title: formatTitle(item.name || provider, lang), url: item.url, quality: item.quality || "720p" });
+                        }
+                    }
+                } else if (provider === "Cpasmal" && data.links) {
+                    for (const lang of Object.keys(data.links)) {
+                        for (const item of data.links[lang]) {
+                            if (item.url) streams.push({ server: formatTitle(item.server || provider, lang), title: formatTitle(item.server || provider, lang), url: item.url, quality: "720p" });
+                        }
                     }
                 }
-            }
-        } else if (resolvedType === 'tv') {
-            const url = `https://api.movix.cash/api/imdb/tv/${imdbId}`;
-            const data = await fetchJson(url, { headers });
-            
-            if (data && data.series && data.series.length > 0) {
-                for (const s of data.series) {
-                    if (!s.seasons) continue;
-                    const targetSeason = s.seasons.find(sz => String(sz.number) === String(season));
-                    if (!targetSeason || !targetSeason.episodes) continue;
-                    
-                    const targetEpisode = targetSeason.episodes.find(e => String(e.number) === String(episode));
-                    if (!targetEpisode || !targetEpisode.versions) continue;
-
-                    for (const versionKey of Object.keys(targetEpisode.versions)) {
-                        const versionInfo = targetEpisode.versions[versionKey];
-                        const versionTag = versionKey.toUpperCase(); // 'VF' or 'VOSTFR'
-                        
-                        if (versionInfo.players) {
-                            for (const player of versionInfo.players) {
-                                if (player.link) {
-                                    streams.push({
-                                        server: player.name || 'Inconnu',
-                                        title: `${title} - ${versionTag}`,
-                                        url: player.link,
-                                        quality: '1080p'
-                                    });
-                                }
+            } else {
+                if (provider === "FStream" && data.episodes && data.episodes[episode]) {
+                    const epData = data.episodes[episode];
+                    if (epData.languages) {
+                        for (const lang of Object.keys(epData.languages)) {
+                            for (const item of epData.languages[lang]) {
+                                if (item.url) streams.push({ server: formatTitle(item.player || provider, lang), title: formatTitle(item.player || provider, lang), url: item.url, quality: item.quality || "720p" });
                             }
+                        }
+                    }
+                } else if (provider === "Wiflix" && data.episodes && data.episodes[episode]) {
+                    const epLangs = data.episodes[episode];
+                    for (const lang of Object.keys(epLangs)) {
+                        for (const item of epLangs[lang]) {
+                            if (item.url) streams.push({ server: formatTitle(item.name || provider, lang), title: formatTitle(item.name || provider, lang), url: item.url, quality: item.quality || "720p" });
+                        }
+                    }
+                } else if (provider === "Cpasmal" && data.links) { // Cpasmal TV returns links directly for the episode
+                    for (const lang of Object.keys(data.links)) {
+                        for (const item of data.links[lang]) {
+                            if (item.url) streams.push({ server: formatTitle(item.server || provider, lang), title: formatTitle(item.server || provider, lang), url: item.url, quality: "720p" });
                         }
                     }
                 }
             }
+        } catch(e) {
+            console.log(`[Movix] Error fetching ${url}: ${e.message}`);
         }
-    } catch (e) {
-        console.error(`[Movix] Extractor error:`, e.message);
-    }
+    }));
 
     return streams;
 }
