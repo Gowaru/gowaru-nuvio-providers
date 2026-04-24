@@ -3,231 +3,196 @@ import { resolveStream } from '../utils/resolvers.js';
 
 const API_BASE = 'https://api.movix.cash';
 
-/**
- * Video playback headers for Nuvio/ExoPlayer
- */
-const PLAYBACK_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': '*/*',
-    'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Origin': 'https://movix.cash',
-    'Referer': 'https://movix.cash/',
-    'Sec-Fetch-Dest': 'video',
-    'Sec-Fetch-Mode': 'no-cors',
-    'Sec-Fetch-Site': 'cross-site',
-    'DNT': '1'
-};
-
-/**
- * Format a language tag for display
- */
-function langTag(lang) {
+function normalizeLangTag(lang) {
     const l = (lang || '').toLowerCase();
-    if (l.includes('french') || l === 'vf' || l === 'vff' || l === 'vfq') return 'VF';
-    if (l.includes('vostfr') || l === 'vost') return 'VOSTFR';
-    if (l.includes('multi')) return 'MULTI';
-    if (l.includes('english') || l === 'vo') return 'VO';
+    if (l === 'vff' || l === 'vfq' || l === 'vf' || l.includes('french')) return 'VF';
+    if (l === 'vostfr' || l === 'vost' || l.includes('vostfr')) return 'VOSTFR';
+    if (l === 'default' || l === 'multi') return 'MULTI';
     return (lang || 'VF').toUpperCase();
 }
 
-/**
- * Detect player name from URL or label
- */
-function playerName(url, label) {
-    const u = (url || '').toLowerCase();
-    const l = (label || '').toLowerCase();
-    
-    if (l.includes('lulustream') || u.includes('lulustream')) return 'LuluStream';
-    if (l.includes('vidmoly') || u.includes('vidmoly')) return 'VidMoly';
-    if (l.includes('vidzy') || u.includes('vidzy')) return 'Vidzy';
-    if (l.includes('voesx') || u.includes('voe.sx') || u.includes('voe.')) return 'VoeSX';
-    if (l.includes('uqload') || u.includes('uqload')) return 'Uqload';
-    if (l.includes('filemoon') || u.includes('filemoon')) return 'Filemoon';
-    if (l.includes('dropload') || u.includes('dropload')) return 'Dropload';
-    if (l.includes('supervideo') || u.includes('supervideo')) return 'SuperVideo';
-    if (l.includes('wish') || u.includes('wish')) return 'Wish';
-    if (l.includes('fsvid') || u.includes('fsvid') || l.includes('premium')) return 'FSVid';
-    if (l.includes('sibnet') || u.includes('sibnet')) return 'Sibnet';
-    if (l.includes('netu') || u.includes('netu') || u.includes('waaw')) return 'Netu';
-    
-    return 'Player';
-}
-
-/**
- * Try to extract a direct m3u8/mp4 URL from an embed URL using Movix's extraction API
- */
-async function tryExtract(embedUrl) {
-    if (!embedUrl) return null;
-    const u = embedUrl.toLowerCase();
-    
-    // We use proxiesembed.movix.cash for extraction as found in JS bundle
-    const EXTRACTION_BASE = 'https://proxiesembed.movix.cash';
-    let extractEndpoint = null;
-
-    if (u.includes('sibnet')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-sibnet?url=${encodeURIComponent(embedUrl)}`;
-    } else if (u.includes('vidmoly')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-vidmoly?url=${embedUrl}`;
-    } else if (u.includes('vidzy')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-vidzy?url=${embedUrl}`;
-    } else if (u.includes('voe.sx') || u.includes('voe.')) {
-        extractEndpoint = `${API_BASE}/api/voe/m3u8?url=${embedUrl}`;
-    } else if (u.includes('doodstream') || u.includes('dood.')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-doodstream?url=${encodeURIComponent(embedUrl)}`;
-    } else if (u.includes('uqload')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-uqload?url=${encodeURIComponent(embedUrl)}`;
-    } else if (u.includes('supervideo')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-supervideo?url=${encodeURIComponent(embedUrl)}`;
-    } else if (u.includes('dropload')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-dropload?url=${encodeURIComponent(embedUrl)}`;
-    } else if (u.includes('fsvid') || u.includes('premium')) {
-        extractEndpoint = `${EXTRACTION_BASE}/api/extract-fsvid?url=${encodeURIComponent(embedUrl)}`;
-    }
-
-    if (!extractEndpoint) return null;
-
-    try {
-        const data = await fetchJson(extractEndpoint);
-        if (!data || data.error) return null;
-
-        return data.url || data.source || data.m3u8 || data.mp4 || data.link || (data.sources && data.sources[0]?.url);
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * Check if a URL is direct video
- */
-function isDirectUrl(url) {
-    if (!url) return false;
-    const u = url.toLowerCase();
-    return u.includes('.m3u8') || u.includes('.mp4') || u.includes('.mkv') || u.includes('/playlist/') || u.includes('/master.');
-}
-
-/**
- * Process a source link
- */
-async function processSource(url, label, provider, lang) {
-    if (!url) return null;
-
-    let finalUrl = url;
-    // Try to get direct link if it's an embed using Movix's own API first
-    if (!isDirectUrl(url)) {
-        const extracted = await tryExtract(url).catch(() => null);
-        if (extracted) finalUrl = extracted;
-    }
-
-    const streamObj = {
-        name: `Movix`,
-        title: `[${langTag(lang)}] ${provider} - ${playerName(url, label)}`,
-        url: finalUrl,
-        quality: 'HD',
-        headers: PLAYBACK_HEADERS
-    };
-
-    return await resolveStream(streamObj);
-}
-
-// ─── Direct TMDB API (Reliable) ──────────────────────────────────────
-async function fetchTmdbApi(tmdbId, mediaType, season, episode) {
-    const streams = [];
-    const url = mediaType === 'movie'
-        ? `${API_BASE}/api/tmdb/movie/${tmdbId}`
-        : `${API_BASE}/api/tmdb/tv/${tmdbId}?season=${season}&episode=${episode}`;
-
-    const data = await fetchJson(url);
-    if (!data) return streams;
-
-    const links = mediaType === 'movie' ? data.player_links : data.current_episode?.player_links;
-    if (!Array.isArray(links)) return streams;
-
-    const tasks = links.map(link => {
-        return processSource(link.decoded_url || link.url, link.quality, 'Direct', link.language);
+function pushStream(streams, provider, server, lang, url, quality) {
+    if (!url || typeof url !== 'string') return;
+    streams.push({
+        name: 'Movix',
+        title: `[${normalizeLangTag(lang)}] ${provider} - ${server || 'Player'}`,
+        server: `${provider} - ${server || 'Player'}`,
+        url,
+        quality: quality || 'HD',
+        headers: {
+            Origin: 'https://movix.cash',
+            Referer: 'https://movix.cash/'
+        }
     });
-
-    const results = await Promise.all(tasks.map(t => t.catch(e => {
-        console.error(`[Movix] Task failed: ${e.message}`);
-        return null;
-    })));
-    for (const r of results) {
-        if (r) streams.push(r);
-    }
-
-    return streams;
 }
 
-// ─── FStream API (Fallback) ─────────────────────────────────────────
-async function fetchFStream(tmdbId, mediaType, season, episode) {
-    const streams = [];
-    const url = mediaType === 'movie'
-        ? `${API_BASE}/api/fstream/movie/${tmdbId}`
-        : `${API_BASE}/api/fstream/tv/${tmdbId}/season/${season}`;
+function isExoPlayableUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const u = url.toLowerCase();
 
-    const data = await fetchJson(url);
-    if (!data || !data.players) return streams;
-
-    const tasks = [];
-    
-    if (mediaType === 'movie') {
-        // Movie API: players are grouped by language
-        for (const lang in data.players) {
-            const playerList = data.players[lang];
-            if (Array.isArray(playerList)) {
-                for (const player of playerList) {
-                    tasks.push(processSource(player.url, player.player || player.name, 'FStream', lang));
-                }
-            }
-        }
-    } else {
-        // TV Show API: players are grouped by episode number, then by language
-        const epData = data.players[episode] || data.players[String(episode)];
-        if (epData && epData.languages) {
-            for (const lang in epData.languages) {
-                const playerList = epData.languages[lang];
-                if (Array.isArray(playerList)) {
-                    for (const player of playerList) {
-                        tasks.push(processSource(player.url, player.player || player.name, 'FStream', lang));
-                    }
-                }
-            }
-        }
+    if (
+        u.includes('test-videos.co.uk') ||
+        u.includes('sample-videos.com') ||
+        u.includes('big_buck_bunny')
+    ) {
+        return false;
     }
 
-    const results = await Promise.all(tasks.map(t => t.catch(e => {
-        console.error(`[Movix] FStream task failed: ${e.message}`);
-        return null;
-    })));
-    
-    for (const r of results) {
-        if (r) streams.push(r);
+    if (u.includes('/embed') || u.includes('/e/') || u.includes('iframe') || u.includes('index.php')) {
+        return false;
     }
 
-    return streams;
+    if (u.includes('.m3u8') || u.includes('.mp4') || u.includes('.mkv') || u.includes('.webm') || u.includes('.ts')) {
+        return true;
+    }
+
+    if (u.includes('manifest') || u.includes('playlist') || u.includes('/hls/')) {
+        return true;
+    }
+
+    return false;
 }
 
-// ─── Main Extraction ────────────────────────────────────────────────
+async function resolveForExo(stream) {
+    const resolved = await resolveStream(stream).catch(() => null);
+    if (!resolved || !resolved.url) return null;
+    if (!resolved.isDirect) return null;
+    if (!isExoPlayableUrl(resolved.url)) return null;
+    return resolved;
+}
+
+function collectFstreamMovie(streams, data) {
+    const players = data?.players;
+    if (!players || typeof players !== 'object') return;
+
+    for (const lang of Object.keys(players)) {
+        const list = players[lang];
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            pushStream(streams, 'FStream', item?.player, lang, item?.url, item?.quality);
+        }
+    }
+}
+
+function collectFstreamTv(streams, data, episode) {
+    const ep = data?.episodes?.[String(episode)] || data?.episodes?.[episode];
+    const langs = ep?.languages;
+    if (!langs || typeof langs !== 'object') return;
+
+    for (const lang of Object.keys(langs)) {
+        const list = langs[lang];
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            pushStream(streams, 'FStream', item?.player, lang, item?.url, item?.quality);
+        }
+    }
+}
+
+function collectWiflixMovie(streams, data) {
+    const links = data?.links;
+    if (!links || typeof links !== 'object') return;
+
+    for (const lang of Object.keys(links)) {
+        const list = links[lang];
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            pushStream(streams, 'Wiflix', item?.name || item?.player, lang, item?.url, item?.quality);
+        }
+    }
+}
+
+function collectWiflixTv(streams, data, episode) {
+    const ep = data?.episodes?.[String(episode)] || data?.episodes?.[episode];
+    if (!ep || typeof ep !== 'object') return;
+
+    for (const lang of Object.keys(ep)) {
+        const list = ep[lang];
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            pushStream(streams, 'Wiflix', item?.name || item?.player, lang, item?.url, item?.quality);
+        }
+    }
+}
+
+function collectCpasmal(streams, data) {
+    const links = data?.links;
+    if (!links || typeof links !== 'object') return;
+
+    for (const lang of Object.keys(links)) {
+        const list = links[lang];
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            pushStream(streams, 'Cpasmal', item?.server || item?.name, lang, item?.url, item?.quality || 'HD');
+        }
+    }
+}
+
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-    console.log(`[Movix] Starting extraction for ${mediaType} ${tmdbId}`);
-
-    // We fetch Direct API first as it's the best, others in parallel as fallbacks
-    const results = await Promise.all([
-        fetchTmdbApi(tmdbId, mediaType, season, episode).catch(e => {
-            console.error(`[Movix] fetchTmdbApi failed: ${e.message}`);
-            return [];
-        }),
-        fetchFStream(tmdbId, mediaType, season, episode).catch(e => {
-            console.error(`[Movix] fetchFStream failed: ${e.message}`);
-            return [];
-        })
-    ]);
-
     const streams = [];
-    for (const r of results) {
-        if (Array.isArray(r)) streams.push(...r);
+
+    if (!tmdbId) {
+        console.log('[Movix] Missing tmdbId');
+        return streams;
     }
 
-    // Deduplicate
+    const isMovie = mediaType === 'movie';
+    const seasonNum = Number(season) || 1;
+    const episodeNum = Number(episode) || 1;
+
+    const jobs = isMovie
+        ? [
+            {
+                label: 'fstream-movie',
+                url: `${API_BASE}/api/fstream/movie/${tmdbId}`,
+                collect: (data) => collectFstreamMovie(streams, data)
+            },
+            {
+                label: 'wiflix-movie',
+                url: `${API_BASE}/api/wiflix/movie/${tmdbId}`,
+                collect: (data) => collectWiflixMovie(streams, data)
+            },
+            {
+                label: 'cpasmal-movie',
+                url: `${API_BASE}/api/cpasmal/movie/${tmdbId}`,
+                collect: (data) => collectCpasmal(streams, data)
+            }
+        ]
+        : [
+            {
+                label: 'fstream-tv',
+                url: `${API_BASE}/api/fstream/tv/${tmdbId}/season/${seasonNum}`,
+                collect: (data) => collectFstreamTv(streams, data, episodeNum)
+            },
+            {
+                label: 'wiflix-tv',
+                url: `${API_BASE}/api/wiflix/tv/${tmdbId}/${seasonNum}`,
+                collect: (data) => collectWiflixTv(streams, data, episodeNum)
+            },
+            {
+                label: 'cpasmal-tv',
+                url: `${API_BASE}/api/cpasmal/tv/${tmdbId}/${seasonNum}/${episodeNum}`,
+                collect: (data) => collectCpasmal(streams, data)
+            }
+        ];
+
+    const results = await Promise.allSettled(
+        jobs.map(async (job) => {
+            const data = await fetchJson(job.url);
+            if (!data) return;
+            if (data.success === false) {
+                console.log(`[Movix] ${job.label} unavailable: ${data.error || 'unknown error'}`);
+                return;
+            }
+            job.collect(data);
+        })
+    );
+
+    for (const r of results) {
+        if (r.status === 'rejected') {
+            console.log(`[Movix] source fetch failed: ${r.reason?.message || r.reason}`);
+        }
+    }
+
     const seen = new Set();
     const unique = [];
     for (const s of streams) {
@@ -237,6 +202,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    console.log(`[Movix] Total streams found: ${unique.length}`);
-    return unique;
+    const resolvedResults = await Promise.allSettled(unique.map((s) => resolveForExo(s)));
+    const playable = [];
+    const seenPlayable = new Set();
+    for (const r of resolvedResults) {
+        if (r.status !== 'fulfilled' || !r.value) continue;
+        if (seenPlayable.has(r.value.url)) continue;
+        seenPlayable.add(r.value.url);
+        playable.push(r.value);
+    }
+
+    console.log(`[Movix] Total streams found: ${unique.length}, Exo-playable: ${playable.length}`);
+    return playable;
 }
