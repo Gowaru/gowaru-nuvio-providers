@@ -167,21 +167,30 @@ async function fetchFStream(tmdbId, mediaType, season, episode) {
     const data = await fetchJson(url);
     if (!data) return streams;
 
-    let playersByLang = {};
-    if (mediaType === 'movie') {
-        playersByLang = data.players || {};
-    } else if (data.episodes) {
-        const epData = data.episodes[String(episode)] || data.episodes[episode];
-        if (epData) playersByLang = epData.languages || epData.players || epData;
-    }
-
     const tasks = [];
-    for (const lang of Object.keys(playersByLang)) {
-        const items = playersByLang[lang];
-        if (!Array.isArray(items)) continue;
-        for (const item of items) {
-            if (!item.url) continue;
-            tasks.push(processSource(item.url, item.player, 'FStream', lang));
+    
+    if (mediaType === 'movie') {
+        // Movie API: players are grouped by language
+        for (const lang in data.players) {
+            const playerList = data.players[lang];
+            if (Array.isArray(playerList)) {
+                for (const player of playerList) {
+                    tasks.push(processSource(player.url, player.player || player.name, 'FStream', lang));
+                }
+            }
+        }
+    } else {
+        // TV Show API: players are grouped by episode number, then by language
+        const epData = data.players[episode] || data.players[String(episode)];
+        if (epData && epData.languages) {
+            for (const lang in epData.languages) {
+                const playerList = epData.languages[lang];
+                if (Array.isArray(playerList)) {
+                    for (const player of playerList) {
+                        tasks.push(processSource(player.url, player.player || player.name, 'FStream', lang));
+                    }
+                }
+            }
         }
     }
 
@@ -189,6 +198,7 @@ async function fetchFStream(tmdbId, mediaType, season, episode) {
         console.error(`[Movix] FStream task failed: ${e.message}`);
         return null;
     })));
+    
     for (const r of results) {
         if (r) streams.push(r);
     }
