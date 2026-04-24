@@ -1,4 +1,5 @@
 import { fetchJson } from './http.js';
+import { resolveStream } from '../utils/resolvers.js';
 
 const API_BASE = 'https://api.movix.cash';
 
@@ -111,20 +112,21 @@ async function processSource(url, label, provider, lang) {
     if (!url) return null;
 
     let finalUrl = url;
-    // Try to get direct link if it's an embed
+    // Try to get direct link if it's an embed using Movix's own API first
     if (!isDirectUrl(url)) {
-        const extracted = await tryExtract(url);
+        const extracted = await tryExtract(url).catch(() => null);
         if (extracted) finalUrl = extracted;
     }
 
-    return {
+    const streamObj = {
         name: `Movix`,
         title: `[${langTag(lang)}] ${provider} - ${playerName(url, label)}`,
         url: finalUrl,
         quality: 'HD',
-        headers: PLAYBACK_HEADERS,
-        isDirect: isDirectUrl(finalUrl) || finalUrl !== url
+        headers: PLAYBACK_HEADERS
     };
+
+    return await resolveStream(streamObj);
 }
 
 // ─── Direct TMDB API (Reliable) ──────────────────────────────────────
@@ -225,5 +227,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    return unique;
+    const validStreams = unique.filter(s => s && s.isDirect);
+    console.log(`[Movix] Total valid streams found: ${validStreams.length}`);
+    return validStreams;
 }
