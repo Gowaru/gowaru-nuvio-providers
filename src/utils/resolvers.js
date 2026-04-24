@@ -319,6 +319,24 @@ export async function resolveMoon(url) {
     return { url };
 }
 
+export async function resolvePackedPlayer(url) {
+    try {
+        const res = await safeFetch(url, { headers: { 'Referer': url } });
+        if (!res) return { url };
+        let html = await res.text();
+        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
+
+        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/sources\s*:\s*\[[^\]]*?["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+
+        if (match) {
+            return { url: match[1], headers: { 'Referer': url } };
+        }
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveStream(stream, depth = 0) {
     if (depth > 3) return { ...stream, isDirect: false }; // Prevent infinite loops
 
@@ -346,7 +364,14 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
         else if (urlLower.includes('sendvid.')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
-        else if (urlLower.includes('luluvid.') || urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
+        else if (
+            urlLower.includes('luluvid.') ||
+            urlLower.includes('lulustream.') ||
+            urlLower.includes('luluvdo.') ||
+            urlLower.includes('wishonly.') ||
+            urlLower.includes('veev.')
+        ) result = await resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
         else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
         
         // If a specific resolver found a different URL, it's the final direct link

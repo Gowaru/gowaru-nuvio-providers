@@ -54,10 +54,33 @@ function isExoPlayableUrl(url) {
 }
 
 async function resolveForExo(stream) {
-    const resolved = await resolveStream(stream).catch(() => null);
+    // Try resolution with retries (up to 2 attempts for timeouts)
+    let resolved = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+            resolved = await Promise.race([
+                resolveStream(stream),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+            ]);
+            break;
+        } catch (e) {
+            if (attempt === 2) {
+                // Second attempt failed, try original URL if it looks direct
+                if (isExoPlayableUrl(stream.url)) {
+                    resolved = { ...stream, isDirect: true };
+                } else {
+                    return null;
+                }
+            }
+        }
+    }
+
     if (!resolved || !resolved.url) return null;
-    if (!resolved.isDirect) return null;
+    if (!resolved.isDirect) return null; // Only accept truly direct links
+    
+    // Final validation: URL must look like a direct media link
     if (!isExoPlayableUrl(resolved.url)) return null;
+    
     return resolved;
 }
 

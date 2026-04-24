@@ -1,6 +1,6 @@
 /**
  * movix - Built from src/movix/
- * Generated: 2026-04-24T10:57:39.658Z
+ * Generated: 2026-04-24T15:30:57.333Z
  */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -384,6 +384,22 @@ function resolveMoon(url) {
     return { url };
   });
 }
+function resolvePackedPlayer(url) {
+  return __async(this, null, function* () {
+    try {
+      const res = yield safeFetch(url, { headers: { "Referer": url } });
+      if (!res) return { url };
+      let html = yield res.text();
+      if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
+      const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[[^\]]*?["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+      if (match) {
+        return { url: match[1], headers: { "Referer": url } };
+      }
+    } catch (e) {
+    }
+    return { url };
+  });
+}
 function resolveStream(stream, depth = 0) {
   return __async(this, null, function* () {
     var _a;
@@ -405,7 +421,8 @@ function resolveStream(stream, depth = 0) {
       else if (urlLower.includes("moonplayer") || urlLower.includes("filemoon")) result = yield resolveMoon(originalUrl);
       else if (urlLower.includes("sendvid.")) result = yield resolveSendvid(originalUrl);
       else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
-      else if (urlLower.includes("luluvid.") || urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
+      else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
+      else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
       else if (urlLower.includes("hgcloud.") || urlLower.includes("savefiles.")) result = yield resolveHGCloud(originalUrl);
       if (result && result.url !== originalUrl) {
         return __spreadProps(__spreadValues({}, stream), {
@@ -503,7 +520,24 @@ function isExoPlayableUrl(url) {
 }
 function resolveForExo(stream) {
   return __async(this, null, function* () {
-    const resolved = yield resolveStream(stream).catch(() => null);
+    let resolved = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        resolved = yield Promise.race([
+          resolveStream(stream),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5e3))
+        ]);
+        break;
+      } catch (e) {
+        if (attempt === 2) {
+          if (isExoPlayableUrl(stream.url)) {
+            resolved = __spreadProps(__spreadValues({}, stream), { isDirect: true });
+          } else {
+            return null;
+          }
+        }
+      }
+    }
     if (!resolved || !resolved.url) return null;
     if (!resolved.isDirect) return null;
     if (!isExoPlayableUrl(resolved.url)) return null;
