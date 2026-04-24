@@ -36,9 +36,15 @@ This bundle integrates 9 pillars of the French anime scene:
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
 | **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ❌  |
-| **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | ⚠️ |
+| **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | 🔗 |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
+
+**⚠️ Provider Status Legend:**
+- ✅ = Fully functional
+- ⚠️ = Operational but with known issues/limitations  
+- 🔗 = **Movix: Limited availability** (requires JavaScript execution - see [MOVIX_TECHNICAL_LIMITATION.md](MOVIX_TECHNICAL_LIMITATION.md))
+- ❌ = Offline/Unavailable
 
 ---
 
@@ -91,6 +97,17 @@ nuvio-providers/
 - Import `resolveStream` from `../utils/resolvers.js` to process your final URLs.
 - Always use `fetchText` or `fetchJson` wrappers located in standard `http.js` utilities to inject correct headers and avoid Cloudflare blocks.
 - Prefer `fetch` (Hermes compatible) over heavy external libraries.
+
+### Known Limitations
+
+**Movix Provider**: Limited availability due to architectural constraints
+- **Issue**: Movix API returns embed URLs that require client-side JavaScript execution to generate playable streams
+- **Why**: Hosts like Lulustream, FileMoon, and Veev use packed/obfuscated JavaScript to dynamically generate m3u8 URLs
+- **Why Unfixable**: Hermes JavaScript engine does not support JS execution in plugins, and Nuvio doesn't provide WebView support
+- **Impact**: Most Movix titles return 0 playable streams despite API availability
+- **Details**: See [MOVIX_TECHNICAL_LIMITATION.md](MOVIX_TECHNICAL_LIMITATION.md) for full analysis
+
+**Recommendation**: Use other providers (Anime-Sama, VoirAnime, Vostfree) for better coverage. Movix can be disabled in settings if desired.
 
 ---
 
