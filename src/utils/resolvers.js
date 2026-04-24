@@ -311,7 +311,8 @@ export async function resolveMoon(url) {
     try {
         const res = await safeFetch(url);
         if (!res) return { url };
-        const html = await res.text();
+        let html = await res.text();
+        if (html.includes('p,a,c,k,e,d')) html = unpack(html);
         const match = html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/);
         if (match) return { url: match[1], headers: { "Referer": url } };
     } catch (e) {}
@@ -339,10 +340,10 @@ export async function resolveStream(stream, depth = 0) {
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
         else if (urlLower.includes('vidmoly.')) result = await resolveVidmoly(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
-        else if (urlLower.includes('voe.')) result = await resolveVoe(originalUrl);
+        else if (urlLower.includes('voe') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
-        else if (urlLower.includes('dood') || urlLower.includes('ds2play')) result = await resolveDood(originalUrl);
-        else if (urlLower.includes('moonplayer') || urlLower.includes('moon.')) result = await resolveMoon(originalUrl);
+        else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5')) result = await resolveDood(originalUrl);
+        else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
         else if (urlLower.includes('sendvid.')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
         else if (urlLower.includes('luluvid.') || urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
