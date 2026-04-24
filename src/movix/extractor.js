@@ -165,7 +165,7 @@ async function fetchFStream(tmdbId, mediaType, season, episode) {
         : `${API_BASE}/api/fstream/tv/${tmdbId}/season/${season}`;
 
     const data = await fetchJson(url);
-    if (!data) return streams;
+    if (!data || !data.players) return streams;
 
     const tasks = [];
     
@@ -237,7 +237,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const validStreams = unique.filter(s => s && s.isDirect);
-    console.log(`[Movix] Total valid streams found: ${validStreams.length}`);
-    return validStreams;
+    console.log(`[Movix] Total streams found: ${unique.length}`);
+    return unique;
 }
