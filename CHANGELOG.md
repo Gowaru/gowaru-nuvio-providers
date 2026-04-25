@@ -1,19 +1,29 @@
-## [1.1.39] - 2026-03-06
+
+## [1.1.47] - 2026-04-25
+### Added
+- **Frenchstream**: Added a dedicated resolver path for `fsvid` and `vidzy`, with packed-script decoding to extract direct HLS links.
+
+### Fixed
+- **Global**: Added fake-direct filtering to reject known test/sample videos such as Big Buck Bunny before they reach the player.
+- **Uqload**: Improved direct-link resolution for `uqload` embeds and kept the working fallback domains.
+- **Frenchstream / Global**: Tightened resolver heuristics so only playable media URLs are returned when a host exposes multiple candidates.
+
+## [1.1.39] - 2026-04-24
 ### Fixed
 - **Movix**: Updated the extractor to handle recent site changes that broke stream retrieval.
 - **Global**: Added error handling to prevent extractor failures from crashing the entire provider. If one stream fails to resolve, it will be skipped instead of returning 0 streams.
 
-## [1.1.38]
+## [1.1.38] - 2026-04-24
 - **Global**: Updated `http.js` to use `https://proxy.gowaru.app` instead of `https://api.proxy.gowaru.app`.
 - **Movix**: Migrated to a new direct TMDB API for 100% reliable stream extraction and added proxy support.
 
-## [1.1.37]
+## [1.1.37] - 2026-04-24
 - **Movix**: Fixed the extraction of video links.
 
-## [1.1.36]
+## [1.1.36] - 2026-04-24
 - **Movix**: Added new provider for parsing movies and TV series in French and with French subtitles. The extractor supports direct video link resolution for improved compatibility with Nuvio's player.
 
-## [1.1.35]
+## [1.1.35] - 2026-04-24
 - **French-Anime**: Applied `Promise.all` to video link resolutions to fix blocking/timeout issues.
 - **Vostfree**: Applied `Promise.all` to iframes.
 - **AnimeVOSTFR**: Applied `Promise.all` to iframes.
@@ -21,12 +31,12 @@
 - **JetAnimes**: Applied `Promise.all` to iframes.
 - **Global**: The generated stream title now systematically includes the **"VF"** or **"VOSTFR"** designation for all clips (Anime-Sama, French-Anime, VoirAnime, Vostfree, AnimeVOSTFR, etc.) to resolve the differentiation issue in the Nuvio application.
 
-## [1.1.32]
+## [1.1.32] - 2026-04-24
 - **Global / Metadata** : Integrated TMDB `/alternative_titles` API to fetch Japanese/Romaji titles officially instead of just the English baseline. Providers like VoirAnime, Anime-Sama, French-Anime now perfectly hit matches like `Rokudenashi Majutsu Koushi to Akashic Records` when requested from the English TMDB ID entry.
 
-## [1.1.31]
+## [1.1.31] - 2026-04-24
 - **VoirAnime** : Applying concurrent asynchronous resolution (`Promise.all`) to video player scrapings to avoid blocked timeouts from NodeJS and clients.
-## [1.1.30]
+## [1.1.30] - 2026-04-24
 - **Anime-Sama / General** : Fixed a crash/timeout bug caused by sequential dead link searches (Uqload, Vidmoly, etc.). A concurrent asynchronous resolution (`Promise.all`) has been implemented for instant loading and no timeout limits in applications.
 
 # Changelog
