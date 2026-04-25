@@ -14,6 +14,26 @@ const _atob = (str) => {
     } catch (e) { return str; }
 };
 
+function isKnownFakeDirectUrl(url) {
+    if (!url || typeof url !== 'string') return true;
+    const u = url.toLowerCase();
+    return (
+        u.includes('test-videos.co.uk') ||
+        u.includes('big_buck_bunny') ||
+        u.includes('bigbuckbunny') ||
+        u.includes('sample-videos.com') ||
+        u.includes('example.com') ||
+        u.includes('localhost')
+    );
+}
+
+function isPlayableMediaUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const u = url.toLowerCase();
+    if (isKnownFakeDirectUrl(u)) return false;
+    return /\.(mp4|m3u8|mkv|webm)(\?.*)?$/.test(u) || u.includes('/hls2/') || u.includes('/master.m3u8');
+}
+
 async function safeFetch(url, options = {}) {
     let controller, timeout;
     try {
@@ -43,30 +63,131 @@ async function safeFetch(url, options = {}) {
 export function unpack(code) {
     try {
         if (!code.includes('p,a,c,k,e,d')) return code;
-        
-        const packedRegex = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\).*?\}\s*\((.*?)\)\s*\)/gs;
+
+        const extractEvalBlocks = (input) => {
+            const blocks = [];
+            let pos = 0;
+            while (true) {
+                const start = input.indexOf('eval(function(p,a,c,k,e,d)', pos);
+                if (start === -1) break;
+
+                let i = start;
+                let depth = 0;
+                let inSingle = false;
+                let inDouble = false;
+                let escaped = false;
+
+                for (; i < input.length; i++) {
+                    const ch = input[i];
+                    if (escaped) {
+                        escaped = false;
+                        continue;
+                    }
+                    if (ch === '\\') {
+                        escaped = true;
+                        continue;
+                    }
+                    if (!inDouble && ch === "'") inSingle = !inSingle;
+                    else if (!inSingle && ch === '"') inDouble = !inDouble;
+                    if (inSingle || inDouble) continue;
+
+                    if (ch === '(') depth++;
+                    else if (ch === ')') {
+                        depth--;
+                        if (depth === 0) {
+                            i++;
+                            break;
+                        }
+                    }
+                }
+
+                if (i > start) blocks.push(input.slice(start, i));
+                pos = i;
+            }
+            return blocks;
+        };
+
+        const decodeBlock = (block) => {
+            const parseString = (src, start) => {
+                const quote = src[start];
+                if (quote !== "'" && quote !== '"') return null;
+                let i = start + 1;
+                let out = '';
+                let escaped = false;
+                for (; i < src.length; i++) {
+                    const ch = src[i];
+                    if (escaped) {
+                        out += ch;
+                        escaped = false;
+                        continue;
+                    }
+                    if (ch === '\\') {
+                        escaped = true;
+                        continue;
+                    }
+                    if (ch === quote) return { value: out, end: i + 1 };
+                    out += ch;
+                }
+                return null;
+            };
+
+            const skipWs = (src, i) => {
+                while (i < src.length && /\s/.test(src[i])) i++;
+                return i;
+            };
+
+            const parseIntAt = (src, i) => {
+                i = skipWs(src, i);
+                const m = src.slice(i).match(/^\d+/);
+                if (!m) return null;
+                return { value: parseInt(m[0], 10), end: i + m[0].length };
+            };
+
+            const callStart = block.indexOf('}(');
+            if (callStart === -1) return null;
+            let i = callStart + 2;
+            i = skipWs(block, i);
+
+            const pStr = parseString(block, i);
+            if (!pStr) return null;
+            let p = pStr.value;
+            i = skipWs(block, pStr.end);
+            if (block[i] !== ',') return null;
+
+            const aNum = parseIntAt(block, i + 1);
+            if (!aNum) return null;
+            const a = aNum.value;
+            i = skipWs(block, aNum.end);
+            if (block[i] !== ',') return null;
+
+            const cNum = parseIntAt(block, i + 1);
+            if (!cNum) return null;
+            let c = cNum.value;
+            i = skipWs(block, cNum.end);
+            if (block[i] !== ',') return null;
+
+            const kStr = parseString(block, skipWs(block, i + 1));
+            if (!kStr) return null;
+            const splitPart = block.slice(kStr.end, kStr.end + 20);
+            if (!/\.split\(\s*['"]\|['"]\s*\)/.test(splitPart)) return null;
+            const k = kStr.value.split('|');
+
+            const e = (x) => (x < a ? '' : e(parseInt(x / a, 10))) + ((x = x % a) > 35 ? String.fromCharCode(x + 29) : x.toString(36));
+            const dict = {};
+            while (c--) dict[e(c)] = k[c] || e(c);
+
+            return p.replace(/\b\w+\b/g, (w) => dict[w] || w);
+        };
+
         let result = code;
-        let match;
-        
-        while ((match = packedRegex.exec(code)) !== null) {
+        const blocks = extractEvalBlocks(code);
+        for (const block of blocks) {
             try {
-                const argsStr = match[1];
-                const pMatch = argsStr.match(/^'(.*?)',\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\.split\('\|'\)/s);
-                if (!pMatch) continue;
-                
-                let p = pMatch[1].replace(/\\'/g, "'");
-                let a = parseInt(pMatch[2]);
-                let c = parseInt(pMatch[3]);
-                let k = pMatch[4].split('|');
-                
-                const e = (c) => (c < a ? "" : e(parseInt(c / a))) + ((c = c % a) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
-                const dict = {};
-                while (c--) dict[e(c)] = k[c] || e(c);
-                
-                const unpacked = p.replace(/\b\w+\b/g, (w) => dict[w] || w);
-                result = result.replace(match[0], unpacked);
+                const decoded = decodeBlock(block);
+                if (decoded) result = result.replace(block, decoded);
             } catch (e) {}
         }
+
         return result;
     } catch (err) { return code; }
 }
@@ -175,6 +296,7 @@ export async function resolveVoe(url) {
         if (match) {
             let videoUrl = match[1] || match[0];
             if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
+            if (isKnownFakeDirectUrl(videoUrl)) return { url };
             return { url: videoUrl, headers: { "Referer": url } };
         }
     } catch (e) {}
@@ -321,7 +443,8 @@ export async function resolveMoon(url) {
 
 export async function resolvePackedPlayer(url) {
     try {
-        const res = await safeFetch(url, { headers: { 'Referer': url } });
+        const origin = url.match(/^https?:\/\/[^/]+/)?.[0] || url;
+        const res = await safeFetch(url, { headers: { 'Referer': origin + '/' } });
         if (!res) return { url };
         let html = await res.text();
         if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
@@ -331,7 +454,7 @@ export async function resolvePackedPlayer(url) {
                       html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
 
         if (match) {
-            return { url: match[1], headers: { 'Referer': url } };
+            return { url: match[1], headers: { 'Referer': origin + '/' } };
         }
     } catch (e) {}
     return { url };
@@ -347,7 +470,7 @@ export async function resolveStream(stream, depth = 0) {
     if (!originalUrl || originalUrl.includes('google-analytics') || originalUrl.includes('doubleclick')) return null;
 
     // 1. Check if it's already a direct video link
-    if (urlLower.match(/\.(mp4|m3u8|mkv|webm)(\?.*)?$/) && !urlLower.includes('html')) {
+    if (isPlayableMediaUrl(originalUrl)) {
         return { ...stream, isDirect: true };
     }
 
@@ -364,6 +487,7 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
         else if (urlLower.includes('sendvid.')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
+        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulustream.') ||
@@ -375,7 +499,7 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
         
         // If a specific resolver found a different URL, it's the final direct link
-        if (result && result.url !== originalUrl) {
+        if (result && result.url !== originalUrl && !isKnownFakeDirectUrl(result.url)) {
             return {
                 ...stream,
                 url: result.url,
@@ -405,7 +529,7 @@ export async function resolveStream(stream, depth = 0) {
                     // Filter out non-video extensions that might be caught by the generic 'file:' regex
                     const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
                     
-                    if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension) {
+                    if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
                         result = { url: extractedUrl };
                     }
                 }
@@ -430,7 +554,7 @@ export async function resolveStream(stream, depth = 0) {
             }
         }
 
-        if (result && result.url !== originalUrl && result.url.startsWith('http')) {
+        if (result && result.url !== originalUrl && result.url.startsWith('http') && !isKnownFakeDirectUrl(result.url)) {
             return {
                 ...stream,
                 url: result.url,

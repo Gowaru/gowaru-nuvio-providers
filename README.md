@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.39-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.1.47-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -23,7 +23,7 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 9 pillars of the French anime scene:
+This bundle integrates 11 pillars of the French streaming scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
@@ -37,6 +37,7 @@ This bundle integrates 9 pillars of the French anime scene:
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
 | **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ❌  |
 | **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | 🔗 |
+| **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
@@ -51,6 +52,7 @@ This bundle integrates 9 pillars of the French anime scene:
 ## 🛠️ Technical Features
 
 - **Universal Resolver**: Includes an automatic resolution engine for popular hosts (**Sibnet, Vidmoly, Uqload, Voe, Sendvid, VidCDN...**). No more `ExoPlaybackException` errors!
+- **Fake-Direct Filtering**: Rejects sample links such as Big Buck Bunny and other known test URLs before they reach the player.
 - **Mobile Optimized**: "Embed" (HTML) links are transformed into direct video links (`.mp4`, `.m3u8`) for native compatibility with Android/iOS players.
 - **ESM -> CJS Transpilation & Minification**: Modern source code (ES6+) automatically converted, optimized and minified for the **Hermes** JavaScript engine.
 - **Security Check**: Regular dependency audits to ensure vulnerability-free code.
