@@ -108,6 +108,7 @@ test_showboxog.js
 test_vidsrc.js
 vidsrcextractor.js
 
+moviebox.js
 test_showbox.js
 videasy-scraper.js
 test_videasy.js

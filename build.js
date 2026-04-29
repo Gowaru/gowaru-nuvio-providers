@@ -18,15 +18,6 @@ const path = require('path');
 const srcDir = path.join(__dirname, 'src');
 const outDir = path.join(__dirname, 'providers');
 
-// Modules that the Nuvio app provides - don't bundle these
-const EXTERNAL_MODULES = [
-    'cheerio-without-node-native',
-    'react-native-cheerio',
-    'cheerio',
-    'crypto-js',
-    'axios'
-];
-
 // Get provider names from command line or discover all
 function getProvidersToBuild() {
     const args = process.argv.slice(2).filter(arg => !arg.startsWith('-'));
@@ -61,14 +52,17 @@ async function buildProvider(providerName, minify = false) {
             entryPoints: [entryPoint],
             bundle: true,
             outfile: outFile,
-            format: 'cjs',              // CommonJS for module.exports compatibility
-            platform: 'neutral',        // Works in both browser and node-like environments
+            format: 'iife',             // Sandbox-friendly script output
+            platform: 'browser',        // Avoid require/module assumptions in TV runtimes
             target: 'es2016',           // Transpile async/await to generators for Hermes
             minify: minify,             // Minify bundle
             sourcemap: false,
-            external: EXTERNAL_MODULES,
+            globalName: '__provider',
             banner: {
                 js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${new Date().toISOString()}\n */`
+            },
+            footer: {
+                js: `\nif (typeof module !== 'undefined' && module.exports) {\n    module.exports = __provider;\n}\nif (__provider && __provider.getStreams) {\n    if (typeof globalThis !== 'undefined') {\n        globalThis.getStreams = __provider.getStreams;\n    }\n    if (typeof global !== 'undefined') {\n        global.getStreams = __provider.getStreams;\n    }\n}`
             },
             logLevel: 'warning'
         });
