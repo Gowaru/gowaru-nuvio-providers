@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 provider_test/
+providers/*.js
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
