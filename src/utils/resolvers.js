@@ -34,35 +34,51 @@ function isPlayableMediaUrl(url) {
     return /\.(mp4|m3u8|mkv|webm)(\?.*)?$/.test(u) || u.includes('/hls2/') || u.includes('/master.m3u8');
 }
 
+const STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
+const DEFAULT_QUALITY_TIER = 360;
+
+function nearestQualityTier(height) {
+    if (!Number.isFinite(height) || height <= 0) return DEFAULT_QUALITY_TIER;
+    let nearest = STRICT_QUALITY_TIERS[0];
+    let minDiff = Math.abs(height - nearest);
+    for (const tier of STRICT_QUALITY_TIERS) {
+        const diff = Math.abs(height - tier);
+        if (diff < minDiff) {
+            minDiff = diff;
+            nearest = tier;
+        }
+    }
+    return nearest;
+}
+
 function normalizeQualityLabel(value) {
     const raw = String(value || '').trim().toLowerCase();
-    if (!raw) return 'HD';
+    if (!raw) return `${DEFAULT_QUALITY_TIER}p`;
+
     if (raw === '4k' || raw === 'uhd' || raw.includes('2160')) return '2160p';
-    if (raw.includes('1440')) return '1440p';
-    if (raw.includes('1080')) return '1080p';
-    if (raw.includes('720')) return '720p';
-    if (raw.includes('480')) return '480p';
-    if (raw.includes('360')) return '360p';
-    if (raw.includes('240')) return '240p';
-    if (raw.includes('hd')) return 'HD';
-    return value;
+    if (raw.includes('fhd') || raw.includes('fullhd') || raw.includes('1080')) return '1080p';
+    if (raw.includes('hd') || raw.includes('720')) return '720p';
+
+    const numericMatch = raw.match(/(\d{3,4})\s*p?/i);
+    if (numericMatch) {
+        const tier = nearestQualityTier(Number(numericMatch[1]));
+        return `${tier}p`;
+    }
+
+    return `${DEFAULT_QUALITY_TIER}p`;
 }
 
 function qualityRank(value) {
     const q = normalizeQualityLabel(value).toLowerCase();
-    if (q.includes('2160')) return 6;
-    if (q.includes('1440')) return 5;
-    if (q.includes('1080')) return 4;
-    if (q.includes('720')) return 3;
-    if (q.includes('480')) return 2;
-    if (q.includes('360')) return 1;
-    if (q.includes('240')) return 0;
-    return 2;
+    const match = q.match(/(\d{3,4})p/);
+    const height = match ? Number(match[1]) : DEFAULT_QUALITY_TIER;
+    const tier = nearestQualityTier(height);
+    return STRICT_QUALITY_TIERS.length - 1 - STRICT_QUALITY_TIERS.indexOf(tier);
 }
 
 function appendQualityToTitle(title, quality) {
     const q = normalizeQualityLabel(quality);
-    if (!q || q === 'HD') return title;
+    if (!q) return title;
     if ((title || '').includes(q)) return title;
     return `${title} [${q}]`;
 }
