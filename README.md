@@ -101,6 +101,13 @@ nuvio-providers/
 - Always use `fetchText` or `fetchJson` wrappers located in standard `http.js` utilities to inject correct headers and avoid Cloudflare blocks.
 - Prefer `fetch` (Hermes compatible) over heavy external libraries.
 
+### NuvioTV Release Workflow
+- Develop providers in `src/` when the logic is complex.
+- Always ship the final artifact as a single-file bundle under `providers/`.
+- Test the compiled file in the Nuvio Plugin Tester before publishing.
+- Keep top-level code minimal so the provider can load cleanly inside Hermes.
+- Prefer lightweight parsing and avoid Node-only helpers such as `Buffer`, `fs`, or dynamic `require` in runtime code.
+
 ---
 
 ## 📜 License

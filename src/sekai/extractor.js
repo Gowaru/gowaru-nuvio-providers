@@ -6,6 +6,30 @@ import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://sekai.one";
 
+function decodeBase64Utf8(input) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let output = '';
+    let index = 0;
+    const str = String(input || '').replace(/[^A-Za-z0-9+/=]/g, '');
+
+    while (index < str.length) {
+        const enc1 = alphabet.indexOf(str.charAt(index++));
+        const enc2 = alphabet.indexOf(str.charAt(index++));
+        const enc3 = alphabet.indexOf(str.charAt(index++));
+        const enc4 = alphabet.indexOf(str.charAt(index++));
+
+        const chr1 = (enc1 << 2) | (enc2 >> 4);
+        const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+        const chr3 = ((enc3 & 3) << 6) | enc4;
+
+        output += String.fromCharCode(chr1);
+        if (enc3 !== 64) output += String.fromCharCode(chr2);
+        if (enc4 !== 64) output += String.fromCharCode(chr3);
+    }
+
+    return output;
+}
+
 
 function normalizeTitle(s) {
     if(!s) return "";
@@ -63,11 +87,10 @@ function buildEpisodeMap(html) {
     const b64Regex = /var\s+([a-zA-Z0-9_]+)\s*=\s*atob\("([^"]+)"\)/g;
     const constants = {};
     for (const match of html.matchAll(b64Regex)) {
-        // Safe atob fallback via Buffer if in NodeJS (local testing) or global.atob in app
         if (typeof atob === 'function') {
             constants[match[1]] = atob(match[2]);
         } else {
-            constants[match[1]] = Buffer.from(match[2], 'base64').toString('utf8');
+            constants[match[1]] = decodeBase64Utf8(match[2]);
         }
     }
 
