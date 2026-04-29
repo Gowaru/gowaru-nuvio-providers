@@ -37,15 +37,16 @@ function isPlayableMediaUrl(url) {
 async function safeFetch(url, options = {}) {
     let controller, timeout;
     try {
-        controller = new AbortController();
-        timeout = setTimeout(() => controller.abort(), 10000);
+        const canAbort = typeof AbortController !== 'undefined';
+        controller = canAbort ? new AbortController() : null;
+        if (controller) timeout = setTimeout(() => controller.abort(), 10000);
         const response = await fetch(url, {
             ...options,
             headers: { ...HEADERS, ...options.headers },
             redirect: 'follow',
-            signal: controller.signal
+            signal: controller ? controller.signal : undefined
         });
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
         if (!response.ok) return null;
         const html = await response.text();
         return { 
@@ -249,14 +250,15 @@ export async function resolveUqload(url) {
         const checkDomain = async (domain) => {
             try {
                 const tryUrl = `https://${domain}${normalizedPath}`;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 4000); // Fast fail 4s
+                const canAbort = typeof AbortController !== 'undefined';
+                const controller = canAbort ? new AbortController() : null;
+                const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null; // Fast fail 4s
                 
                 const res = await fetch(tryUrl, {
                     headers: { ...HEADERS, 'Referer': baseRef },
-                    signal: controller.signal
+                    signal: controller ? controller.signal : undefined
                 });
-                clearTimeout(timeoutId);
+                if (timeoutId) clearTimeout(timeoutId);
                 
                 if (res && res.ok) {
                     const html = await res.text();

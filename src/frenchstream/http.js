@@ -2,7 +2,8 @@
  * HTTP Utilities for Frenchstream
  */
 
-export const BASE_URL = 'https://fs03.lol';
+export const BASE_URLS = ['https://french-stream.one', 'https://fs03.lol'];
+export const BASE_URL = BASE_URLS[0];
 
 export const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
@@ -13,14 +14,28 @@ export const HEADERS = {
     'Connection': 'keep-alive'
 };
 
+function originFromUrl(url) {
+    try {
+        return new URL(url).origin;
+    } catch (e) {
+        return BASE_URL;
+    }
+}
+
 export async function fetchText(url, options = {}) {
     console.log(`[Frenchstream] Fetching: ${url}`);
+    const base = options.baseUrl || originFromUrl(url);
+    const mergedHeaders = {
+        ...HEADERS,
+        Referer: `${base}/`,
+        Origin: base,
+        ...(options.headers || {})
+    };
+
+    const { baseUrl, headers, ...restOptions } = options;
     const response = await fetch(url, {
-        headers: {
-            ...HEADERS,
-            ...(options.headers || {})
-        },
-        ...options
+        headers: mergedHeaders,
+        ...restOptions
     });
 
     if (!response.ok) {

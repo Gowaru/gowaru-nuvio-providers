@@ -47,8 +47,9 @@ function directHeadersFor(url, headers = {}) {
 }
 
 async function validateDirectUrl(url, headers = {}) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const canAbort = typeof AbortController !== 'undefined';
+    const controller = canAbort ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 5000) : null;
     try {
         const response = await fetch(url, {
             method: 'GET',
@@ -57,12 +58,12 @@ async function validateDirectUrl(url, headers = {}) {
                 Range: 'bytes=0-0'
             },
             redirect: 'follow',
-            signal: controller.signal
+            signal: controller ? controller.signal : undefined
         });
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
         return response.ok || response.status === 206;
     } catch (e) {
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
         return false;
     }
 }
