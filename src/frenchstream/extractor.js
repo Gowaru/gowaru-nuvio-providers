@@ -3,7 +3,7 @@
  */
 
 import cheerio from 'cheerio-without-node-native';
-import { fetchText, fetchJson, BASE_URL } from './http.js';
+import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
 import { resolveStream } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -11,6 +11,7 @@ const SEARCH_STOPWORDS = new Set([
     'the', 'and', 'for', 'with', 'from', 'des', 'les', 'une', 'dans', 'sur', 'via', 'de', 'du', 'la', 'le'
 ]);
 const MIN_MATCH_SCORE = 40;
+const FSTREAM_API_BASE = 'https://api.movix.cash';
 
 function normalize(text) {
     return (text || '')
@@ -42,32 +43,69 @@ function isSeriesCard($card, href, title) {
     return text.includes('saison') || text.includes('series') || text.includes('/s-tv/');
 }
 
-function parseSearchCards(html) {
+function normalizeHref(href, baseUrl) {
+    if (!href || typeof href !== 'string') return null;
+    const trimmed = href.trim();
+    if (!trimmed) return null;
+
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (trimmed.startsWith('//')) return `https:${trimmed}`;
+    if (trimmed.startsWith('/')) return `${baseUrl}${trimmed}`;
+    return `${baseUrl}/${trimmed.replace(/^\/+/, '')}`;
+}
+
+function parseSearchCards(html, baseUrl) {
     const $ = cheerio.load(html);
     const cards = [];
 
     $('.short .short-in').each((_, element) => {
         const $card = $(element);
-        const $poster = $card.find('a.short-poster').first();
-        const href = $poster.attr('href') || '';
-        if (!href.startsWith('/')) return;
+        const hrefRaw =
+            $card.find('a.short-poster').first().attr('href') ||
+            $card.find('a.img-box').first().attr('href') ||
+            $card.find('a[href]').first().attr('href') ||
+            '';
+        const href = normalizeHref(hrefRaw, baseUrl);
+        if (!href) return;
 
         const title = ($card.find('.short-title').first().text() || '').trim();
         if (!title) return;
 
         const onclick = $card.find('.info-button').attr('onclick') || '';
-        const newsId = pickNewsId(onclick, href);
+        const newsId = pickNewsId(onclick, hrefRaw);
         if (!newsId) return;
 
         cards.push({
             newsId,
-            href: `${BASE_URL}${href}`,
+            href: `${baseUrl}${href}`,
             title,
-            isSeries: isSeriesCard($card, href, title)
+            isSeries: isSeriesCard($card, href, title),
+            baseUrl
         });
     });
 
     return cards;
+}
+
+function buildTitleQueries(titles) {
+    const queries = [];
+    const push = (value) => {
+        if (typeof value !== 'string') return;
+        const v = value.trim();
+        if (!v) return;
+        if (!queries.some((q) => q.toLowerCase() === v.toLowerCase())) queries.push(v);
+    };
+
+    for (const title of (titles || []).slice(0, 8)) {
+        push(title);
+        push(title.replace(/['’]/g, ' '));
+        push(title.replace(/\s*\([^)]*\)\s*/g, ' '));
+
+        const beforeColon = title.split(':')[0];
+        if (beforeColon && beforeColon.length >= 3) push(beforeColon);
+    }
+
+    return queries.slice(0, 10);
 }
 
 function scoreCard(card, queryTitle, mediaType, season) {
@@ -111,21 +149,30 @@ function scoreCard(card, queryTitle, mediaType, season) {
 }
 
 async function searchByTitle(title, mediaType, season) {
-    const url = `${BASE_URL}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
-    const html = await fetchText(url);
-    let cards = parseSearchCards(html);
+    const allCards = [];
 
-    cards = cards.filter((card) => (mediaType === 'tv' ? card.isSeries : !card.isSeries));
-    if (cards.length === 0) return [];
+    for (const baseUrl of BASE_URLS) {
+        try {
+            const url = `${baseUrl}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
+            const html = await fetchText(url, { baseUrl });
+            const cards = parseSearchCards(html, baseUrl);
+            allCards.push(...cards);
+        } catch (e) {
+            console.warn(`[Frenchstream] Search failed on ${baseUrl} for "${title}": ${e.message}`);
+        }
+    }
 
-    return cards
+    const filtered = allCards.filter((card) => (mediaType === 'tv' ? card.isSeries : !card.isSeries));
+    if (filtered.length === 0) return [];
+
+    return filtered
         .map((card) => ({
             ...card,
             _score: scoreCard(card, title, mediaType, season),
             _matchedTitle: title
         }))
         .sort((a, b) => b._score - a._score)
-        .slice(0, 5);
+        .slice(0, 8);
 }
 
 function hostLabel(hostKey) {
@@ -211,6 +258,62 @@ function dedupeByUrl(streams) {
     return out;
 }
 
+function collectFstreamApiMovieCandidates(apiData) {
+    const players = apiData?.players;
+    if (!players || typeof players !== 'object') return [];
+
+    const streams = [];
+    for (const [lang, list] of Object.entries(players)) {
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
+            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url));
+        }
+    }
+    return streams;
+}
+
+function collectFstreamApiTvCandidates(apiData, episode) {
+    const episodeNum = Number(episode) || 1;
+    const ep = apiData?.episodes?.[String(episodeNum)] || apiData?.episodes?.[episodeNum];
+    const langs = ep?.languages;
+    if (!langs || typeof langs !== 'object') return [];
+
+    const streams = [];
+    for (const [lang, list] of Object.entries(langs)) {
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
+            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url));
+        }
+    }
+    return streams;
+}
+
+async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
+    try {
+        const url = mediaType === 'movie'
+            ? `${FSTREAM_API_BASE}/api/fstream/movie/${tmdbId}`
+            : `${FSTREAM_API_BASE}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
+
+        const data = await fetchJson(url, {
+            headers: {
+                Accept: 'application/json, text/plain, */*',
+                Referer: 'https://movix.cash/',
+                Origin: 'https://movix.cash'
+            }
+        });
+
+        if (!data || data.success === false) return [];
+        return mediaType === 'movie'
+            ? collectFstreamApiMovieCandidates(data)
+            : collectFstreamApiTvCandidates(data, episode);
+    } catch (e) {
+        console.warn(`[Frenchstream] FStream API fallback failed: ${e.message}`);
+        return [];
+    }
+}
+
 async function resolveCandidates(candidates) {
     const resolved = await Promise.allSettled(candidates.map((stream) => resolveStream(stream)));
     const direct = [];
@@ -230,7 +333,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
 
-    const searchTitles = titles.slice(0, 6);
+    const searchTitles = buildTitleQueries(titles);
 
     let match = null;
     let bestScore = -Infinity;
@@ -247,14 +350,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     if (!match || bestScore < MIN_MATCH_SCORE) {
-        console.warn(`[Frenchstream] No confident match for tmdb=${tmdbId} (bestScore=${bestScore})`);
-        return [];
+        console.warn(`[Frenchstream] No confident web match for tmdb=${tmdbId} (bestScore=${bestScore}), trying API fallback`);
+        const fallbackCandidates = await fetchFstreamApiFallback(tmdbId, mediaType, season, episode);
+        if (fallbackCandidates.length === 0) return [];
+
+        const fallbackStreams = await resolveCandidates(fallbackCandidates);
+        console.log(`[Frenchstream] API fallback candidates: ${fallbackCandidates.length}, returned: ${fallbackStreams.length}`);
+        return fallbackStreams;
     }
     console.log(`[Frenchstream] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
 
+    const sourceBase = match.baseUrl || BASE_URL;
     const candidates = mediaType === 'movie'
-        ? collectMovieCandidates(await fetchJson(`${BASE_URL}/engine/ajax/film_api.php?id=${match.newsId}`))
-        : collectEpisodeCandidates(await fetchJson(`${BASE_URL}/ep-data.php?id=${match.newsId}`), episode);
+        ? collectMovieCandidates(await fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase }))
+        : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode);
 
     if (candidates.length === 0) return [];
 

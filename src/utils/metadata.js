@@ -7,20 +7,23 @@ const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
 
 async function safeFetch(url) {
+    let timeout = null;
     try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const canAbort = typeof AbortController !== 'undefined';
+        const controller = canAbort ? new AbortController() : null;
+        if (controller) timeout = setTimeout(() => controller.abort(), 8000);
         const res = await fetch(url, {
             headers: {
                 "User-Agent": "Mozilla/5.0",
                 "Accept": "application/json",
             },
-            signal: controller.signal
+            signal: controller ? controller.signal : undefined
         });
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
         if (!res.ok) return null;
         return res;
     } catch (e) {
+        if (timeout) clearTimeout(timeout);
         return null;
     }
 }

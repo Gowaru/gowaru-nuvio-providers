@@ -1,6 +1,6 @@
 /**
  * frenchstream - Built from src/frenchstream/
- * Generated: 2026-04-29T09:18:10.687Z
+ * Generated: 2026-04-29T14:44:47.586Z
  */
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -25,6 +25,18 @@ var __spreadValues = (a, b) => {
   return a;
 };
 var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+var __objRest = (source, exclude) => {
+  var target = {};
+  for (var prop in source)
+    if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+      target[prop] = source[prop];
+  if (source != null && __getOwnPropSymbols)
+    for (var prop of __getOwnPropSymbols(source)) {
+      if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+        target[prop] = source[prop];
+    }
+  return target;
+};
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
@@ -66,7 +78,8 @@ var __async = (__this, __arguments, generator) => {
 var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
 
 // src/frenchstream/http.js
-var BASE_URL = "https://fs03.lol";
+var BASE_URLS = ["https://french-stream.one", "https://fs03.lol"];
+var BASE_URL = BASE_URLS[0];
 var HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -75,12 +88,25 @@ var HEADERS = {
   "Origin": BASE_URL,
   "Connection": "keep-alive"
 };
+function originFromUrl(url) {
+  try {
+    return new URL(url).origin;
+  } catch (e) {
+    return BASE_URL;
+  }
+}
 function fetchText(_0) {
   return __async(this, arguments, function* (url, options = {}) {
     console.log(`[Frenchstream] Fetching: ${url}`);
+    const base = options.baseUrl || originFromUrl(url);
+    const mergedHeaders = __spreadValues(__spreadProps(__spreadValues({}, HEADERS), {
+      Referer: `${base}/`,
+      Origin: base
+    }), options.headers || {});
+    const _a = options, { baseUrl, headers } = _a, restOptions = __objRest(_a, ["baseUrl", "headers"]);
     const response = yield fetch(url, __spreadValues({
-      headers: __spreadValues(__spreadValues({}, HEADERS), options.headers || {})
-    }, options));
+      headers: mergedHeaders
+    }, restOptions));
     if (!response.ok) {
       throw new Error(`HTTP error ${response.status} for ${url}`);
     }
@@ -126,14 +152,15 @@ function safeFetch(_0) {
   return __async(this, arguments, function* (url, options = {}) {
     let controller, timeout;
     try {
-      controller = new AbortController();
-      timeout = setTimeout(() => controller.abort(), 1e4);
+      const canAbort = typeof AbortController !== "undefined";
+      controller = canAbort ? new AbortController() : null;
+      if (controller) timeout = setTimeout(() => controller.abort(), 1e4);
       const response = yield fetch(url, __spreadProps(__spreadValues({}, options), {
         headers: __spreadValues(__spreadValues({}, HEADERS2), options.headers),
         redirect: "follow",
-        signal: controller.signal
+        signal: controller ? controller.signal : void 0
       }));
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       if (!response.ok) return null;
       const html = yield response.text();
       return {
@@ -317,13 +344,14 @@ function resolveUqload(url) {
       const checkDomain = (domain) => __async(null, null, function* () {
         try {
           const tryUrl = `https://${domain}${normalizedPath}`;
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 4e3);
+          const canAbort = typeof AbortController !== "undefined";
+          const controller = canAbort ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 4e3) : null;
           const res = yield fetch(tryUrl, {
             headers: __spreadProps(__spreadValues({}, HEADERS2), { "Referer": baseRef }),
-            signal: controller.signal
+            signal: controller ? controller.signal : void 0
           });
-          clearTimeout(timeoutId);
+          if (timeoutId) clearTimeout(timeoutId);
           if (res && res.ok) {
             const html = yield res.text();
             const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
@@ -607,20 +635,23 @@ var TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
 function safeFetch2(url) {
   return __async(this, null, function* () {
+    let timeout = null;
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8e3);
+      const canAbort = typeof AbortController !== "undefined";
+      const controller = canAbort ? new AbortController() : null;
+      if (controller) timeout = setTimeout(() => controller.abort(), 8e3);
       const res = yield fetch(url, {
         headers: {
           "User-Agent": "Mozilla/5.0",
           "Accept": "application/json"
         },
-        signal: controller.signal
+        signal: controller ? controller.signal : void 0
       });
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       if (!res.ok) return null;
       return res;
     } catch (e) {
+      if (timeout) clearTimeout(timeout);
       return null;
     }
   });
@@ -700,6 +731,7 @@ var SEARCH_STOPWORDS = /* @__PURE__ */ new Set([
   "le"
 ]);
 var MIN_MATCH_SCORE = 40;
+var FSTREAM_API_BASE = "https://api.movix.cash";
 function normalize(text) {
   return (text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -721,27 +753,54 @@ function isSeriesCard($card, href, title) {
   const text = `${href || ""} ${title || ""}`.toLowerCase();
   return text.includes("saison") || text.includes("series") || text.includes("/s-tv/");
 }
-function parseSearchCards(html) {
+function normalizeHref(href, baseUrl) {
+  if (!href || typeof href !== "string") return null;
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("//")) return `https:${trimmed}`;
+  if (trimmed.startsWith("/")) return `${baseUrl}${trimmed}`;
+  return `${baseUrl}/${trimmed.replace(/^\/+/, "")}`;
+}
+function parseSearchCards(html, baseUrl) {
   const $ = import_cheerio_without_node_native.default.load(html);
   const cards = [];
   $(".short .short-in").each((_, element) => {
     const $card = $(element);
-    const $poster = $card.find("a.short-poster").first();
-    const href = $poster.attr("href") || "";
-    if (!href.startsWith("/")) return;
+    const hrefRaw = $card.find("a.short-poster").first().attr("href") || $card.find("a.img-box").first().attr("href") || $card.find("a[href]").first().attr("href") || "";
+    const href = normalizeHref(hrefRaw, baseUrl);
+    if (!href) return;
     const title = ($card.find(".short-title").first().text() || "").trim();
     if (!title) return;
     const onclick = $card.find(".info-button").attr("onclick") || "";
-    const newsId = pickNewsId(onclick, href);
+    const newsId = pickNewsId(onclick, hrefRaw);
     if (!newsId) return;
     cards.push({
       newsId,
-      href: `${BASE_URL}${href}`,
+      href: `${baseUrl}${href}`,
       title,
-      isSeries: isSeriesCard($card, href, title)
+      isSeries: isSeriesCard($card, href, title),
+      baseUrl
     });
   });
   return cards;
+}
+function buildTitleQueries(titles) {
+  const queries = [];
+  const push = (value) => {
+    if (typeof value !== "string") return;
+    const v = value.trim();
+    if (!v) return;
+    if (!queries.some((q) => q.toLowerCase() === v.toLowerCase())) queries.push(v);
+  };
+  for (const title of (titles || []).slice(0, 8)) {
+    push(title);
+    push(title.replace(/['’]/g, " "));
+    push(title.replace(/\s*\([^)]*\)\s*/g, " "));
+    const beforeColon = title.split(":")[0];
+    if (beforeColon && beforeColon.length >= 3) push(beforeColon);
+  }
+  return queries.slice(0, 10);
 }
 function scoreCard(card, queryTitle, mediaType, season) {
   const q = normalize(queryTitle);
@@ -778,15 +837,23 @@ function scoreCard(card, queryTitle, mediaType, season) {
 }
 function searchByTitle(title, mediaType, season) {
   return __async(this, null, function* () {
-    const url = `${BASE_URL}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
-    const html = yield fetchText(url);
-    let cards = parseSearchCards(html);
-    cards = cards.filter((card) => mediaType === "tv" ? card.isSeries : !card.isSeries);
-    if (cards.length === 0) return [];
-    return cards.map((card) => __spreadProps(__spreadValues({}, card), {
+    const allCards = [];
+    for (const baseUrl of BASE_URLS) {
+      try {
+        const url = `${baseUrl}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
+        const html = yield fetchText(url, { baseUrl });
+        const cards = parseSearchCards(html, baseUrl);
+        allCards.push(...cards);
+      } catch (e) {
+        console.warn(`[Frenchstream] Search failed on ${baseUrl} for "${title}": ${e.message}`);
+      }
+    }
+    const filtered = allCards.filter((card) => mediaType === "tv" ? card.isSeries : !card.isSeries);
+    if (filtered.length === 0) return [];
+    return filtered.map((card) => __spreadProps(__spreadValues({}, card), {
       _score: scoreCard(card, title, mediaType, season),
       _matchedTitle: title
-    })).sort((a, b) => b._score - a._score).slice(0, 5);
+    })).sort((a, b) => b._score - a._score).slice(0, 8);
   });
 }
 function hostLabel(hostKey) {
@@ -860,6 +927,54 @@ function dedupeByUrl(streams) {
   }
   return out;
 }
+function collectFstreamApiMovieCandidates(apiData) {
+  const players = apiData == null ? void 0 : apiData.players;
+  if (!players || typeof players !== "object") return [];
+  const streams = [];
+  for (const [lang, list] of Object.entries(players)) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof (item == null ? void 0 : item.url) !== "string" || !item.url.startsWith("http")) continue;
+      streams.push(toStream("Frenchstream", (item == null ? void 0 : item.player) || "player", lang, item.url));
+    }
+  }
+  return streams;
+}
+function collectFstreamApiTvCandidates(apiData, episode) {
+  var _a, _b;
+  const episodeNum = Number(episode) || 1;
+  const ep = ((_a = apiData == null ? void 0 : apiData.episodes) == null ? void 0 : _a[String(episodeNum)]) || ((_b = apiData == null ? void 0 : apiData.episodes) == null ? void 0 : _b[episodeNum]);
+  const langs = ep == null ? void 0 : ep.languages;
+  if (!langs || typeof langs !== "object") return [];
+  const streams = [];
+  for (const [lang, list] of Object.entries(langs)) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof (item == null ? void 0 : item.url) !== "string" || !item.url.startsWith("http")) continue;
+      streams.push(toStream("Frenchstream", (item == null ? void 0 : item.player) || "player", lang, item.url));
+    }
+  }
+  return streams;
+}
+function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    try {
+      const url = mediaType === "movie" ? `${FSTREAM_API_BASE}/api/fstream/movie/${tmdbId}` : `${FSTREAM_API_BASE}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
+      const data = yield fetchJson(url, {
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          Referer: "https://movix.cash/",
+          Origin: "https://movix.cash"
+        }
+      });
+      if (!data || data.success === false) return [];
+      return mediaType === "movie" ? collectFstreamApiMovieCandidates(data) : collectFstreamApiTvCandidates(data, episode);
+    } catch (e) {
+      console.warn(`[Frenchstream] FStream API fallback failed: ${e.message}`);
+      return [];
+    }
+  });
+}
 function resolveCandidates(candidates) {
   return __async(this, null, function* () {
     const resolved = yield Promise.allSettled(candidates.map((stream) => resolveStream(stream)));
@@ -878,7 +993,7 @@ function extractStreams(tmdbId, mediaType, season, episode) {
   return __async(this, null, function* () {
     const titles = yield getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
-    const searchTitles = titles.slice(0, 6);
+    const searchTitles = buildTitleQueries(titles);
     let match = null;
     let bestScore = -Infinity;
     for (const title of searchTitles) {
@@ -893,11 +1008,16 @@ function extractStreams(tmdbId, mediaType, season, episode) {
       }
     }
     if (!match || bestScore < MIN_MATCH_SCORE) {
-      console.warn(`[Frenchstream] No confident match for tmdb=${tmdbId} (bestScore=${bestScore})`);
-      return [];
+      console.warn(`[Frenchstream] No confident web match for tmdb=${tmdbId} (bestScore=${bestScore}), trying API fallback`);
+      const fallbackCandidates = yield fetchFstreamApiFallback(tmdbId, mediaType, season, episode);
+      if (fallbackCandidates.length === 0) return [];
+      const fallbackStreams = yield resolveCandidates(fallbackCandidates);
+      console.log(`[Frenchstream] API fallback candidates: ${fallbackCandidates.length}, returned: ${fallbackStreams.length}`);
+      return fallbackStreams;
     }
     console.log(`[Frenchstream] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
-    const candidates = mediaType === "movie" ? collectMovieCandidates(yield fetchJson(`${BASE_URL}/engine/ajax/film_api.php?id=${match.newsId}`)) : collectEpisodeCandidates(yield fetchJson(`${BASE_URL}/ep-data.php?id=${match.newsId}`), episode);
+    const sourceBase = match.baseUrl || BASE_URL;
+    const candidates = mediaType === "movie" ? collectMovieCandidates(yield fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase })) : collectEpisodeCandidates(yield fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode);
     if (candidates.length === 0) return [];
     const streams = yield resolveCandidates(candidates);
     console.log(`[Frenchstream] Candidates: ${candidates.length}, Returned: ${streams.length}`);
