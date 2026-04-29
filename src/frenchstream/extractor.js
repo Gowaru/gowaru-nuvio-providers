@@ -7,6 +7,11 @@ import { fetchText, fetchJson, BASE_URL } from './http.js';
 import { resolveStream } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
+const SEARCH_STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'from', 'des', 'les', 'une', 'dans', 'sur', 'via', 'de', 'du', 'la', 'le'
+]);
+const MIN_MATCH_SCORE = 40;
+
 function normalize(text) {
     return (text || '')
         .toLowerCase()
@@ -15,6 +20,14 @@ function normalize(text) {
         .replace(/[^a-z0-9\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function getOrigin(url) {
+    try {
+        return new URL(url).origin;
+    } catch (e) {
+        return BASE_URL;
+    }
 }
 
 function pickNewsId(onclick, href) {
@@ -57,33 +70,62 @@ function parseSearchCards(html) {
     return cards;
 }
 
-function scoreCard(card, queryTitle) {
+function scoreCard(card, queryTitle, mediaType, season) {
     const q = normalize(queryTitle);
     const t = normalize(card.title);
+    const hrefN = normalize(card.href || '');
+    const hay = `${t} ${hrefN}`.trim();
     if (!q || !t) return 0;
-    if (t === q) return 100;
-    if (t.includes(q)) return 70;
-    if (q.includes(t)) return 50;
 
-    const qWords = new Set(q.split(' ').filter(Boolean));
-    const tWords = new Set(t.split(' ').filter(Boolean));
+    let score = 0;
+    if (t === q) score += 120;
+    if (hay.includes(q)) score += 70;
+    if (q.includes(t)) score += 40;
+
+    const qWords = new Set(q.split(' ').filter((w) => w && w.length > 2 && !SEARCH_STOPWORDS.has(w)));
+    const tWords = new Set(hay.split(' ').filter(Boolean));
     let common = 0;
     for (const w of qWords) {
         if (tWords.has(w)) common += 1;
     }
-    return common * 8;
+    score += common * 8;
+
+    if (mediaType === 'movie' && card.isSeries) score -= 50;
+    if (mediaType === 'tv' && !card.isSeries) score -= 30;
+
+    const seasonNum = Number(season) || 1;
+    const text = `${card.title} ${card.href}`.toLowerCase();
+    const hasSeasonMention = /saison\s*\d+|s-tv\//i.test(text);
+
+    if (mediaType === 'tv') {
+        if (seasonNum > 1) {
+            const seasonRegex = new RegExp(`saison\\s*${seasonNum}|[-_/]${seasonNum}(?:[^0-9]|$)`, 'i');
+            if (seasonRegex.test(text)) score += 20;
+            if (hasSeasonMention && !seasonRegex.test(text)) score -= 25;
+        } else if (seasonNum === 1 && /saison\s*[2-9]/i.test(text)) {
+            score -= 25;
+        }
+    }
+
+    return score;
 }
 
-async function searchByTitle(title, mediaType) {
+async function searchByTitle(title, mediaType, season) {
     const url = `${BASE_URL}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
     const html = await fetchText(url);
     let cards = parseSearchCards(html);
 
     cards = cards.filter((card) => (mediaType === 'tv' ? card.isSeries : !card.isSeries));
-    if (cards.length === 0) return null;
+    if (cards.length === 0) return [];
 
-    cards.sort((a, b) => scoreCard(b, title) - scoreCard(a, title));
-    return cards[0];
+    return cards
+        .map((card) => ({
+            ...card,
+            _score: scoreCard(card, title, mediaType, season),
+            _matchedTitle: title
+        }))
+        .sort((a, b) => b._score - a._score)
+        .slice(0, 5);
 }
 
 function hostLabel(hostKey) {
@@ -107,14 +149,16 @@ function languageLabel(languageKey) {
 }
 
 function toStream(name, host, language, url) {
+    const origin = getOrigin(url);
     return {
         name,
         title: `[${languageLabel(language)}] ${hostLabel(host)}`,
         url,
         quality: 'HD',
         headers: {
-            Referer: `${BASE_URL}/`,
-            Origin: BASE_URL
+            Referer: `${origin}/`,
+            Origin: origin,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
         }
     };
 }
@@ -136,11 +180,14 @@ function collectMovieCandidates(apiData) {
 }
 
 function collectEpisodeCandidates(apiData, episode) {
-    const episodeKey = String(Number(episode) || 1);
+    const episodeNum = Number(episode) || 1;
     const streams = [];
 
     for (const language of ['vf', 'vostfr', 'vo']) {
         const byEpisode = apiData?.[language];
+        if (!byEpisode || typeof byEpisode !== 'object') continue;
+
+        const episodeKey = Object.keys(byEpisode).find((k) => Number(k) === episodeNum) || String(episodeNum);
         const hosts = byEpisode?.[episodeKey];
         if (!hosts || typeof hosts !== 'object') continue;
 
@@ -175,30 +222,35 @@ async function resolveCandidates(candidates) {
     }
 
     const uniqueDirect = dedupeByUrl(direct);
-    if (uniqueDirect.length > 0) return uniqueDirect;
-
-    // Fallback: keep embed URLs for external player mode.
-    return dedupeByUrl(candidates);
+    // ExoPlayer crashes on unresolved embed URLs; keep only direct links.
+    return uniqueDirect;
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
 
+    const searchTitles = titles.slice(0, 6);
+
     let match = null;
-    for (const title of titles) {
+    let bestScore = -Infinity;
+    for (const title of searchTitles) {
         try {
-            match = await searchByTitle(title, mediaType);
-            if (match) {
-                console.log(`[Frenchstream] Match: ${match.title} (${match.newsId})`);
-                break;
+            const ranked = await searchByTitle(title, mediaType, season);
+            if (ranked.length > 0 && ranked[0]._score > bestScore) {
+                bestScore = ranked[0]._score;
+                match = ranked[0];
             }
         } catch (e) {
             console.warn(`[Frenchstream] Search failed for "${title}": ${e.message}`);
         }
     }
 
-    if (!match) return [];
+    if (!match || bestScore < MIN_MATCH_SCORE) {
+        console.warn(`[Frenchstream] No confident match for tmdb=${tmdbId} (bestScore=${bestScore})`);
+        return [];
+    }
+    console.log(`[Frenchstream] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
 
     const candidates = mediaType === 'movie'
         ? collectMovieCandidates(await fetchJson(`${BASE_URL}/engine/ajax/film_api.php?id=${match.newsId}`))

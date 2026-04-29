@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.47-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.1.48-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -36,7 +36,7 @@ This bundle integrates 11 pillars of the French streaming scene:
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
 | **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ❌  |
-| **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | 🔗 |
+| **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | ⚠️ |
 | **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
@@ -44,7 +44,6 @@ This bundle integrates 11 pillars of the French streaming scene:
 **⚠️ Provider Status Legend:**
 - ✅ = Fully functional
 - ⚠️ = Operational but with known issues/limitations  
-- 🔗 = **Movix: Limited availability** (requires JavaScript execution - see [MOVIX_TECHNICAL_LIMITATION.md](MOVIX_TECHNICAL_LIMITATION.md))
 - ❌ = Offline/Unavailable
 
 ---
@@ -53,6 +52,7 @@ This bundle integrates 11 pillars of the French streaming scene:
 
 - **Universal Resolver**: Includes an automatic resolution engine for popular hosts (**Sibnet, Vidmoly, Uqload, Voe, Sendvid, VidCDN...**). No more `ExoPlaybackException` errors!
 - **Fake-Direct Filtering**: Rejects sample links such as Big Buck Bunny and other known test URLs before they reach the player.
+- **Direct-Only Playback Safety**: Stream output keeps strict direct-link filtering (`.m3u8`, `.mp4`, etc.) to reduce ExoPlayer HTTP/playback errors.
 - **Mobile Optimized**: "Embed" (HTML) links are transformed into direct video links (`.mp4`, `.m3u8`) for native compatibility with Android/iOS players.
 - **ESM -> CJS Transpilation & Minification**: Modern source code (ES6+) automatically converted, optimized and minified for the **Hermes** JavaScript engine.
 - **Security Check**: Regular dependency audits to ensure vulnerability-free code.
@@ -99,17 +99,6 @@ nuvio-providers/
 - Import `resolveStream` from `../utils/resolvers.js` to process your final URLs.
 - Always use `fetchText` or `fetchJson` wrappers located in standard `http.js` utilities to inject correct headers and avoid Cloudflare blocks.
 - Prefer `fetch` (Hermes compatible) over heavy external libraries.
-
-### Known Limitations
-
-**Movix Provider**: Limited availability due to architectural constraints
-- **Issue**: Movix API returns embed URLs that require client-side JavaScript execution to generate playable streams
-- **Why**: Hosts like Lulustream, FileMoon, and Veev use packed/obfuscated JavaScript to dynamically generate m3u8 URLs
-- **Why Unfixable**: Hermes JavaScript engine does not support JS execution in plugins, and Nuvio doesn't provide WebView support
-- **Impact**: Most Movix titles return 0 playable streams despite API availability
-- **Details**: See [MOVIX_TECHNICAL_LIMITATION.md](MOVIX_TECHNICAL_LIMITATION.md) for full analysis
-
-**Recommendation**: Use other providers (Anime-Sama, VoirAnime, Vostfree) for better coverage. Movix can be disabled in settings if desired.
 
 ---
 
