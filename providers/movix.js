@@ -1,6 +1,6 @@
 /**
  * movix - Built from src/movix/
- * Generated: 2026-04-29T19:40:24.692Z
+ * Generated: 2026-04-29T20:04:10.200Z
  */
 var __create = Object.create;
 var __defProp = Object.defineProperty;

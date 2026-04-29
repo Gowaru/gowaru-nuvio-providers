@@ -1,6 +1,6 @@
 /**
  * french-anime - Built from src/french-anime/
- * Generated: 2026-04-29T19:40:24.666Z
+ * Generated: 2026-04-29T20:04:10.176Z
  */
 var __create = Object.create;
 var __defProp = Object.defineProperty;

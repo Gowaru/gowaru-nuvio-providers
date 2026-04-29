@@ -1,6 +1,6 @@
 /**
  * sekai - Built from src/sekai/
- * Generated: 2026-04-29T19:40:24.702Z
+ * Generated: 2026-04-29T20:04:10.209Z
  */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -60,7 +60,7 @@ var __async = (__this, __arguments, generator) => {
 // src/sekai/index.js
 var index_exports = {};
 __export(index_exports, {
-  provider: () => provider
+  getStreams: () => getStreams
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -596,11 +596,3 @@ function getStreams(tmdbId, mediaType, season, episode) {
     }
   });
 }
-var provider = {
-  id: "sekai",
-  name: "Sekai",
-  description: "Provider for Sekai (Animes VOSTFR/VF)",
-  language: "fr",
-  types: ["tv", "movie"],
-  getStreams
-};
