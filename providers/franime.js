@@ -1,6 +1,6 @@
 /**
  * franime - Built from src/franime/
- * Generated: 2026-04-29T17:16:43.301Z
+ * Generated: 2026-04-29T19:40:24.657Z
  */
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -74,13 +74,15 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
-// src/franime/extractor.js
-var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
-
 // src/utils/resolvers.js
 var HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 };
+function isKnownFakeDirectUrl(url) {
+  if (!url || typeof url !== "string") return true;
+  const u = url.toLowerCase();
+  return u.includes("test-videos.co.uk") || u.includes("big_buck_bunny") || u.includes("bigbuckbunny") || u.includes("sample-videos.com") || u.includes("example.com") || u.includes("localhost");
+}
 var STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
 var DEFAULT_QUALITY_TIER = 360;
 function nearestQualityTier(height) {
@@ -201,7 +203,9 @@ function expandStreamQualities(streams) {
     const deduped = [];
     const seen = /* @__PURE__ */ new Set();
     for (const stream of expanded) {
-      if (!(stream == null ? void 0 : stream.url) || seen.has(stream.url)) continue;
+      if (!(stream == null ? void 0 : stream.url)) continue;
+      if (isKnownFakeDirectUrl(stream.url)) continue;
+      if (seen.has(stream.url)) continue;
       seen.add(stream.url);
       deduped.push(stream);
     }
@@ -222,11 +226,25 @@ function safeFetch(_0) {
         signal: controller ? controller.signal : void 0
       }));
       if (timeout) clearTimeout(timeout);
-      if (!response.ok) return null;
-      const html = yield response.text();
+      if (!response) return null;
+      const status = response.status;
+      let bodyText = "";
+      try {
+        bodyText = yield response.text();
+      } catch (e) {
+        bodyText = "";
+      }
       return {
-        text: () => Promise.resolve(html),
-        ok: true,
+        text: () => Promise.resolve(bodyText),
+        json: () => __async(null, null, function* () {
+          try {
+            return JSON.parse(bodyText);
+          } catch (e) {
+            throw e;
+          }
+        }),
+        ok: response.ok,
+        status,
         url: response.url,
         headers: response.headers
       };
@@ -238,6 +256,7 @@ function safeFetch(_0) {
 }
 
 // src/franime/extractor.js
+var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
 function extractStreams(tmdbId, mediaType, season, episode) {
   return __async(this, null, function* () {
     console.warn(`[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes.`);

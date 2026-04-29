@@ -2,6 +2,8 @@
  * HTTP Utilities for Frenchstream
  */
 
+import { safeFetch } from '../utils/resolvers.js';
+
 export const BASE_URLS = ['https://french-stream.one', 'https://fs03.lol'];
 export const BASE_URL = BASE_URLS[0];
 
@@ -33,16 +35,13 @@ export async function fetchText(url, options = {}) {
     };
 
     const { baseUrl, headers, ...restOptions } = options;
-    const response = await fetch(url, {
-        headers: mergedHeaders,
-        ...restOptions
-    });
-
-    if (!response.ok) {
-        throw new Error(`HTTP error ${response.status} for ${url}`);
+    const res = await safeFetch(url, { headers: mergedHeaders, ...restOptions });
+    if (!res || !res.ok) {
+        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        throw new Error(`HTTP error ${status} for ${url}`);
     }
 
-    return await response.text();
+    return await res.text();
 }
 
 export async function fetchJson(url, options = {}) {

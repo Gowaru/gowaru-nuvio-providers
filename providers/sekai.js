@@ -1,6 +1,6 @@
 /**
  * sekai - Built from src/sekai/
- * Generated: 2026-04-29T17:16:43.338Z
+ * Generated: 2026-04-29T19:40:24.702Z
  */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -64,8 +64,189 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
-// src/sekai/http.js
+// src/utils/resolvers.js
 var HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+};
+function isKnownFakeDirectUrl(url) {
+  if (!url || typeof url !== "string") return true;
+  const u = url.toLowerCase();
+  return u.includes("test-videos.co.uk") || u.includes("big_buck_bunny") || u.includes("bigbuckbunny") || u.includes("sample-videos.com") || u.includes("example.com") || u.includes("localhost");
+}
+var STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
+var DEFAULT_QUALITY_TIER = 360;
+function nearestQualityTier(height) {
+  if (!Number.isFinite(height) || height <= 0) return DEFAULT_QUALITY_TIER;
+  let nearest = STRICT_QUALITY_TIERS[0];
+  let minDiff = Math.abs(height - nearest);
+  for (const tier of STRICT_QUALITY_TIERS) {
+    const diff = Math.abs(height - tier);
+    if (diff < minDiff) {
+      minDiff = diff;
+      nearest = tier;
+    }
+  }
+  return nearest;
+}
+function normalizeQualityLabel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return `${DEFAULT_QUALITY_TIER}p`;
+  if (raw === "4k" || raw === "uhd" || raw.includes("2160")) return "2160p";
+  if (raw.includes("fhd") || raw.includes("fullhd") || raw.includes("1080")) return "1080p";
+  if (raw.includes("hd") || raw.includes("720")) return "720p";
+  const numericMatch = raw.match(/(\d{3,4})\s*p?/i);
+  if (numericMatch) {
+    const tier = nearestQualityTier(Number(numericMatch[1]));
+    return `${tier}p`;
+  }
+  return `${DEFAULT_QUALITY_TIER}p`;
+}
+function qualityRank(value) {
+  const q = normalizeQualityLabel(value).toLowerCase();
+  const match = q.match(/(\d{3,4})p/);
+  const height = match ? Number(match[1]) : DEFAULT_QUALITY_TIER;
+  const tier = nearestQualityTier(height);
+  return STRICT_QUALITY_TIERS.length - 1 - STRICT_QUALITY_TIERS.indexOf(tier);
+}
+function appendQualityToTitle(title, quality) {
+  const q = normalizeQualityLabel(quality);
+  if (!q) return title;
+  if ((title || "").includes(q)) return title;
+  return `${title} [${q}]`;
+}
+function expandSingleStreamQualities(stream) {
+  return __async(this, null, function* () {
+    var _a, _b, _c;
+    if (!stream || !stream.url || typeof stream.url !== "string") return [];
+    const url = stream.url;
+    const lower = url.toLowerCase();
+    if (!lower.includes(".m3u8") && !lower.includes("/hls/")) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const res = yield safeFetch(url, { headers: stream.headers || {} });
+    if (!res) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const manifest = yield res.text();
+    if (!/#EXT-X-STREAM-INF/i.test(manifest)) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const lines = manifest.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const variants = [];
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
+      if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+      const nextLine = lines[index + 1];
+      if (!nextLine || nextLine.startsWith("#")) continue;
+      const resolution = (_a = line.match(/RESOLUTION=\d+x(\d+)/i)) == null ? void 0 : _a[1];
+      const frameRate = (_b = line.match(/FRAME-RATE=([0-9.]+)/i)) == null ? void 0 : _b[1];
+      const bandwidth = (_c = line.match(/BANDWIDTH=(\d+)/i)) == null ? void 0 : _c[1];
+      let quality = resolution ? `${resolution}p` : null;
+      if (!quality && bandwidth) {
+        const bw = Number(bandwidth);
+        if (bw >= 8e6) quality = "2160p";
+        else if (bw >= 4e6) quality = "1080p";
+        else if (bw >= 2e6) quality = "720p";
+        else if (bw >= 1e6) quality = "480p";
+        else quality = "360p";
+      }
+      if (!quality && frameRate) quality = `${normalizeQualityLabel(stream.quality || "HD")}`;
+      let variantUrl = nextLine;
+      try {
+        variantUrl = new URL(nextLine, url).toString();
+      } catch (e) {
+      }
+      variants.push(__spreadProps(__spreadValues({}, stream), {
+        url: variantUrl,
+        quality: normalizeQualityLabel(quality || stream.quality || "HD"),
+        title: appendQualityToTitle(stream.title || stream.name || "Stream", quality || stream.quality || "HD")
+      }));
+    }
+    if (variants.length === 0) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const unique = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const variant of variants) {
+      if (seen.has(variant.url)) continue;
+      seen.add(variant.url);
+      unique.push(variant);
+    }
+    unique.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+    return unique;
+  });
+}
+function expandStreamQualities(streams) {
+  return __async(this, null, function* () {
+    const input = Array.isArray(streams) ? streams : [];
+    const expanded = [];
+    for (const stream of input) {
+      try {
+        const variants = yield expandSingleStreamQualities(stream);
+        for (const variant of variants) {
+          expanded.push(variant);
+        }
+      } catch (e) {
+        if (stream) expanded.push(__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") }));
+      }
+    }
+    const deduped = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const stream of expanded) {
+      if (!(stream == null ? void 0 : stream.url)) continue;
+      if (isKnownFakeDirectUrl(stream.url)) continue;
+      if (seen.has(stream.url)) continue;
+      seen.add(stream.url);
+      deduped.push(stream);
+    }
+    deduped.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+    return deduped;
+  });
+}
+function safeFetch(_0) {
+  return __async(this, arguments, function* (url, options = {}) {
+    let controller, timeout;
+    try {
+      const canAbort = typeof AbortController !== "undefined";
+      controller = canAbort ? new AbortController() : null;
+      if (controller) timeout = setTimeout(() => controller.abort(), 1e4);
+      const response = yield fetch(url, __spreadProps(__spreadValues({}, options), {
+        headers: __spreadValues(__spreadValues({}, HEADERS), options.headers),
+        redirect: "follow",
+        signal: controller ? controller.signal : void 0
+      }));
+      if (timeout) clearTimeout(timeout);
+      if (!response) return null;
+      const status = response.status;
+      let bodyText = "";
+      try {
+        bodyText = yield response.text();
+      } catch (e) {
+        bodyText = "";
+      }
+      return {
+        text: () => Promise.resolve(bodyText),
+        json: () => __async(null, null, function* () {
+          try {
+            return JSON.parse(bodyText);
+          } catch (e) {
+            throw e;
+          }
+        }),
+        ok: response.ok,
+        status,
+        url: response.url,
+        headers: response.headers
+      };
+    } catch (e) {
+      if (timeout) clearTimeout(timeout);
+      return null;
+    }
+  });
+}
+
+// src/sekai/http.js
+var HEADERS2 = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
   "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
@@ -73,13 +254,12 @@ var HEADERS = {
 function fetchText(_0) {
   return __async(this, arguments, function* (url, options = {}) {
     console.log(`[Sekai] Fetching: ${url}`);
-    const response = yield fetch(url, __spreadValues({
-      headers: __spreadValues(__spreadValues({}, HEADERS), options.headers)
-    }, options));
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} for ${url}`);
+    const res = yield safeFetch(url, __spreadValues({ headers: __spreadValues(__spreadValues({}, HEADERS2), options.headers || {}) }, options));
+    if (!res || !res.ok) {
+      const status = res && typeof res.status === "number" ? res.status : "no-response";
+      throw new Error(`HTTP ${status} for ${url}`);
     }
-    return yield response.text();
+    return yield res.text();
   });
 }
 
@@ -87,16 +267,10 @@ function fetchText(_0) {
 var CINEMATA_API = "https://v3-cinemeta.strem.io";
 function syncFetch(_0) {
   return __async(this, arguments, function* (url, options = {}) {
-    let timeout = null;
     try {
-      const canAbort = typeof AbortController !== "undefined";
-      const controller = canAbort ? new AbortController() : null;
-      if (controller) timeout = setTimeout(() => controller.abort(), 8e3);
-      const res = yield fetch(url, __spreadProps(__spreadValues({}, options), { signal: controller ? controller.signal : void 0 }));
-      if (timeout) clearTimeout(timeout);
+      const res = yield safeFetch(url, options);
       return res;
     } catch (e) {
-      if (timeout) clearTimeout(timeout);
       console.error(`[ArmSync] Fetch failed: ${url}`, e.message);
       return null;
     }
@@ -133,29 +307,6 @@ function getAbsoluteEpisode(imdbId, season, episode) {
 // src/utils/metadata.js
 var TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
 var TMDB_API_BASE = "https://api.themoviedb.org/3";
-function safeFetch(url) {
-  return __async(this, null, function* () {
-    let timeout = null;
-    try {
-      const canAbort = typeof AbortController !== "undefined";
-      const controller = canAbort ? new AbortController() : null;
-      if (controller) timeout = setTimeout(() => controller.abort(), 8e3);
-      const res = yield fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Accept": "application/json"
-        },
-        signal: controller ? controller.signal : void 0
-      });
-      if (timeout) clearTimeout(timeout);
-      if (!res.ok) return null;
-      return res;
-    } catch (e) {
-      if (timeout) clearTimeout(timeout);
-      return null;
-    }
-  });
-}
 function getTmdbTitles(tmdbId, mediaType) {
   return __async(this, null, function* () {
     var _a, _b, _c, _d, _e, _f;
@@ -430,166 +581,6 @@ function formatStreams(epSources) {
     });
   }
   return streams;
-}
-
-// src/utils/resolvers.js
-var HEADERS2 = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-};
-var STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
-var DEFAULT_QUALITY_TIER = 360;
-function nearestQualityTier(height) {
-  if (!Number.isFinite(height) || height <= 0) return DEFAULT_QUALITY_TIER;
-  let nearest = STRICT_QUALITY_TIERS[0];
-  let minDiff = Math.abs(height - nearest);
-  for (const tier of STRICT_QUALITY_TIERS) {
-    const diff = Math.abs(height - tier);
-    if (diff < minDiff) {
-      minDiff = diff;
-      nearest = tier;
-    }
-  }
-  return nearest;
-}
-function normalizeQualityLabel(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (!raw) return `${DEFAULT_QUALITY_TIER}p`;
-  if (raw === "4k" || raw === "uhd" || raw.includes("2160")) return "2160p";
-  if (raw.includes("fhd") || raw.includes("fullhd") || raw.includes("1080")) return "1080p";
-  if (raw.includes("hd") || raw.includes("720")) return "720p";
-  const numericMatch = raw.match(/(\d{3,4})\s*p?/i);
-  if (numericMatch) {
-    const tier = nearestQualityTier(Number(numericMatch[1]));
-    return `${tier}p`;
-  }
-  return `${DEFAULT_QUALITY_TIER}p`;
-}
-function qualityRank(value) {
-  const q = normalizeQualityLabel(value).toLowerCase();
-  const match = q.match(/(\d{3,4})p/);
-  const height = match ? Number(match[1]) : DEFAULT_QUALITY_TIER;
-  const tier = nearestQualityTier(height);
-  return STRICT_QUALITY_TIERS.length - 1 - STRICT_QUALITY_TIERS.indexOf(tier);
-}
-function appendQualityToTitle(title, quality) {
-  const q = normalizeQualityLabel(quality);
-  if (!q) return title;
-  if ((title || "").includes(q)) return title;
-  return `${title} [${q}]`;
-}
-function expandSingleStreamQualities(stream) {
-  return __async(this, null, function* () {
-    var _a, _b, _c;
-    if (!stream || !stream.url || typeof stream.url !== "string") return [];
-    const url = stream.url;
-    const lower = url.toLowerCase();
-    if (!lower.includes(".m3u8") && !lower.includes("/hls/")) {
-      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
-    }
-    const res = yield safeFetch2(url, { headers: stream.headers || {} });
-    if (!res) {
-      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
-    }
-    const manifest = yield res.text();
-    if (!/#EXT-X-STREAM-INF/i.test(manifest)) {
-      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
-    }
-    const lines = manifest.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const variants = [];
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index];
-      if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
-      const nextLine = lines[index + 1];
-      if (!nextLine || nextLine.startsWith("#")) continue;
-      const resolution = (_a = line.match(/RESOLUTION=\d+x(\d+)/i)) == null ? void 0 : _a[1];
-      const frameRate = (_b = line.match(/FRAME-RATE=([0-9.]+)/i)) == null ? void 0 : _b[1];
-      const bandwidth = (_c = line.match(/BANDWIDTH=(\d+)/i)) == null ? void 0 : _c[1];
-      let quality = resolution ? `${resolution}p` : null;
-      if (!quality && bandwidth) {
-        const bw = Number(bandwidth);
-        if (bw >= 8e6) quality = "2160p";
-        else if (bw >= 4e6) quality = "1080p";
-        else if (bw >= 2e6) quality = "720p";
-        else if (bw >= 1e6) quality = "480p";
-        else quality = "360p";
-      }
-      if (!quality && frameRate) quality = `${normalizeQualityLabel(stream.quality || "HD")}`;
-      let variantUrl = nextLine;
-      try {
-        variantUrl = new URL(nextLine, url).toString();
-      } catch (e) {
-      }
-      variants.push(__spreadProps(__spreadValues({}, stream), {
-        url: variantUrl,
-        quality: normalizeQualityLabel(quality || stream.quality || "HD"),
-        title: appendQualityToTitle(stream.title || stream.name || "Stream", quality || stream.quality || "HD")
-      }));
-    }
-    if (variants.length === 0) {
-      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
-    }
-    const unique = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const variant of variants) {
-      if (seen.has(variant.url)) continue;
-      seen.add(variant.url);
-      unique.push(variant);
-    }
-    unique.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
-    return unique;
-  });
-}
-function expandStreamQualities(streams) {
-  return __async(this, null, function* () {
-    const input = Array.isArray(streams) ? streams : [];
-    const expanded = [];
-    for (const stream of input) {
-      try {
-        const variants = yield expandSingleStreamQualities(stream);
-        for (const variant of variants) {
-          expanded.push(variant);
-        }
-      } catch (e) {
-        if (stream) expanded.push(__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") }));
-      }
-    }
-    const deduped = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const stream of expanded) {
-      if (!(stream == null ? void 0 : stream.url) || seen.has(stream.url)) continue;
-      seen.add(stream.url);
-      deduped.push(stream);
-    }
-    deduped.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
-    return deduped;
-  });
-}
-function safeFetch2(_0) {
-  return __async(this, arguments, function* (url, options = {}) {
-    let controller, timeout;
-    try {
-      const canAbort = typeof AbortController !== "undefined";
-      controller = canAbort ? new AbortController() : null;
-      if (controller) timeout = setTimeout(() => controller.abort(), 1e4);
-      const response = yield fetch(url, __spreadProps(__spreadValues({}, options), {
-        headers: __spreadValues(__spreadValues({}, HEADERS2), options.headers),
-        redirect: "follow",
-        signal: controller ? controller.signal : void 0
-      }));
-      if (timeout) clearTimeout(timeout);
-      if (!response.ok) return null;
-      const html = yield response.text();
-      return {
-        text: () => Promise.resolve(html),
-        ok: true,
-        url: response.url,
-        headers: response.headers
-      };
-    } catch (e) {
-      if (timeout) clearTimeout(timeout);
-      return null;
-    }
-  });
 }
 
 // src/sekai/index.js

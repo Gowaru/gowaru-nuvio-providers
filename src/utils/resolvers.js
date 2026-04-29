@@ -174,7 +174,9 @@ export async function expandStreamQualities(streams) {
     const deduped = [];
     const seen = new Set();
     for (const stream of expanded) {
-        if (!stream?.url || seen.has(stream.url)) continue;
+        if (!stream?.url) continue;
+        if (isKnownFakeDirectUrl(stream.url)) continue;
+        if (seen.has(stream.url)) continue;
         seen.add(stream.url);
         deduped.push(stream);
     }
@@ -183,7 +185,7 @@ export async function expandStreamQualities(streams) {
     return deduped;
 }
 
-async function safeFetch(url, options = {}) {
+export async function safeFetch(url, options = {}) {
     let controller, timeout;
     try {
         const canAbort = typeof AbortController !== 'undefined';
@@ -196,17 +198,29 @@ async function safeFetch(url, options = {}) {
             signal: controller ? controller.signal : undefined
         });
         if (timeout) clearTimeout(timeout);
-        if (!response.ok) return null;
-        const html = await response.text();
-        return { 
-            text: () => Promise.resolve(html), 
-            ok: true, 
+        if (!response) return null;
+
+        const status = response.status;
+        let bodyText = '';
+        try {
+            bodyText = await response.text();
+        } catch (e) {
+            bodyText = '';
+        }
+
+        return {
+            text: () => Promise.resolve(bodyText),
+            json: async () => {
+                try { return JSON.parse(bodyText); } catch (e) { throw e; }
+            },
+            ok: response.ok,
+            status,
             url: response.url,
             headers: response.headers
         };
-    } catch (e) { 
+    } catch (e) {
         if (timeout) clearTimeout(timeout);
-        return null; 
+        return null;
     }
 }
 
@@ -403,13 +417,8 @@ export async function resolveUqload(url) {
                 const controller = canAbort ? new AbortController() : null;
                 const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null; // Fast fail 4s
                 
-                const res = await fetch(tryUrl, {
-                    headers: { ...HEADERS, 'Referer': baseRef },
-                    signal: controller ? controller.signal : undefined
-                });
-                if (timeoutId) clearTimeout(timeoutId);
-                
-                if (res && res.ok) {
+                const res = await safeFetch(tryUrl, { headers: { ...HEADERS, 'Referer': baseRef } });
+                if (res) {
                     const html = await res.text();
                     const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
                                   html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
@@ -536,11 +545,11 @@ export async function resolveDood(url) {
         let html = await res.text();
         if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
         const passMatch = html.match(/\$\.get\(['"]\/pass_md5\/([^'"]+)['"]/);
-        if (passMatch) {
+            if (passMatch) {
             const token = passMatch[1];
             const passUrl = `https://${domain}/pass_md5/${token}`;
-            const passRes = await fetch(passUrl, { headers: { "Referer": url } });
-            if (passRes.ok) {
+            const passRes = await safeFetch(passUrl, { headers: { "Referer": url } });
+            if (passRes && passRes.ok) {
                 const content = await passRes.text();
                 const randomStr = Math.random().toString(36).substring(2, 12);
                 return { 

@@ -2,6 +2,8 @@
  * HTTP Utilities for Anime-Sama
  */
 
+import { safeFetch } from '../utils/resolvers.js';
+
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -19,20 +21,12 @@ export const HEADERS = {
 
 export async function fetchText(url, options = {}) {
     console.log(`[Anime-Sama] Fetching: ${url}`);
-
-    const response = await fetch(url, {
-        headers: {
-            ...HEADERS,
-            ...options.headers
-        },
-        ...options
-    });
-
-    if (!response.ok) {
-        throw new Error(`HTTP error ${response.status} for ${url}`);
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    if (!res || !res.ok) {
+        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        throw new Error(`HTTP error ${status} for ${url}`);
     }
-
-    return await response.text();
+    return await res.text();
 }
 
 export async function fetchJson(url, options = {}) {

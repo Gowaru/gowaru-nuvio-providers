@@ -10,17 +10,13 @@ const CINEMATA_API = "https://v3-cinemeta.strem.io";
 /**
  * Fetch with timeout helper
  */
+import { safeFetch } from './resolvers.js';
+
 async function syncFetch(url, options = {}) {
-    let timeout = null;
     try {
-        const canAbort = typeof AbortController !== 'undefined';
-        const controller = canAbort ? new AbortController() : null;
-        if (controller) timeout = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch(url, { ...options, signal: controller ? controller.signal : undefined });
-        if (timeout) clearTimeout(timeout);
+        const res = await safeFetch(url, options);
         return res;
     } catch (e) {
-        if (timeout) clearTimeout(timeout);
         console.error(`[ArmSync] Fetch failed: ${url}`, e.message);
         return null;
     }

@@ -1,6 +1,6 @@
 /**
  * frenchstream - Built from src/frenchstream/
- * Generated: 2026-04-29T17:16:43.313Z
+ * Generated: 2026-04-29T19:40:24.675Z
  */
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -77,56 +77,8 @@ var __async = (__this, __arguments, generator) => {
 // src/frenchstream/extractor.js
 var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
 
-// src/frenchstream/http.js
-var BASE_URLS = ["https://french-stream.one", "https://fs03.lol"];
-var BASE_URL = BASE_URLS[0];
-var HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-  "Referer": `${BASE_URL}/`,
-  "Origin": BASE_URL,
-  "Connection": "keep-alive"
-};
-function originFromUrl(url) {
-  try {
-    return new URL(url).origin;
-  } catch (e) {
-    return BASE_URL;
-  }
-}
-function fetchText(_0) {
-  return __async(this, arguments, function* (url, options = {}) {
-    console.log(`[Frenchstream] Fetching: ${url}`);
-    const base = options.baseUrl || originFromUrl(url);
-    const mergedHeaders = __spreadValues(__spreadProps(__spreadValues({}, HEADERS), {
-      Referer: `${base}/`,
-      Origin: base
-    }), options.headers || {});
-    const _a = options, { baseUrl, headers } = _a, restOptions = __objRest(_a, ["baseUrl", "headers"]);
-    const response = yield fetch(url, __spreadValues({
-      headers: mergedHeaders
-    }, restOptions));
-    if (!response.ok) {
-      throw new Error(`HTTP error ${response.status} for ${url}`);
-    }
-    return yield response.text();
-  });
-}
-function fetchJson(_0) {
-  return __async(this, arguments, function* (url, options = {}) {
-    const text = yield fetchText(url, options);
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      console.error(`[Frenchstream] Failed to parse JSON for ${url}`);
-      throw e;
-    }
-  });
-}
-
 // src/utils/resolvers.js
-var HEADERS2 = {
+var HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 };
 var _atob = (str) => {
@@ -268,7 +220,9 @@ function expandStreamQualities(streams) {
     const deduped = [];
     const seen = /* @__PURE__ */ new Set();
     for (const stream of expanded) {
-      if (!(stream == null ? void 0 : stream.url) || seen.has(stream.url)) continue;
+      if (!(stream == null ? void 0 : stream.url)) continue;
+      if (isKnownFakeDirectUrl(stream.url)) continue;
+      if (seen.has(stream.url)) continue;
       seen.add(stream.url);
       deduped.push(stream);
     }
@@ -284,16 +238,30 @@ function safeFetch(_0) {
       controller = canAbort ? new AbortController() : null;
       if (controller) timeout = setTimeout(() => controller.abort(), 1e4);
       const response = yield fetch(url, __spreadProps(__spreadValues({}, options), {
-        headers: __spreadValues(__spreadValues({}, HEADERS2), options.headers),
+        headers: __spreadValues(__spreadValues({}, HEADERS), options.headers),
         redirect: "follow",
         signal: controller ? controller.signal : void 0
       }));
       if (timeout) clearTimeout(timeout);
-      if (!response.ok) return null;
-      const html = yield response.text();
+      if (!response) return null;
+      const status = response.status;
+      let bodyText = "";
+      try {
+        bodyText = yield response.text();
+      } catch (e) {
+        bodyText = "";
+      }
       return {
-        text: () => Promise.resolve(html),
-        ok: true,
+        text: () => Promise.resolve(bodyText),
+        json: () => __async(null, null, function* () {
+          try {
+            return JSON.parse(bodyText);
+          } catch (e) {
+            throw e;
+          }
+        }),
+        ok: response.ok,
+        status,
         url: response.url,
         headers: response.headers
       };
@@ -475,12 +443,8 @@ function resolveUqload(url) {
           const canAbort = typeof AbortController !== "undefined";
           const controller = canAbort ? new AbortController() : null;
           const timeoutId = controller ? setTimeout(() => controller.abort(), 4e3) : null;
-          const res = yield fetch(tryUrl, {
-            headers: __spreadProps(__spreadValues({}, HEADERS2), { "Referer": baseRef }),
-            signal: controller ? controller.signal : void 0
-          });
-          if (timeoutId) clearTimeout(timeoutId);
-          if (res && res.ok) {
+          const res = yield safeFetch(tryUrl, { headers: __spreadProps(__spreadValues({}, HEADERS), { "Referer": baseRef }) });
+          if (res) {
             const html = yield res.text();
             const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
             if (match && !resolved) {
@@ -608,8 +572,8 @@ function resolveDood(url) {
       if (passMatch) {
         const token = passMatch[1];
         const passUrl = `https://${domain}/pass_md5/${token}`;
-        const passRes = yield fetch(passUrl, { headers: { "Referer": url } });
-        if (passRes.ok) {
+        const passRes = yield safeFetch(passUrl, { headers: { "Referer": url } });
+        if (passRes && passRes.ok) {
           const content = yield passRes.text();
           const randomStr = Math.random().toString(36).substring(2, 12);
           return {
@@ -758,32 +722,56 @@ function resolveStream(stream, depth = 0) {
 }
 var BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";
 
-// src/utils/metadata.js
-var TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
-var TMDB_API_BASE = "https://api.themoviedb.org/3";
-function safeFetch2(url) {
-  return __async(this, null, function* () {
-    let timeout = null;
+// src/frenchstream/http.js
+var BASE_URLS = ["https://french-stream.one", "https://fs03.lol"];
+var BASE_URL = BASE_URLS[0];
+var HEADERS2 = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Referer": `${BASE_URL}/`,
+  "Origin": BASE_URL,
+  "Connection": "keep-alive"
+};
+function originFromUrl(url) {
+  try {
+    return new URL(url).origin;
+  } catch (e) {
+    return BASE_URL;
+  }
+}
+function fetchText(_0) {
+  return __async(this, arguments, function* (url, options = {}) {
+    console.log(`[Frenchstream] Fetching: ${url}`);
+    const base = options.baseUrl || originFromUrl(url);
+    const mergedHeaders = __spreadValues(__spreadProps(__spreadValues({}, HEADERS2), {
+      Referer: `${base}/`,
+      Origin: base
+    }), options.headers || {});
+    const _a = options, { baseUrl, headers } = _a, restOptions = __objRest(_a, ["baseUrl", "headers"]);
+    const res = yield safeFetch(url, __spreadValues({ headers: mergedHeaders }, restOptions));
+    if (!res || !res.ok) {
+      const status = res && typeof res.status === "number" ? res.status : "no-response";
+      throw new Error(`HTTP error ${status} for ${url}`);
+    }
+    return yield res.text();
+  });
+}
+function fetchJson(_0) {
+  return __async(this, arguments, function* (url, options = {}) {
+    const text = yield fetchText(url, options);
     try {
-      const canAbort = typeof AbortController !== "undefined";
-      const controller = canAbort ? new AbortController() : null;
-      if (controller) timeout = setTimeout(() => controller.abort(), 8e3);
-      const res = yield fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Accept": "application/json"
-        },
-        signal: controller ? controller.signal : void 0
-      });
-      if (timeout) clearTimeout(timeout);
-      if (!res.ok) return null;
-      return res;
+      return JSON.parse(text);
     } catch (e) {
-      if (timeout) clearTimeout(timeout);
-      return null;
+      console.error(`[Frenchstream] Failed to parse JSON for ${url}`);
+      throw e;
     }
   });
 }
+
+// src/utils/metadata.js
+var TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
+var TMDB_API_BASE = "https://api.themoviedb.org/3";
 function getTmdbTitles(tmdbId, mediaType) {
   return __async(this, null, function* () {
     var _a, _b, _c, _d, _e, _f;
@@ -791,7 +779,7 @@ function getTmdbTitles(tmdbId, mediaType) {
     const titles = [];
     try {
       const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
-      const mainRes = yield safeFetch2(mainUrl);
+      const mainRes = yield safeFetch(mainUrl);
       if (mainRes) {
         const data = yield mainRes.json();
         const titleEn = (_a = type === "movie" ? data.title : data.name) == null ? void 0 : _a.trim();
@@ -802,7 +790,7 @@ function getTmdbTitles(tmdbId, mediaType) {
         }
       }
       const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
-      const transRes = yield safeFetch2(transUrl);
+      const transRes = yield safeFetch(transUrl);
       if (transRes) {
         const transData = yield transRes.json();
         const frTrans = (transData.translations || []).find((t) => t.iso_639_1 === "fr");
@@ -812,7 +800,7 @@ function getTmdbTitles(tmdbId, mediaType) {
         }
       }
       const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
-      const altRes = yield safeFetch2(altUrl);
+      const altRes = yield safeFetch(altUrl);
       if (altRes) {
         const altData = yield altRes.json();
         const altList = type === "movie" ? altData.titles : altData.results;

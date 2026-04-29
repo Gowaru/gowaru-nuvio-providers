@@ -10,22 +10,17 @@ export const HEADERS = {
     "Connection": "keep-alive",
 };
 
+import { safeFetch } from '../utils/resolvers.js';
+
 /**
  * Fetch text content from a URL
  */
 export async function fetchText(url, options = {}) {
     console.log(`[French-Anime] Fetching: ${url}`);
-    const response = await fetch(url, {
-        headers: {
-            ...HEADERS,
-            ...options.headers
-        },
-        ...options
-    });
-
-    if (!response.ok) {
-        throw new Error(`HTTP error ${response.status} for ${url}`);
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    if (!res || !res.ok) {
+        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        throw new Error(`HTTP error ${status} for ${url}`);
     }
-
-    return await response.text();
+    return await res.text();
 }
