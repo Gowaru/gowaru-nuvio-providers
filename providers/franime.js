@@ -1,5 +1,5 @@
 /**
  * franime - Built from src/franime/
- * Generated: 2026-04-25T19:04:51.446Z
+ * Generated: 2026-04-29T10:01:52.632Z
  */
 var p=Object.create;var o=Object.defineProperty;var w=Object.getOwnPropertyDescriptor;var g=Object.getOwnPropertyNames;var y=Object.getPrototypeOf,v=Object.prototype.hasOwnProperty;var x=(e,t)=>{for(var s in t)o(e,s,{get:t[s],enumerable:!0})},u=(e,t,s,r)=>{if(t&&typeof t=="object"||typeof t=="function")for(let n of g(t))!v.call(e,n)&&n!==s&&o(e,n,{get:()=>t[n],enumerable:!(r=w(t,n))||r.enumerable});return e};var b=(e,t,s)=>(s=e!=null?p(y(e)):{},u(t||!e||!e.__esModule?o(s,"default",{value:e,enumerable:!0}):s,e)),R=e=>u(o({},"__esModule",{value:!0}),e);var a=(e,t,s)=>new Promise((r,n)=>{var d=i=>{try{c(s.next(i))}catch(l){n(l)}},h=i=>{try{c(s.throw(i))}catch(l){n(l)}},c=i=>i.done?r(i.value):Promise.resolve(i.value).then(d,h);c((s=s.apply(e,t)).next())});var k={};x(k,{getStreams:()=>S});module.exports=R(k);var $=b(require("cheerio-without-node-native"));function m(e,t,s,r){return a(this,null,function*(){return console.warn("[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes."),[]})}function S(e,t,s,r){return a(this,null,function*(){console.log(`[FRAnime] Request: ${t} ${e} S${s}E${r}`);try{return yield m(e,t,s,r)}catch(n){return console.error("[FRAnime] Error:",n),[]}})}
