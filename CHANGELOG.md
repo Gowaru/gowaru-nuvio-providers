@@ -1,4 +1,10 @@
 
+## [1.1.48] - 2026-04-29
+### Improved
+- **Movix**: Added pending-aware API retries for unstable sources (notably TV endpoints returning temporary `pending` responses).
+- **Movix**: Added fallback extraction via Frenchstream when Movix sources return no Exo-playable streams.
+- **Movix**: Kept strict direct-only validation (`.m3u8/.mp4/...`) and host-header normalization to reduce playback failures (`22004`) while improving availability.
+
 ## [1.1.47] - 2026-04-25
 ### Added
 - **Frenchstream**: Added a dedicated resolver path for `fsvid` and `vidzy`, with packed-script decoding to extract direct HLS links.

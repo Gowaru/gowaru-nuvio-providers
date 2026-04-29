@@ -1,7 +1,101 @@
 import { fetchJson } from './http.js';
 import { resolveStream } from '../utils/resolvers.js';
+import { getTmdbTitles } from '../utils/metadata.js';
+import { extractStreams as extractFrenchstreamStreams } from '../frenchstream/extractor.js';
 
 const API_BASE = 'https://api.movix.cash';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+const RETRY_DELAYS_MS = [0, 1400, 2600];
+
+function normalize(text) {
+    return (text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function originFromUrl(url) {
+    try {
+        return new URL(url).origin;
+    } catch (e) {
+        return 'https://movix.cash';
+    }
+}
+
+function directHeadersFor(url, headers = {}) {
+    const origin = originFromUrl(url);
+    const referer = headers.Referer || headers.referer;
+    const out = { ...headers };
+
+    if (!referer || referer.includes('movix.cash')) {
+        out.Referer = `${origin}/`;
+    }
+
+    if (!out.Origin || String(out.Origin).includes('movix.cash')) {
+        out.Origin = origin;
+    }
+
+    if (!out['User-Agent'] && !out['user-agent']) {
+        out['User-Agent'] = USER_AGENT;
+    }
+
+    return out;
+}
+
+async function validateDirectUrl(url, headers = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                ...directHeadersFor(url, headers),
+                Range: 'bytes=0-0'
+            },
+            redirect: 'follow',
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        return response.ok || response.status === 206;
+    } catch (e) {
+        clearTimeout(timeout);
+        return false;
+    }
+}
+
+function titleMatchesAny(candidateTitles, tmdbTitles) {
+    if (!Array.isArray(candidateTitles) || candidateTitles.length === 0) return true;
+    if (!Array.isArray(tmdbTitles) || tmdbTitles.length === 0) return true;
+
+    const cand = candidateTitles.map(normalize).filter(Boolean);
+    const ref = tmdbTitles.map(normalize).filter(Boolean);
+
+    return cand.some((c) => ref.some((t) => c === t || c.includes(t) || t.includes(c)));
+}
+
+function extractSourceTitles(data) {
+    const titles = [];
+    const push = (value) => {
+        if (typeof value !== 'string') return;
+        const v = value.trim();
+        if (v) titles.push(v);
+    };
+
+    push(data?.title);
+    push(data?.original_title);
+    push(data?.name_no_lang);
+    push(data?.tmdb?.title);
+    push(data?.tmdb?.original_title);
+    push(data?.tmdb?.name_no_lang);
+    push(data?.search?.bestMatch?.title);
+    push(data?.search?.bestMatch?.originalTitle);
+
+    return [...new Set(titles)];
+}
 
 function normalizeLangTag(lang) {
     const l = (lang || '').toLowerCase();
@@ -20,8 +114,9 @@ function pushStream(streams, provider, server, lang, url, quality) {
         url,
         quality: quality || 'HD',
         headers: {
-            Origin: 'https://movix.cash',
-            Referer: 'https://movix.cash/'
+            Origin: originFromUrl(url),
+            Referer: `${originFromUrl(url)}/`,
+            'User-Agent': USER_AGENT
         }
     });
 }
@@ -53,6 +148,30 @@ function isExoPlayableUrl(url) {
     return false;
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(job) {
+    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+        const delay = RETRY_DELAYS_MS[attempt];
+        if (delay > 0) await sleep(delay);
+
+        const data = await fetchJson(job.url);
+        if (!data) continue;
+
+        const pending = data.pending === true || /reessayez|reessay/i.test(String(data.message || ''));
+        if (pending && attempt < RETRY_DELAYS_MS.length - 1) {
+            console.log(`[Movix] ${job.label} pending (attempt ${attempt + 1}), retrying...`);
+            continue;
+        }
+
+        return data;
+    }
+
+    return null;
+}
+
 async function resolveForExo(stream) {
     // Try resolution with retries (up to 2 attempts for timeouts)
     let resolved = null;
@@ -77,11 +196,17 @@ async function resolveForExo(stream) {
 
     if (!resolved || !resolved.url) return null;
     if (!resolved.isDirect) return null; // Only accept truly direct links
+
+    const normalizedHeaders = directHeadersFor(resolved.url, resolved.headers || stream.headers);
+    if (!(await validateDirectUrl(resolved.url, normalizedHeaders))) return null;
     
     // Final validation: URL must look like a direct media link
     if (!isExoPlayableUrl(resolved.url)) return null;
-    
-    return resolved;
+
+    return {
+        ...resolved,
+        headers: normalizedHeaders
+    };
 }
 
 function collectFstreamMovie(streams, data) {
@@ -161,6 +286,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const isMovie = mediaType === 'movie';
     const seasonNum = Number(season) || 1;
     const episodeNum = Number(episode) || 1;
+    let tmdbTitles = [];
+
+    try {
+        tmdbTitles = await getTmdbTitles(tmdbId, mediaType);
+    } catch (e) {
+        console.log(`[Movix] Failed to load TMDB titles for ${tmdbId}: ${e.message}`);
+    }
 
     const jobs = isMovie
         ? [
@@ -200,12 +332,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const results = await Promise.allSettled(
         jobs.map(async (job) => {
-            const data = await fetchJson(job.url);
+            const data = await fetchWithRetry(job);
             if (!data) return;
             if (data.success === false) {
                 console.log(`[Movix] ${job.label} unavailable: ${data.error || 'unknown error'}`);
                 return;
             }
+
+            const sourceTitles = extractSourceTitles(data);
+            if (!titleMatchesAny(sourceTitles, tmdbTitles)) {
+                console.log(`[Movix] ${job.label} skipped: source title mismatch (${sourceTitles.join(' | ') || 'no title'})`);
+                return;
+            }
+
             job.collect(data);
         })
     );
@@ -233,6 +372,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (seenPlayable.has(r.value.url)) continue;
         seenPlayable.add(r.value.url);
         playable.push(r.value);
+    }
+
+    if (playable.length === 0) {
+        try {
+            console.log('[Movix] No playable stream from Movix API, trying Frenchstream fallback...');
+            const fallback = await extractFrenchstreamStreams(tmdbId, mediaType, seasonNum, episodeNum);
+            if (Array.isArray(fallback) && fallback.length > 0) {
+                for (const stream of fallback) {
+                    if (!stream?.url) continue;
+                    if (seenPlayable.has(stream.url)) continue;
+                    if (!isExoPlayableUrl(stream.url)) continue;
+                    seenPlayable.add(stream.url);
+                    playable.push(stream);
+                }
+            }
+        } catch (e) {
+            console.log(`[Movix] Frenchstream fallback failed: ${e.message}`);
+        }
     }
 
     console.log(`[Movix] Total streams found: ${unique.length}, Exo-playable: ${playable.length}`);
