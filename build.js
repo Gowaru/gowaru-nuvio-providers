@@ -62,7 +62,7 @@ async function buildProvider(providerName, minify = false) {
                 js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${new Date().toISOString()}\n */`
             },
             footer: {
-                js: `\nif (typeof module !== 'undefined' && module.exports) {\n    module.exports = __provider;\n}\nif (__provider && __provider.getStreams) {\n    if (typeof globalThis !== 'undefined') {\n        globalThis.getStreams = __provider.getStreams;\n    }\n    if (typeof global !== 'undefined') {\n        global.getStreams = __provider.getStreams;\n    }\n}`
+                js: `\nif (typeof module !== 'undefined' && module.exports) {\n    module.exports = __provider;\n}\nif (__provider && __provider.getStreams) {\n    if (typeof globalThis !== 'undefined') {\n        globalThis.getStreams = __provider.getStreams;\n    }\n    if (typeof global !== 'undefined') {\n        global.getStreams = __provider.getStreams;\n    }\n    if (typeof self !== 'undefined') {\n        self.getStreams = __provider.getStreams;\n    }\n}`
             },
             logLevel: 'warning'
         });
