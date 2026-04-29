@@ -1,5 +1,5 @@
 import { fetchJson } from './http.js';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, safeFetch } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { extractStreams as extractFrenchstreamStreams } from '../frenchstream/extractor.js';
 
@@ -47,23 +47,18 @@ function directHeadersFor(url, headers = {}) {
 }
 
 async function validateDirectUrl(url, headers = {}) {
-    const canAbort = typeof AbortController !== 'undefined';
-    const controller = canAbort ? new AbortController() : null;
-    const timeout = controller ? setTimeout(() => controller.abort(), 5000) : null;
     try {
-        const response = await fetch(url, {
+        const res = await safeFetch(url, {
             method: 'GET',
             headers: {
                 ...directHeadersFor(url, headers),
                 Range: 'bytes=0-0'
             },
-            redirect: 'follow',
-            signal: controller ? controller.signal : undefined
+            redirect: 'follow'
         });
-        if (timeout) clearTimeout(timeout);
-        return response.ok || response.status === 206;
+        if (!res) return false;
+        return res.status === 206 || (typeof res.status === 'number' && res.status >= 200 && res.status < 300);
     } catch (e) {
-        if (timeout) clearTimeout(timeout);
         return false;
     }
 }

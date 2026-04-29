@@ -6,27 +6,7 @@
 const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
 
-async function safeFetch(url) {
-    let timeout = null;
-    try {
-        const canAbort = typeof AbortController !== 'undefined';
-        const controller = canAbort ? new AbortController() : null;
-        if (controller) timeout = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch(url, {
-            headers: {
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json",
-            },
-            signal: controller ? controller.signal : undefined
-        });
-        if (timeout) clearTimeout(timeout);
-        if (!res.ok) return null;
-        return res;
-    } catch (e) {
-        if (timeout) clearTimeout(timeout);
-        return null;
-    }
-}
+import { safeFetch } from './resolvers.js';
 
 /**
  * Get multiple titles for an anime from TMDB ID.

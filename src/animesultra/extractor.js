@@ -1,6 +1,6 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, safeFetch } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -102,14 +102,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             const newsId = newsIdMatch[1];
             
             // Fetch episodes and servers from AJAX full-story
-            const res = await fetch(`${BASE_URL}/engine/ajax/full-story.php?newsId=${newsId}`, {
+            const sf = await safeFetch(`${BASE_URL}/engine/ajax/full-story.php?newsId=${newsId}`, {
                 headers: { 
                     "User-Agent": "Mozilla/5.0",
                     "X-Requested-With": "XMLHttpRequest"
                 }
             });
-            const d = await res.json();
-            const html = d.html;
+            if (!sf) continue;
+            let d = null;
+            try { d = await sf.json(); } catch (e) { d = null; }
+            const html = d && d.html ? d.html : null;
             
             if (!html) continue;
             
@@ -132,8 +134,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
             for (const epHref of epHrefs) {
                 // Fetch the specific episode page to see which servers belong to it
-                const epRes = await fetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
-                const epHtml = await epRes.text();
+                const epRes = await safeFetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
+                const epHtml = epRes ? await epRes.text() : '';
                 const $ep = cheerio.load(epHtml);
 
                 // Extract the server IDs

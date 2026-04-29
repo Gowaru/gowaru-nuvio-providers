@@ -1,6 +1,6 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, safeFetch } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -136,7 +136,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                             params.append('nume', server.nume);
                             params.append('type', server.type);
 
-                            const r = await fetch(`${BASE_URL}/wp-admin/admin-ajax.php`, {
+                            const sf = await safeFetch(`${BASE_URL}/wp-admin/admin-ajax.php`, {
                                 method: 'POST',
                                 body: params.toString(),
                                 headers: {
@@ -144,8 +144,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                                     'User-Agent': 'Mozilla/5.0'
                                 }
                             });
-                            
-                            const j = await r.json();
+                            if (!sf) continue;
+                            let j = null;
+                            try { j = await sf.json(); } catch (e) { j = null; }
                             if (j && j.embed_url) {
                                 // sometimes embedded in an iframe tag
                                 let url = j.embed_url;

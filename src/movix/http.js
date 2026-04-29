@@ -2,7 +2,7 @@
  * HTTP Utilities for Movix
  */
 
-const PROXY_URL = 'https://proxy.gowaru.app/';
+import { safeFetch } from '../utils/resolvers.js';
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -20,23 +20,18 @@ export async function fetchJson(url, options = {}) {
     console.log(`[Movix] Fetching: ${url}`);
 
     try {
-        const response = await fetch(url, {
-            headers: {
-                ...HEADERS,
-                ...options.headers
-            }
-        });
-
-        if (!response.ok) {
-            console.log(`[Movix] HTTP ${response.status} for ${url}`);
+        const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+        if (!res || !res.ok) {
+            const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+            console.log(`[Movix] HTTP ${status} for ${url}`);
             return null;
         }
 
-        const text = await response.text();
         try {
-            return JSON.parse(text);
+            return await res.json();
         } catch (e) {
-            console.log(`[Movix] JSON parse error for ${url}. Content length: ${text.length}`);
+            const txt = await res.text();
+            console.log(`[Movix] JSON parse error for ${url}. Content length: ${String(txt && txt.length)}`);
             return null;
         }
     } catch (e) {

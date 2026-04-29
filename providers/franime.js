@@ -1,5 +1,279 @@
 /**
  * franime - Built from src/franime/
- * Generated: 2026-04-29T17:24:43.782Z
+ * Generated: 2026-04-29T19:40:24.657Z
  */
-var C=Object.create;var g=Object.defineProperty,I=Object.defineProperties,N=Object.getOwnPropertyDescriptor,W=Object.getOwnPropertyDescriptors,H=Object.getOwnPropertyNames,q=Object.getOwnPropertySymbols,P=Object.getPrototypeOf,E=Object.prototype.hasOwnProperty,j=Object.prototype.propertyIsEnumerable;var k=(t,e,n)=>e in t?g(t,e,{enumerable:!0,configurable:!0,writable:!0,value:n}):t[e]=n,c=(t,e)=>{for(var n in e||(e={}))E.call(e,n)&&k(t,n,e[n]);if(q)for(var n of q(e))j.call(e,n)&&k(t,n,e[n]);return t},h=(t,e)=>I(t,W(e));var B=(t,e)=>{for(var n in e)g(t,n,{get:e[n],enumerable:!0})},M=(t,e,n,r)=>{if(e&&typeof e=="object"||typeof e=="function")for(let i of H(e))!E.call(t,i)&&i!==n&&g(t,i,{get:()=>e[i],enumerable:!(r=N(e,i))||r.enumerable});return t};var O=(t,e,n)=>(n=t!=null?C(P(t)):{},M(e||!t||!t.__esModule?g(n,"default",{value:t,enumerable:!0}):n,t)),z=t=>M(g({},"__esModule",{value:!0}),t);var d=(t,e,n)=>new Promise((r,i)=>{var s=u=>{try{l(n.next(u))}catch(p){i(p)}},a=u=>{try{l(n.throw(u))}catch(p){i(p)}},l=u=>u.done?r(u.value):Promise.resolve(u.value).then(s,a);l((n=n.apply(t,e)).next())});var Y={};B(Y,{getStreams:()=>V});module.exports=z(Y);var G=O(require("cheerio-without-node-native"));var Q={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"};var b=[2160,1080,720,480,360,240],x=360;function U(t){if(!Number.isFinite(t)||t<=0)return x;let e=b[0],n=Math.abs(t-e);for(let r of b){let i=Math.abs(t-r);i<n&&(n=i,e=r)}return e}function m(t){let e=String(t||"").trim().toLowerCase();if(!e)return`${x}p`;if(e==="4k"||e==="uhd"||e.includes("2160"))return"2160p";if(e.includes("fhd")||e.includes("fullhd")||e.includes("1080"))return"1080p";if(e.includes("hd")||e.includes("720"))return"720p";let n=e.match(/(\d{3,4})\s*p?/i);return n?`${U(Number(n[1]))}p`:`${x}p`}function A(t){let n=m(t).toLowerCase().match(/(\d{3,4})p/),r=n?Number(n[1]):x,i=U(r);return b.length-1-b.indexOf(i)}function K(t,e){let n=m(e);return!n||(t||"").includes(n)?t:`${t} [${n}]`}function J(t){return d(this,null,function*(){var p,R,$;if(!t||!t.url||typeof t.url!="string")return[];let e=t.url,n=e.toLowerCase();if(!n.includes(".m3u8")&&!n.includes("/hls/"))return[h(c({},t),{quality:m(t.quality||"HD")})];let r=yield X(e,{headers:t.headers||{}});if(!r)return[h(c({},t),{quality:m(t.quality||"HD")})];let i=yield r.text();if(!/#EXT-X-STREAM-INF/i.test(i))return[h(c({},t),{quality:m(t.quality||"HD")})];let s=i.split(/\r?\n/).map(o=>o.trim()).filter(Boolean),a=[];for(let o=0;o<s.length;o++){let w=s[o];if(!w.startsWith("#EXT-X-STREAM-INF:"))continue;let v=s[o+1];if(!v||v.startsWith("#"))continue;let S=(p=w.match(/RESOLUTION=\d+x(\d+)/i))==null?void 0:p[1],L=(R=w.match(/FRAME-RATE=([0-9.]+)/i))==null?void 0:R[1],T=($=w.match(/BANDWIDTH=(\d+)/i))==null?void 0:$[1],f=S?`${S}p`:null;if(!f&&T){let y=Number(T);y>=8e6?f="2160p":y>=4e6?f="1080p":y>=2e6?f="720p":y>=1e6?f="480p":f="360p"}!f&&L&&(f=`${m(t.quality||"HD")}`);let D=v;try{D=new URL(v,e).toString()}catch(y){}a.push(h(c({},t),{url:D,quality:m(f||t.quality||"HD"),title:K(t.title||t.name||"Stream",f||t.quality||"HD")}))}if(a.length===0)return[h(c({},t),{quality:m(t.quality||"HD")})];let l=[],u=new Set;for(let o of a)u.has(o.url)||(u.add(o.url),l.push(o));return l.sort((o,w)=>A(w.quality)-A(o.quality)),l})}function _(t){return d(this,null,function*(){let e=Array.isArray(t)?t:[],n=[];for(let s of e)try{let a=yield J(s);for(let l of a)n.push(l)}catch(a){s&&n.push(h(c({},s),{quality:m(s.quality||"HD")}))}let r=[],i=new Set;for(let s of n)!(s!=null&&s.url)||i.has(s.url)||(i.add(s.url),r.push(s));return r.sort((s,a)=>A(a.quality)-A(s.quality)),r})}function X(n){return d(this,arguments,function*(t,e={}){let r,i;try{r=typeof AbortController!="undefined"?new AbortController:null,r&&(i=setTimeout(()=>r.abort(),1e4));let a=yield fetch(t,h(c({},e),{headers:c(c({},Q),e.headers),redirect:"follow",signal:r?r.signal:void 0}));if(i&&clearTimeout(i),!a.ok)return null;let l=yield a.text();return{text:()=>Promise.resolve(l),ok:!0,url:a.url,headers:a.headers}}catch(s){return i&&clearTimeout(i),null}})}function F(t,e,n,r){return d(this,null,function*(){return console.warn("[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes."),[]})}function V(t,e,n,r){return d(this,null,function*(){console.log(`[FRAnime] Request: ${e} ${t} S${n}E${r}`);try{let i=yield F(t,e,n,r);return yield _(i)}catch(i){return console.error("[FRAnime] Error:",i),[]}})}
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __defProps = Object.defineProperties;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __propIsEnum = Object.prototype.propertyIsEnumerable;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __spreadValues = (a, b) => {
+  for (var prop in b || (b = {}))
+    if (__hasOwnProp.call(b, prop))
+      __defNormalProp(a, prop, b[prop]);
+  if (__getOwnPropSymbols)
+    for (var prop of __getOwnPropSymbols(b)) {
+      if (__propIsEnum.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    }
+  return a;
+};
+var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var __async = (__this, __arguments, generator) => {
+  return new Promise((resolve, reject) => {
+    var fulfilled = (value) => {
+      try {
+        step(generator.next(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var rejected = (value) => {
+      try {
+        step(generator.throw(value));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    var step = (x) => x.done ? resolve(x.value) : Promise.resolve(x.value).then(fulfilled, rejected);
+    step((generator = generator.apply(__this, __arguments)).next());
+  });
+};
+
+// src/franime/index.js
+var index_exports = {};
+__export(index_exports, {
+  getStreams: () => getStreams
+});
+module.exports = __toCommonJS(index_exports);
+
+// src/utils/resolvers.js
+var HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+};
+function isKnownFakeDirectUrl(url) {
+  if (!url || typeof url !== "string") return true;
+  const u = url.toLowerCase();
+  return u.includes("test-videos.co.uk") || u.includes("big_buck_bunny") || u.includes("bigbuckbunny") || u.includes("sample-videos.com") || u.includes("example.com") || u.includes("localhost");
+}
+var STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
+var DEFAULT_QUALITY_TIER = 360;
+function nearestQualityTier(height) {
+  if (!Number.isFinite(height) || height <= 0) return DEFAULT_QUALITY_TIER;
+  let nearest = STRICT_QUALITY_TIERS[0];
+  let minDiff = Math.abs(height - nearest);
+  for (const tier of STRICT_QUALITY_TIERS) {
+    const diff = Math.abs(height - tier);
+    if (diff < minDiff) {
+      minDiff = diff;
+      nearest = tier;
+    }
+  }
+  return nearest;
+}
+function normalizeQualityLabel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return `${DEFAULT_QUALITY_TIER}p`;
+  if (raw === "4k" || raw === "uhd" || raw.includes("2160")) return "2160p";
+  if (raw.includes("fhd") || raw.includes("fullhd") || raw.includes("1080")) return "1080p";
+  if (raw.includes("hd") || raw.includes("720")) return "720p";
+  const numericMatch = raw.match(/(\d{3,4})\s*p?/i);
+  if (numericMatch) {
+    const tier = nearestQualityTier(Number(numericMatch[1]));
+    return `${tier}p`;
+  }
+  return `${DEFAULT_QUALITY_TIER}p`;
+}
+function qualityRank(value) {
+  const q = normalizeQualityLabel(value).toLowerCase();
+  const match = q.match(/(\d{3,4})p/);
+  const height = match ? Number(match[1]) : DEFAULT_QUALITY_TIER;
+  const tier = nearestQualityTier(height);
+  return STRICT_QUALITY_TIERS.length - 1 - STRICT_QUALITY_TIERS.indexOf(tier);
+}
+function appendQualityToTitle(title, quality) {
+  const q = normalizeQualityLabel(quality);
+  if (!q) return title;
+  if ((title || "").includes(q)) return title;
+  return `${title} [${q}]`;
+}
+function expandSingleStreamQualities(stream) {
+  return __async(this, null, function* () {
+    var _a, _b, _c;
+    if (!stream || !stream.url || typeof stream.url !== "string") return [];
+    const url = stream.url;
+    const lower = url.toLowerCase();
+    if (!lower.includes(".m3u8") && !lower.includes("/hls/")) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const res = yield safeFetch(url, { headers: stream.headers || {} });
+    if (!res) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const manifest = yield res.text();
+    if (!/#EXT-X-STREAM-INF/i.test(manifest)) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const lines = manifest.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const variants = [];
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
+      if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+      const nextLine = lines[index + 1];
+      if (!nextLine || nextLine.startsWith("#")) continue;
+      const resolution = (_a = line.match(/RESOLUTION=\d+x(\d+)/i)) == null ? void 0 : _a[1];
+      const frameRate = (_b = line.match(/FRAME-RATE=([0-9.]+)/i)) == null ? void 0 : _b[1];
+      const bandwidth = (_c = line.match(/BANDWIDTH=(\d+)/i)) == null ? void 0 : _c[1];
+      let quality = resolution ? `${resolution}p` : null;
+      if (!quality && bandwidth) {
+        const bw = Number(bandwidth);
+        if (bw >= 8e6) quality = "2160p";
+        else if (bw >= 4e6) quality = "1080p";
+        else if (bw >= 2e6) quality = "720p";
+        else if (bw >= 1e6) quality = "480p";
+        else quality = "360p";
+      }
+      if (!quality && frameRate) quality = `${normalizeQualityLabel(stream.quality || "HD")}`;
+      let variantUrl = nextLine;
+      try {
+        variantUrl = new URL(nextLine, url).toString();
+      } catch (e) {
+      }
+      variants.push(__spreadProps(__spreadValues({}, stream), {
+        url: variantUrl,
+        quality: normalizeQualityLabel(quality || stream.quality || "HD"),
+        title: appendQualityToTitle(stream.title || stream.name || "Stream", quality || stream.quality || "HD")
+      }));
+    }
+    if (variants.length === 0) {
+      return [__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") })];
+    }
+    const unique = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const variant of variants) {
+      if (seen.has(variant.url)) continue;
+      seen.add(variant.url);
+      unique.push(variant);
+    }
+    unique.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+    return unique;
+  });
+}
+function expandStreamQualities(streams) {
+  return __async(this, null, function* () {
+    const input = Array.isArray(streams) ? streams : [];
+    const expanded = [];
+    for (const stream of input) {
+      try {
+        const variants = yield expandSingleStreamQualities(stream);
+        for (const variant of variants) {
+          expanded.push(variant);
+        }
+      } catch (e) {
+        if (stream) expanded.push(__spreadProps(__spreadValues({}, stream), { quality: normalizeQualityLabel(stream.quality || "HD") }));
+      }
+    }
+    const deduped = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const stream of expanded) {
+      if (!(stream == null ? void 0 : stream.url)) continue;
+      if (isKnownFakeDirectUrl(stream.url)) continue;
+      if (seen.has(stream.url)) continue;
+      seen.add(stream.url);
+      deduped.push(stream);
+    }
+    deduped.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+    return deduped;
+  });
+}
+function safeFetch(_0) {
+  return __async(this, arguments, function* (url, options = {}) {
+    let controller, timeout;
+    try {
+      const canAbort = typeof AbortController !== "undefined";
+      controller = canAbort ? new AbortController() : null;
+      if (controller) timeout = setTimeout(() => controller.abort(), 1e4);
+      const response = yield fetch(url, __spreadProps(__spreadValues({}, options), {
+        headers: __spreadValues(__spreadValues({}, HEADERS), options.headers),
+        redirect: "follow",
+        signal: controller ? controller.signal : void 0
+      }));
+      if (timeout) clearTimeout(timeout);
+      if (!response) return null;
+      const status = response.status;
+      let bodyText = "";
+      try {
+        bodyText = yield response.text();
+      } catch (e) {
+        bodyText = "";
+      }
+      return {
+        text: () => Promise.resolve(bodyText),
+        json: () => __async(null, null, function* () {
+          try {
+            return JSON.parse(bodyText);
+          } catch (e) {
+            throw e;
+          }
+        }),
+        ok: response.ok,
+        status,
+        url: response.url,
+        headers: response.headers
+      };
+    } catch (e) {
+      if (timeout) clearTimeout(timeout);
+      return null;
+    }
+  });
+}
+
+// src/franime/extractor.js
+var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
+function extractStreams(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    console.warn(`[FRAnime] Provider is currently disabled due to aggressive Cloudflare protection and API changes.`);
+    return [];
+  });
+}
+
+// src/franime/index.js
+function getStreams(tmdbId, mediaType, season, episode) {
+  return __async(this, null, function* () {
+    console.log(`[FRAnime] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+    try {
+      const streams = yield extractStreams(tmdbId, mediaType, season, episode);
+      return yield expandStreamQualities(streams);
+    } catch (error) {
+      console.error(`[FRAnime] Error:`, error);
+      return [];
+    }
+  });
+}
