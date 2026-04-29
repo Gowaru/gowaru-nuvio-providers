@@ -13,11 +13,4 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     }
 }
 
-export const provider = {
-    id: "sekai",
-    name: "Sekai",
-    description: "Provider for Sekai (Animes VOSTFR/VF)",
-    language: "fr",
-    types: ["tv", "movie"],
-    getStreams
-};
+export { getStreams };
