@@ -10,7 +10,27 @@ const HEADERS = {
 const _atob = (str) => {
     try {
         if (typeof atob === 'function') return atob(str);
-        return Buffer.from(str, 'base64').toString('binary');
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+        let output = '';
+        let index = 0;
+
+        str = String(str || '').replace(/[^A-Za-z0-9+/=]/g, '');
+        while (index < str.length) {
+            const enc1 = alphabet.indexOf(str.charAt(index++));
+            const enc2 = alphabet.indexOf(str.charAt(index++));
+            const enc3 = alphabet.indexOf(str.charAt(index++));
+            const enc4 = alphabet.indexOf(str.charAt(index++));
+
+            const chr1 = (enc1 << 2) | (enc2 >> 4);
+            const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+            const chr3 = ((enc3 & 3) << 6) | enc4;
+
+            output += String.fromCharCode(chr1);
+            if (enc3 !== 64) output += String.fromCharCode(chr2);
+            if (enc4 !== 64) output += String.fromCharCode(chr3);
+        }
+
+        return output;
     } catch (e) { return str; }
 };
 

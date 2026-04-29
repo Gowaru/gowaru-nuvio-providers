@@ -4,7 +4,7 @@
 
 import cheerio from 'cheerio-without-node-native';
 import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, safeFetch } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const SEARCH_STOPWORDS = new Set([
@@ -195,22 +195,49 @@ function languageLabel(languageKey) {
     return languageKey ? languageKey.toUpperCase() : 'VF';
 }
 
-function toStream(name, host, language, url) {
-    const origin = getOrigin(url);
+function playbackHeadersFor(url, sourceUrl, headers = {}) {
+    const sourceOrigin = getOrigin(sourceUrl || BASE_URL);
+    const directOrigin = getOrigin(url);
+    const referer = headers.Referer || headers.referer || `${sourceOrigin}/`;
+
+    return {
+        ...headers,
+        Referer: referer,
+        Origin: headers.Origin || headers.origin || (referer ? getOrigin(referer) : sourceOrigin),
+        'User-Agent': headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+        Accept: headers.Accept || headers.accept || '*/*',
+        'X-Direct-Origin': directOrigin
+    };
+}
+
+function toStream(name, host, language, url, sourceUrl) {
     return {
         name,
         title: `[${languageLabel(language)}] ${hostLabel(host)}`,
         url,
         quality: 'HD',
-        headers: {
-            Referer: `${origin}/`,
-            Origin: origin,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
-        }
+        headers: playbackHeadersFor(url, sourceUrl)
     };
 }
 
-function collectMovieCandidates(apiData) {
+async function validatePlaybackUrl(url, headers = {}) {
+    try {
+        const res = await safeFetch(url, {
+            method: 'GET',
+            headers: {
+                ...headers,
+                Range: 'bytes=0-0'
+            },
+            redirect: 'follow'
+        });
+        if (!res) return false;
+        return res.status === 206 || (typeof res.status === 'number' && res.status >= 200 && res.status < 300);
+    } catch (e) {
+        return false;
+    }
+}
+
+function collectMovieCandidates(apiData, sourceUrl) {
     const players = apiData?.players;
     if (!players || typeof players !== 'object') return [];
 
@@ -219,14 +246,14 @@ function collectMovieCandidates(apiData) {
         if (!versions || typeof versions !== 'object') continue;
         for (const [language, value] of Object.entries(versions)) {
             if (typeof value !== 'string' || !value.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', host, language, value));
+            streams.push(toStream('Frenchstream', host, language, value, sourceUrl));
         }
     }
 
     return streams;
 }
 
-function collectEpisodeCandidates(apiData, episode) {
+function collectEpisodeCandidates(apiData, episode, sourceUrl) {
     const episodeNum = Number(episode) || 1;
     const streams = [];
 
@@ -240,7 +267,7 @@ function collectEpisodeCandidates(apiData, episode) {
 
         for (const [host, value] of Object.entries(hosts)) {
             if (typeof value !== 'string' || !value.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', host, language, value));
+            streams.push(toStream('Frenchstream', host, language, value, sourceUrl));
         }
     }
 
@@ -258,7 +285,7 @@ function dedupeByUrl(streams) {
     return out;
 }
 
-function collectFstreamApiMovieCandidates(apiData) {
+function collectFstreamApiMovieCandidates(apiData, sourceUrl) {
     const players = apiData?.players;
     if (!players || typeof players !== 'object') return [];
 
@@ -267,13 +294,13 @@ function collectFstreamApiMovieCandidates(apiData) {
         if (!Array.isArray(list)) continue;
         for (const item of list) {
             if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url));
+            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url, sourceUrl));
         }
     }
     return streams;
 }
 
-function collectFstreamApiTvCandidates(apiData, episode) {
+function collectFstreamApiTvCandidates(apiData, episode, sourceUrl) {
     const episodeNum = Number(episode) || 1;
     const ep = apiData?.episodes?.[String(episodeNum)] || apiData?.episodes?.[episodeNum];
     const langs = ep?.languages;
@@ -284,7 +311,7 @@ function collectFstreamApiTvCandidates(apiData, episode) {
         if (!Array.isArray(list)) continue;
         for (const item of list) {
             if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url));
+            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url, sourceUrl));
         }
     }
     return streams;
@@ -306,8 +333,8 @@ async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
 
         if (!data || data.success === false) return [];
         return mediaType === 'movie'
-            ? collectFstreamApiMovieCandidates(data)
-            : collectFstreamApiTvCandidates(data, episode);
+            ? collectFstreamApiMovieCandidates(data, 'https://movix.cash/')
+            : collectFstreamApiTvCandidates(data, episode, 'https://movix.cash/');
     } catch (e) {
         console.warn(`[Frenchstream] FStream API fallback failed: ${e.message}`);
         return [];
@@ -321,7 +348,15 @@ async function resolveCandidates(candidates) {
         if (result.status !== 'fulfilled') continue;
         const stream = result.value;
         if (!stream?.url) continue;
-        if (stream.isDirect) direct.push(stream);
+        if (!stream.isDirect) continue;
+
+        const headers = playbackHeadersFor(stream.url, stream.headers?.Referer || stream.headers?.referer || BASE_URL, stream.headers || {});
+        if (!(await validatePlaybackUrl(stream.url, headers))) continue;
+
+        direct.push({
+            ...stream,
+            headers
+        });
     }
 
     const uniqueDirect = dedupeByUrl(direct);
@@ -362,8 +397,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const sourceBase = match.baseUrl || BASE_URL;
     const candidates = mediaType === 'movie'
-        ? collectMovieCandidates(await fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase }))
-        : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode);
+        ? collectMovieCandidates(await fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase }), sourceBase)
+        : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode, sourceBase);
 
     if (candidates.length === 0) return [];
 

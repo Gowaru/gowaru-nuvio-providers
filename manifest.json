@@ -198,7 +198,7 @@
       "id": "sekai",
       "name": "Sekai",
       "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
