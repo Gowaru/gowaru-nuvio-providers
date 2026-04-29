@@ -3,6 +3,7 @@
  */
 
 import { extractStreams } from './extractor.js';
+import { expandStreamQualities } from '../utils/resolvers.js';
 
 /**
  * Main function to get streams for a specific media
@@ -16,8 +17,9 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        console.log(`[Frenchstream] Found ${streams.length} stream(s)`);
-        return streams;
+        const expanded = await expandStreamQualities(streams);
+        console.log(`[Frenchstream] Found ${expanded.length} stream(s)`);
+        return expanded;
     } catch (error) {
         console.error(`[Frenchstream] Error:`, error);
         return [];

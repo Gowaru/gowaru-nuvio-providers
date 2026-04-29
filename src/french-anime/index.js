@@ -3,6 +3,7 @@
  */
 
 import { extractStreams } from './extractor.js';
+import { expandStreamQualities } from '../utils/resolvers.js';
 
 /**
  * Main function to get streams for a specific media
@@ -16,7 +17,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        return streams;
+        return await expandStreamQualities(streams);
     } catch (error) {
         console.error(`[French-Anime] Error:`, error);
         return [];

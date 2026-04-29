@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.49-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.1.51-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -52,6 +52,7 @@ This bundle integrates 11 pillars of the French streaming scene:
 
 - **Universal Resolver**: Includes an automatic resolution engine for popular hosts (**Sibnet, Vidmoly, Uqload, Voe, Sendvid, VidCDN...**). No more `ExoPlaybackException` errors!
 - **Fake-Direct Filtering**: Rejects sample links such as Big Buck Bunny and other known test URLs before they reach the player.
+- **HLS Quality Extraction**: Master HLS manifests are expanded into multiple selectable resolutions when available, with normalized labels such as `2160p`, `1080p`, `720p`, `480p`, and `360p`.
 - **Direct-Only Playback Safety**: Stream output keeps strict direct-link filtering (`.m3u8`, `.mp4`, etc.) to reduce ExoPlayer HTTP/playback errors.
 - **Mobile Optimized**: "Embed" (HTML) links are transformed into direct video links (`.mp4`, `.m3u8`) for native compatibility with Android/iOS players.
 - **ESM -> CJS Transpilation & Minification**: Modern source code (ES6+) automatically converted, optimized and minified for the **Hermes** JavaScript engine.
