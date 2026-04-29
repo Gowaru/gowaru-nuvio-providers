@@ -4,6 +4,7 @@
  */
 
 import { extractStreams } from './extractor.js';
+import { expandStreamQualities } from '../utils/resolvers.js';
 
 /**
  * Main function called by Nuvio
@@ -16,8 +17,9 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     try {
         console.log(`[Movix] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        console.log(`[Movix] Found ${streams.length} streams`);
-        return streams;
+        const expanded = await expandStreamQualities(streams);
+        console.log(`[Movix] Found ${expanded.length} streams`);
+        return expanded;
     } catch (error) {
         console.error(`[Movix] Error: ${error.message}`);
         return [];

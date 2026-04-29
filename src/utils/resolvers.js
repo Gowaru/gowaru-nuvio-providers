@@ -34,6 +34,139 @@ function isPlayableMediaUrl(url) {
     return /\.(mp4|m3u8|mkv|webm)(\?.*)?$/.test(u) || u.includes('/hls2/') || u.includes('/master.m3u8');
 }
 
+function normalizeQualityLabel(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return 'HD';
+    if (raw === '4k' || raw === 'uhd' || raw.includes('2160')) return '2160p';
+    if (raw.includes('1440')) return '1440p';
+    if (raw.includes('1080')) return '1080p';
+    if (raw.includes('720')) return '720p';
+    if (raw.includes('480')) return '480p';
+    if (raw.includes('360')) return '360p';
+    if (raw.includes('240')) return '240p';
+    if (raw.includes('hd')) return 'HD';
+    return value;
+}
+
+function qualityRank(value) {
+    const q = normalizeQualityLabel(value).toLowerCase();
+    if (q.includes('2160')) return 6;
+    if (q.includes('1440')) return 5;
+    if (q.includes('1080')) return 4;
+    if (q.includes('720')) return 3;
+    if (q.includes('480')) return 2;
+    if (q.includes('360')) return 1;
+    if (q.includes('240')) return 0;
+    return 2;
+}
+
+function appendQualityToTitle(title, quality) {
+    const q = normalizeQualityLabel(quality);
+    if (!q || q === 'HD') return title;
+    if ((title || '').includes(q)) return title;
+    return `${title} [${q}]`;
+}
+
+async function expandSingleStreamQualities(stream) {
+    if (!stream || !stream.url || typeof stream.url !== 'string') return [];
+    const url = stream.url;
+    const lower = url.toLowerCase();
+
+    if (!lower.includes('.m3u8') && !lower.includes('/hls/')) {
+        return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD') }];
+    }
+
+    const res = await safeFetch(url, { headers: stream.headers || {} });
+    if (!res) {
+        return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD') }];
+    }
+
+    const manifest = await res.text();
+    if (!/#EXT-X-STREAM-INF/i.test(manifest)) {
+        return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD') }];
+    }
+
+    const lines = manifest.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const variants = [];
+
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+
+        const nextLine = lines[index + 1];
+        if (!nextLine || nextLine.startsWith('#')) continue;
+
+        const resolution = line.match(/RESOLUTION=\d+x(\d+)/i)?.[1];
+        const frameRate = line.match(/FRAME-RATE=([0-9.]+)/i)?.[1];
+        const bandwidth = line.match(/BANDWIDTH=(\d+)/i)?.[1];
+
+        let quality = resolution ? `${resolution}p` : null;
+        if (!quality && bandwidth) {
+            const bw = Number(bandwidth);
+            if (bw >= 8_000_000) quality = '2160p';
+            else if (bw >= 4_000_000) quality = '1080p';
+            else if (bw >= 2_000_000) quality = '720p';
+            else if (bw >= 1_000_000) quality = '480p';
+            else quality = '360p';
+        }
+        if (!quality && frameRate) quality = `${normalizeQualityLabel(stream.quality || 'HD')}`;
+
+        let variantUrl = nextLine;
+        try {
+            variantUrl = new URL(nextLine, url).toString();
+        } catch (e) {}
+
+        variants.push({
+            ...stream,
+            url: variantUrl,
+            quality: normalizeQualityLabel(quality || stream.quality || 'HD'),
+            title: appendQualityToTitle(stream.title || stream.name || 'Stream', quality || stream.quality || 'HD')
+        });
+    }
+
+    if (variants.length === 0) {
+        return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD') }];
+    }
+
+    const unique = [];
+    const seen = new Set();
+    for (const variant of variants) {
+        if (seen.has(variant.url)) continue;
+        seen.add(variant.url);
+        unique.push(variant);
+    }
+
+    unique.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+    return unique;
+}
+
+export async function expandStreamQualities(streams) {
+    const input = Array.isArray(streams) ? streams : [];
+    const expanded = [];
+
+    for (const stream of input) {
+        try {
+            const variants = await expandSingleStreamQualities(stream);
+            for (const variant of variants) {
+                expanded.push(variant);
+            }
+        } catch (e) {
+            if (stream) expanded.push({ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD') });
+        }
+    }
+
+    const deduped = [];
+    const seen = new Set();
+    for (const stream of expanded) {
+        if (!stream?.url || seen.has(stream.url)) continue;
+        seen.add(stream.url);
+        deduped.push(stream);
+    }
+
+    deduped.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
+    return deduped;
+}
+
 async function safeFetch(url, options = {}) {
     let controller, timeout;
     try {

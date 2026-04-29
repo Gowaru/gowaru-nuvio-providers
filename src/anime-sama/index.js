@@ -4,6 +4,7 @@
  */
 
 import { extractStreams } from './extractor.js';
+import { expandStreamQualities } from '../utils/resolvers.js';
 
 /**
  * Main function called by Nuvio
@@ -18,8 +19,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         // Call extraction logic
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-
-        return streams;
+        return await expandStreamQualities(streams);
     } catch (error) {
         console.error(`[Anime-Sama] Error: ${error.message}`);
         return [];

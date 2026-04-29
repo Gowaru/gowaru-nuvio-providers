@@ -1,4 +1,9 @@
-## [1.1.49] - 2026-04s-29
+## [1.1.50] - 2026-04-29
+### Improved
+- **Global**: Added shared HLS quality expansion so master manifests can be exposed as multiple stream variants when the source provides 2160p/1080p/720p and similar ladders.
+- **Global**: Normalized quality labels across providers to keep the player list consistent on Nuvio mobile and TV.
+
+## [1.1.49] - 2026-04-29
 ### Fixed
 - **Frenchstream**: Updated the extractor to handle recent site changes that broke stream retrieval.
 - **Global**: Added error handling to prevent extractor failures from crashing the entire provider. If one stream fails to resolve, it will be skipped instead of returning 0 streams.  This improves resilience across all providers, especially those with multiple fallback sources (Anime-Sama, French-Anime, VoirAnime, Vostfree, AnimeVOSTFR, etc.) where a single failure should not cause the entire provider to fail.
