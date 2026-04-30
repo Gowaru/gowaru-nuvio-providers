@@ -222,7 +222,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films et Séries en VF et VOSTFR.",
-      "version": "1.0.18",
+      "version": "1.0.19",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -247,7 +247,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films et Séries en VF et VOSTFR via l'API de Frenchstream.",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

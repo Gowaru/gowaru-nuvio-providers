@@ -16,8 +16,10 @@ if (typeof Promise !== 'undefined' && !Promise.allSettled) {
     };
 }
 
+export const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "User-Agent": USER_AGENT,
 };
 
 const _atob = (str) => {
@@ -181,6 +183,8 @@ async function expandSingleStreamQualities(stream) {
             ...stream,
             url: variantUrl,
             quality: normalizeQualityLabel(quality || stream.quality || 'HD'),
+            isDirect: true,
+            headers: { 'User-Agent': USER_AGENT, ...(stream.headers || {}) },
             title: appendQualityToTitle(stream.title || stream.name || 'Stream', quality || stream.quality || 'HD')
         });
     }
@@ -733,7 +737,7 @@ export async function resolveStream(stream, depth = 0) {
             return {
                 ...stream,
                 url: result.url,
-                headers: { ...stream.headers, ...(result.headers || {}) },
+                headers: { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) },
                 isDirect: true,
                 originalUrl: originalUrl
             };
@@ -788,7 +792,7 @@ export async function resolveStream(stream, depth = 0) {
             return {
                 ...stream,
                 url: result.url,
-                headers: { ...stream.headers, ...(result.headers || {}) },
+                headers: { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) },
                 isDirect: true,
                 originalUrl: originalUrl
             };

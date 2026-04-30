@@ -1,10 +1,9 @@
 import { fetchJson } from './http.js';
-import { resolveStream, safeFetch } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { extractStreams as extractFrenchstreamStreams } from '../frenchstream/extractor.js';
 
 const API_BASE = 'https://api.movix.cash';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 const RETRY_DELAYS_MS = [0, 1400, 2600];
 const API_TIMEOUT_MS = 14000;
@@ -30,12 +29,12 @@ function directHeadersFor(url, headers = {}) {
     const referer = headers.Referer || headers.referer;
     const out = { ...headers };
 
-    if (!referer || referer.includes('movix.cash')) {
-        out.Referer = `${origin}/`;
+    if (!referer) {
+        out.Referer = 'https://movix.cash/';
     }
 
-    if (!out.Origin || String(out.Origin).includes('movix.cash')) {
-        out.Origin = origin;
+    if (!out.Origin) {
+        out.Origin = 'https://movix.cash';
     }
 
     if (!out['User-Agent'] && !out['user-agent']) {
