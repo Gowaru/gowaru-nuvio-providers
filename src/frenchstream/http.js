@@ -2,13 +2,13 @@
  * HTTP Utilities for Frenchstream
  */
 
-import { safeFetch } from '../utils/resolvers.js';
+import { safeFetch, USER_AGENT } from '../utils/resolvers.js';
 
 export const BASE_URLS = ['https://french-stream.one', 'https://fs03.lol'];
 export const BASE_URL = BASE_URLS[0];
 
 export const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+    'User-Agent': USER_AGENT,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
     'Referer': `${BASE_URL}/`,

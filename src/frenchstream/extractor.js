@@ -4,7 +4,7 @@
 
 import cheerio from 'cheerio-without-node-native';
 import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
-import { resolveStream, safeFetch } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const SEARCH_STOPWORDS = new Set([
@@ -217,8 +217,8 @@ function playbackHeadersFor(url, sourceUrl, headers = {}) {
     return {
         ...headers,
         Referer: referer,
-        Origin: headers.Origin || headers.origin || (referer ? getOrigin(referer) : sourceOrigin),
-        'User-Agent': headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+        Origin: headers.Origin || headers.origin || getOrigin(referer || sourceOrigin),
+        'User-Agent': headers['User-Agent'] || headers['user-agent'] || USER_AGENT,
         Accept: headers.Accept || headers.accept || '*/*'
     };
 }
