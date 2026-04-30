@@ -118,6 +118,12 @@ function appendQualityToTitle(title, quality) {
     return `${title} [${q}]`;
 }
 
+function getSafeOrigin(url) {
+    if (!url || typeof url !== 'string') return null;
+    const match = url.match(/^(https?:\/\/[^\/]+)/);
+    return match ? match[1] : null;
+}
+
 async function expandSingleStreamQualities(stream) {
     if (!stream || !stream.url || typeof stream.url !== 'string') return [];
     const url = stream.url;
@@ -734,10 +740,20 @@ export async function resolveStream(stream, depth = 0) {
         
         // If a specific resolver found a different URL, it's the final direct link
         if (result && result.url !== originalUrl && !isKnownFakeDirectUrl(result.url)) {
+            const videoOrigin = getSafeOrigin(result.url);
+            const mergedHeaders = { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) };
+            
+            // If we have an Origin, it MUST match the video server or be removed
+            // to avoid 403 Forbidden on strict servers.
+            if (mergedHeaders.Origin || mergedHeaders.origin) {
+                mergedHeaders.Origin = videoOrigin;
+                if (mergedHeaders.origin) delete mergedHeaders.origin;
+            }
+
             return {
                 ...stream,
                 url: result.url,
-                headers: { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) },
+                headers: mergedHeaders,
                 isDirect: true,
                 originalUrl: originalUrl
             };
@@ -789,10 +805,18 @@ export async function resolveStream(stream, depth = 0) {
         }
 
         if (result && result.url !== originalUrl && result.url.startsWith('http') && !isKnownFakeDirectUrl(result.url)) {
+            const videoOrigin = getSafeOrigin(result.url);
+            const mergedHeaders = { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) };
+            
+            if (mergedHeaders.Origin || mergedHeaders.origin) {
+                mergedHeaders.Origin = videoOrigin;
+                if (mergedHeaders.origin) delete mergedHeaders.origin;
+            }
+
             return {
                 ...stream,
                 url: result.url,
-                headers: { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) },
+                headers: mergedHeaders,
                 isDirect: true,
                 originalUrl: originalUrl
             };

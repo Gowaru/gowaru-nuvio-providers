@@ -224,13 +224,21 @@ function playbackHeadersFor(url, sourceUrl, headers = {}) {
 }
 
 function toStream(name, host, language, url, sourceUrl) {
+    const h = (host || '').toLowerCase();
+    let priority = 10;
+    if (h === 'premium' || h === 'vidzy') priority = 100;
+    else if (h === 'voe' || h === 'uqload') priority = 80;
+    else if (h === 'dood' || h === 'filmoon') priority = 60;
+
     return {
         name,
         title: `[${languageLabel(language)}] ${hostLabel(host)}`,
         url,
-        quality: 'HD',
+        quality: (h === 'premium' || h === 'vidzy') ? '1080p' : 'HD',
         headers: playbackHeadersFor(url, sourceUrl),
-        _sourceUrl: sourceUrl || BASE_URL
+        _sourceUrl: sourceUrl || BASE_URL,
+        _priority: priority,
+        _language: language
     };
 }
 
@@ -374,6 +382,37 @@ async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
     }
 }
 
+async function scrapePageIframes(pageUrl, language = 'vf') {
+    try {
+        const html = await fetchText(pageUrl, { timeoutMs: 8000 });
+        if (!html) return [];
+        
+        const $ = cheerio.load(html);
+        const candidates = [];
+        
+        // Look for iframes in the content or player area
+        $('iframe[src]').each((_, el) => {
+            const src = $(el).attr('src');
+            if (!src || !src.startsWith('http') || src.includes('facebook') || src.includes('google')) return;
+            
+            const host = src.match(/https?:\/\/([^\/]+)/)?.[1] || 'player';
+            candidates.push(toStream('Frenchstream', host, language, src, pageUrl));
+        });
+
+        // Look for links that might be players
+        $('a[href*="vidmoly"], a[href*="voe"], a[href*="uqload"], a[href*="dood"]').each((_, el) => {
+            const href = $(el).attr('href');
+            if (!href) return;
+            const host = href.match(/https?:\/\/([^\/]+)/)?.[1] || 'player';
+            candidates.push(toStream('Frenchstream', host, language, href, pageUrl));
+        });
+
+        return candidates;
+    } catch (e) {
+        return [];
+    }
+}
+
 async function resolveCandidates(candidates) {
     const direct = [];
 
@@ -422,8 +461,9 @@ async function resolveCandidates(candidates) {
     }
 
     // Resolve in small parallel batches: much faster on TV while staying network-safe.
-    const queue = (Array.isArray(candidates) ? candidates : []).slice(0, 12);
-    const workerCount = Math.min(3, queue.length);
+    const sorted = [...(candidates || [])].sort((a, b) => (b._priority || 0) - (a._priority || 0));
+    const queue = sorted.slice(0, 15);
+    const workerCount = Math.min(4, queue.length);
     let cursor = 0;
 
     async function worker() {
@@ -494,9 +534,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     console.log(`[Frenchstream] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
 
     const sourceBase = match.baseUrl || BASE_URL;
-    const candidates = mediaType === 'movie'
+    const apiCandidates = mediaType === 'movie'
         ? collectMovieCandidates(await fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase }), sourceBase)
         : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode, sourceBase);
+
+    // Complement with page scraping for more sources
+    const scrapedCandidates = await scrapePageIframes(match.href, 'vf');
+    const candidates = dedupeByUrl([...apiCandidates, ...scrapedCandidates]);
 
     if (candidates.length === 0) {
         const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
