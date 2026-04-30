@@ -11,6 +11,23 @@ import { getTmdbTitles } from '../utils/metadata.js';
 const BASE_URL = "https://french-anime.com";
 
 /**
+ * Batch resolve streams with parallelism limit to prevent network saturation
+ */
+async function batchResolveStreams(streamConfigs, maxConcurrent = 20) {
+    const results = [];
+    for (let i = 0; i < streamConfigs.length; i += maxConcurrent) {
+        const batch = streamConfigs.slice(i, i + maxConcurrent);
+        const batchResults = await Promise.allSettled(batch.map(cfg => resolveStream(cfg)));
+        batchResults.forEach(r => {
+            if (r.status === 'fulfilled' && r.value) {
+                results.push(r.value);
+            }
+        });
+    }
+    return results;
+}
+
+/**
  * Search for the anime on French-Anime using DLE POST search
  */
 async function searchAnime(title) {
@@ -202,24 +219,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 allPlayerUrls.push(...playerUrls);
             }
 
-            const hostPromises = allPlayerUrls.map(async (url) => {
-                const playerName = getPlayerName(url);
-                try {
-                    return await resolveStream({
-                        name: `French-Anime (${langName})`,
-                        title: `${playerName} - ${langName}`,
-                        url: url,
-                        quality: "HD",
-                        headers: { "Referer": BASE_URL }
-                    });
-                } catch(e) {
-                    return null;
-                }
-            });
-            const results = await Promise.all(hostPromises);
-            for (const stream of results) {
-                if (stream) streams.push(stream);
-            }
+            const hostStreamConfigs = allPlayerUrls.map((url) => ({
+                name: `French-Anime (${langName})`,
+                title: `${getPlayerName(url)} - ${langName}`,
+                url,
+                quality: "HD",
+                headers: { "Referer": BASE_URL }
+            }));
+            const results = await batchResolveStreams(hostStreamConfigs);
+            streams.push(...results);
 
             if (allPlayerUrls.length > 0) {
                 console.log(`[French-Anime] Found ${allPlayerUrls.length} players on ${pageUrl}`);

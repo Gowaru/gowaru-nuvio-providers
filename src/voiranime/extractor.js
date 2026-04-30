@@ -2,6 +2,23 @@
  * Extractor Logic for VoirAnime
  */
 
+/**
+ * Batch resolve streams with parallelism limit to prevent network saturation
+ */
+async function batchResolveStreams(streamConfigs, maxConcurrent = 20) {
+  const results = [];
+  for (let i = 0; i < streamConfigs.length; i += maxConcurrent) {
+    const batch = streamConfigs.slice(i, i + maxConcurrent);
+    const batchResults = await Promise.allSettled(batch.map(cfg => resolveStream(cfg)));
+    batchResults.forEach(r => {
+      if (r.status === 'fulfilled' && r.value) {
+        results.push(r.value);
+      }
+    });
+  }
+  return results;
+}
+
 import { fetchText } from "./http.js";
 import cheerio from "cheerio-without-node-native";
 import { resolveStream } from "../utils/resolvers.js";
@@ -349,7 +366,32 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 embedUrl = scriptMatch[0];
             }
             if (embedUrl) {
-              return resolveStream({
+              return {
+                name: `VoirAnime (${lang})`,
+                title: `${host} - ${lang}`,
+                url: embedUrl,
+                quality: "HD",
+                headers: { Referer: BASE_URL },
+              };
+            }
+          } catch (err) {}
+          return null;
+        });
+
+        const hostStreamConfigs = [];
+        for (const host of hosts) {
+          try {
+            const hostUrl = `${episodeUrl}${episodeUrl.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`;
+            const hostHtml = await fetchText(hostUrl);
+            const iframeMatch = hostHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
+            let embedUrl = iframeMatch ? iframeMatch[1] : null;
+            if (!embedUrl) {
+              const scriptMatch = hostHtml.match(/https?:\/\/[^"'\s<>]+\/(?:embed|e|v|player)\/[^"'\s<>]+/);
+              if (scriptMatch && !scriptMatch[0].includes("voiranime.com"))
+                embedUrl = scriptMatch[0];
+            }
+            if (embedUrl) {
+              hostStreamConfigs.push({
                 name: `VoirAnime (${lang})`,
                 title: `${host} - ${lang}`,
                 url: embedUrl,
@@ -358,13 +400,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
               });
             }
           } catch (err) {}
-          return null;
-        });
-
-        const resolvedHosts = await Promise.all(hostPromises);
-        for (const stream of resolvedHosts) {
-          if (stream) streams.push(stream);
         }
+        const resolvedHosts = await batchResolveStreams(hostStreamConfigs);
+        streams.push(...resolvedHosts);
       }
     } catch (e) {}
   }

@@ -20,7 +20,11 @@ export async function fetchJson(url, options = {}) {
     console.log(`[Movix] Fetching: ${url}`);
 
     try {
-        const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+        const { headers, ...restOptions } = options || {};
+        const res = await safeFetch(url, {
+            ...restOptions,
+            headers: { ...HEADERS, ...(headers || {}) }
+        });
         if (!res || !res.ok) {
             const status = res && typeof res.status === 'number' ? res.status : 'no-response';
             console.log(`[Movix] HTTP ${status} for ${url}`);

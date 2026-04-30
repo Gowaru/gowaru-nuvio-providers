@@ -11,6 +11,23 @@ import { getTmdbTitles } from '../utils/metadata.js';
 const BASE_URL = "https://vostfree.ws";
 
 /**
+ * Batch resolve streams with parallelism limit to prevent network saturation
+ */
+async function batchResolveStreams(streamConfigs, maxConcurrent = 20) {
+    const results = [];
+    for (let i = 0; i < streamConfigs.length; i += maxConcurrent) {
+        const batch = streamConfigs.slice(i, i + maxConcurrent);
+        const batchResults = await Promise.allSettled(batch.map(cfg => resolveStream(cfg)));
+        batchResults.forEach(r => {
+            if (r.status === 'fulfilled' && r.value) {
+                results.push(r.value);
+            }
+        });
+    }
+    return results;
+}
+
+/**
  * Search for the anime on Vostfree
  */
 async function searchAnime(title) {
@@ -208,25 +225,48 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     }
 
                     if (url.startsWith('http')) {
-                        try {
-                            const stream = await resolveStream({
-                                name: `Vostfree (${lang})`,
-                                title: `${playerName} - ${lang}`,
-                                url: url,
-                                quality: "HD",
-                                headers: { "Referer": BASE_URL }
-                            });
-                            return stream;
-                        } catch(e) { return null; }
+                        return {
+                            name: `Vostfree (${lang})`,
+                            title: `${playerName} - ${lang}`,
+                            url: url,
+                            quality: "HD",
+                            headers: { "Referer": BASE_URL }
+                        };
                     }
                 }
                 return null;
             });
 
-            const results = await Promise.all(playerPromises);
-            for (const stream of results) {
-                if (stream) streams.push(stream);
+            const playerStreamConfigs = [];
+            for (const el of playerElements) {
+                const playerId = $(el).attr('id').replace('player_', '');
+                const playerName = $(el).text().trim() || "Player";
+                const contentDivId = `content_player_${playerId}`;
+                const content = $(`#${contentDivId}`).text().trim();
+                if (content) {
+                    let url = content;
+                    if (!url.startsWith('http')) {
+                        if (playerName.toLowerCase().includes('sibnet')) url = `https://video.sibnet.ru/shell.php?videoid=${content}`;
+                        else if (playerName.toLowerCase().includes('vidmoly')) url = `https://vidmoly.to/embed-${content}.html`;
+                        else if (playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) url = `https://uqload.com/embed-${content}.html`;
+                        else if (playerName.toLowerCase().includes('sendvid')) url = `https://sendvid.com/embed/${content}`;
+                        else if (playerName.toLowerCase().includes('voe')) url = `https://voe.sx/e/${content}`;
+                        else if (playerName.toLowerCase().includes('dood')) url = `https://dood.to/e/${content}`;
+                        else if (playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) url = `https://streamtape.com/e/${content}`;
+                    }
+                    if (url.startsWith('http')) {
+                        playerStreamConfigs.push({
+                            name: `Vostfree (${lang})`,
+                            title: `${playerName} - ${lang}`,
+                            url: url,
+                            quality: "HD",
+                            headers: { "Referer": BASE_URL }
+                        });
+                    }
+                }
             }
+            const results = await batchResolveStreams(playerStreamConfigs);
+            streams.push(...results);
         } catch (e) {
             console.error(`[Vostfree] Match handle error: ${e.message}`);
         }

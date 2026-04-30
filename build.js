@@ -54,7 +54,7 @@ async function buildProvider(providerName, minify = false) {
             outfile: outFile,
             format: 'iife',             // Sandbox-friendly script output
             platform: 'browser',        // Avoid require/module assumptions in TV runtimes
-            target: 'es2016',           // Transpile async/await to generators for Hermes
+            target: 'es2015',           // More compatible than es2016 for older TV engines
             minify: minify,             // Minify bundle
             sourcemap: false,
             globalName: '__provider',
@@ -62,7 +62,18 @@ async function buildProvider(providerName, minify = false) {
                 js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${new Date().toISOString()}\n */`
             },
             footer: {
-                js: `\nif (typeof module !== 'undefined' && module.exports) {\n    module.exports = __provider;\n}\nif (__provider && __provider.getStreams) {\n    if (typeof globalThis !== 'undefined') {\n        globalThis.getStreams = __provider.getStreams;\n    }\n    if (typeof global !== 'undefined') {\n        global.getStreams = __provider.getStreams;\n    }\n    if (typeof self !== 'undefined') {\n        self.getStreams = __provider.getStreams;\n    }\n}`
+                js: `
+(function(api) {
+    if (!api) return;
+    if (typeof module !== 'undefined' && module.exports) module.exports = api;
+    if (typeof exports !== 'undefined') exports.getStreams = api.getStreams;
+    
+    var g = (typeof globalThis !== 'undefined') ? globalThis : 
+            (typeof global !== 'undefined') ? global : 
+            (typeof self !== 'undefined') ? self : (typeof window !== 'undefined') ? window : {};
+            
+    if (api.getStreams) g.getStreams = api.getStreams;
+})(__provider);`
             },
             logLevel: 'warning'
         });
@@ -96,14 +107,31 @@ async function transpileSingleFile(filename) {
     }
 
     try {
-        const result = await esbuild.transform(originalContent, {
-            loader: 'js',
-            target: 'es2016',           // Transpile async/await to generators
-            format: 'cjs'
+        const result = await esbuild.build({
+            stdin: {
+                contents: originalContent,
+                loader: 'js',
+                sourcefile: filename,
+                resolveDir: outDir,
+            },
+            bundle: false,
+            write: false,
+            format: 'iife',
+            platform: 'browser',
+            target: 'es2015',           // More compatible
+            sourcemap: false,
+            banner: {
+                js: `var module = (typeof module !== 'undefined') ? module : { exports: {} }; var exports = (typeof exports !== 'undefined') ? exports : module.exports;`
+            },
+            footer: {
+                js: `\n(function(){\n  var api = null;\n  if (typeof getStreams === 'function') api = { getStreams: getStreams };\n  else if (module && module.exports && typeof module.exports.getStreams === 'function') api = module.exports;\n  if (api) {\n    if (typeof module !== 'undefined' && module.exports) module.exports = api;\n    if (typeof globalThis !== 'undefined') globalThis.getStreams = api.getStreams;\n    if (typeof global !== 'undefined') global.getStreams = api.getStreams;\n    if (typeof self !== 'undefined') self.getStreams = api.getStreams;\n  }\n})();`
+            },
+            logLevel: 'warning'
         });
 
         // Write transpiled content back
-        fs.writeFileSync(inputPath, result.code);
+        const transpiledCode = result.outputFiles[0].text;
+        fs.writeFileSync(inputPath, transpiledCode);
 
         const stats = fs.statSync(inputPath);
         const sizeKB = (stats.size / 1024).toFixed(1);

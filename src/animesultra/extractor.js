@@ -9,6 +9,26 @@ const BASE_URL = "https://animesultra.org";
 /**
  * Search for the anime on AnimesUltra
  */
+/**
+ * Batch resolve streams with parallelism limit to prevent network saturation
+ */
+async function batchResolveStreams(streamConfigs, maxConcurrent = 20) {
+    const results = [];
+    for (let i = 0; i < streamConfigs.length; i += maxConcurrent) {
+        const batch = streamConfigs.slice(i, i + maxConcurrent);
+        const batchResults = await Promise.allSettled(batch.map(cfg => resolveStream(cfg)));
+        batchResults.forEach(r => {
+            if (r.status === 'fulfilled' && r.value) {
+                results.push(r.value);
+            }
+        });
+    }
+    return results;
+}
+
+/**
+ * Search for the anime on AnimesUltra
+ */
 async function searchAnime(title) {
     try {
         const results = [];
@@ -187,8 +207,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     // Filter out unresolved iframes to prevent ExoPlayer crashing (error 23003)
     const validStreams = [];
-    const streamPromises = streams.map(s => resolveStream(s).catch(() => null));
-    const resolvedArray = await Promise.all(streamPromises);
+    const resolvedArray = await batchResolveStreams(streams);
     for (const resolved of resolvedArray) {
         if (resolved && resolved.isDirect) {
             validStreams.push(resolved);

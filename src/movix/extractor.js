@@ -7,6 +7,7 @@ const API_BASE = 'https://api.movix.cash';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 const RETRY_DELAYS_MS = [0, 1400, 2600];
+const API_TIMEOUT_MS = 14000;
 
 function normalize(text) {
     return (text || '')
@@ -19,11 +20,9 @@ function normalize(text) {
 }
 
 function originFromUrl(url) {
-    try {
-        return new URL(url).origin;
-    } catch (e) {
-        return 'https://movix.cash';
-    }
+    if (!url || typeof url !== 'string') return 'https://movix.cash';
+    const match = url.match(/^(https?:\/\/[^\/]+)/);
+    return match ? match[1] : 'https://movix.cash';
 }
 
 function directHeadersFor(url, headers = {}) {
@@ -43,7 +42,21 @@ function directHeadersFor(url, headers = {}) {
         out['User-Agent'] = USER_AGENT;
     }
 
+    if (!out.Accept && !out.accept) {
+        out.Accept = '*/*';
+    }
+
     return out;
+}
+
+function readHeader(headers, name) {
+    if (!headers) return '';
+    if (typeof headers.get === 'function') return headers.get(name) || '';
+    const lower = String(name || '').toLowerCase();
+    for (const [k, v] of Object.entries(headers)) {
+        if (String(k).toLowerCase() === lower) return v || '';
+    }
+    return '';
 }
 
 async function validateDirectUrl(url, headers = {}) {
@@ -57,7 +70,15 @@ async function validateDirectUrl(url, headers = {}) {
             redirect: 'follow'
         });
         if (!res) return false;
-        return res.status === 206 || (typeof res.status === 'number' && res.status >= 200 && res.status < 300);
+
+        if (res.status === 206) return true;
+        if (typeof res.status === 'number' && res.status >= 200 && res.status < 300) {
+            const contentType = String(readHeader(res.headers, 'content-type') || '');
+            if (/video\//i.test(contentType)) return true;
+            if (/mpegurl|application\/vnd\.apple\.mpegurl|application\/x-mpegurl/i.test(contentType)) return true;
+        }
+
+        return false;
     } catch (e) {
         return false;
     }
@@ -153,7 +174,7 @@ async function fetchWithRetry(job) {
         const delay = RETRY_DELAYS_MS[attempt];
         if (delay > 0) await sleep(delay);
 
-        const data = await fetchJson(job.url);
+        const data = await fetchJson(job.url, { timeoutMs: job.timeoutMs || API_TIMEOUT_MS });
         if (!data) continue;
 
         const pending = data.pending === true || /reessayez|reessay/i.test(String(data.message || ''));
@@ -191,11 +212,29 @@ async function resolveForExo(stream) {
     }
 
     if (!resolved || !resolved.url) return null;
-    if (!resolved.isDirect) return null; // Only accept truly direct links
+    if (!resolved.isDirect && !isExoPlayableUrl(resolved.url)) return null;
 
-    const normalizedHeaders = directHeadersFor(resolved.url, resolved.headers || stream.headers);
-    if (!(await validateDirectUrl(resolved.url, normalizedHeaders))) return null;
-    
+    const baseHeaders = directHeadersFor(resolved.url, resolved.headers || stream.headers);
+    const headerVariants = [
+        baseHeaders,
+        { ...baseHeaders, Referer: `${originFromUrl(stream.url)}/`, Origin: originFromUrl(stream.url) },
+        { ...baseHeaders, Referer: `${originFromUrl(resolved.url)}/`, Origin: originFromUrl(resolved.url) },
+    ];
+
+    let normalizedHeaders = null;
+    for (const headers of headerVariants) {
+        if (await validateDirectUrl(resolved.url, headers)) {
+            normalizedHeaders = headers;
+            break;
+        }
+    }
+
+    // Soft-accept direct-looking links when validation probes are blocked by the host.
+    if (!normalizedHeaders) {
+        if (!isExoPlayableUrl(resolved.url)) return null;
+        normalizedHeaders = baseHeaders;
+    }
+
     // Final validation: URL must look like a direct media link
     if (!isExoPlayableUrl(resolved.url)) return null;
 
@@ -295,16 +334,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             {
                 label: 'fstream-movie',
                 url: `${API_BASE}/api/fstream/movie/${tmdbId}`,
+                timeoutMs: 16000,
                 collect: (data) => collectFstreamMovie(streams, data)
             },
             {
                 label: 'wiflix-movie',
                 url: `${API_BASE}/api/wiflix/movie/${tmdbId}`,
+                timeoutMs: 11000,
                 collect: (data) => collectWiflixMovie(streams, data)
             },
             {
                 label: 'cpasmal-movie',
                 url: `${API_BASE}/api/cpasmal/movie/${tmdbId}`,
+                timeoutMs: 11000,
                 collect: (data) => collectCpasmal(streams, data)
             }
         ]
@@ -312,16 +354,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             {
                 label: 'fstream-tv',
                 url: `${API_BASE}/api/fstream/tv/${tmdbId}/season/${seasonNum}`,
+                timeoutMs: 16000,
                 collect: (data) => collectFstreamTv(streams, data, episodeNum)
             },
             {
                 label: 'wiflix-tv',
                 url: `${API_BASE}/api/wiflix/tv/${tmdbId}/${seasonNum}`,
+                timeoutMs: 11000,
                 collect: (data) => collectWiflixTv(streams, data, episodeNum)
             },
             {
                 label: 'cpasmal-tv',
                 url: `${API_BASE}/api/cpasmal/tv/${tmdbId}/${seasonNum}/${episodeNum}`,
+                timeoutMs: 11000,
                 collect: (data) => collectCpasmal(streams, data)
             }
         ];
@@ -360,7 +405,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const resolvedResults = await Promise.allSettled(unique.map((s) => resolveForExo(s)));
+    const candidatesToResolve = unique.slice(0, 20);
+    const resolvedResults = await Promise.allSettled(candidatesToResolve.map((s) => resolveForExo(s)));
     const playable = [];
     const seenPlayable = new Set();
     for (const r of resolvedResults) {
@@ -375,12 +421,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             console.log('[Movix] No playable stream from Movix API, trying Frenchstream fallback...');
             const fallback = await extractFrenchstreamStreams(tmdbId, mediaType, seasonNum, episodeNum);
             if (Array.isArray(fallback) && fallback.length > 0) {
-                for (const stream of fallback) {
-                    if (!stream?.url) continue;
-                    if (seenPlayable.has(stream.url)) continue;
-                    if (!isExoPlayableUrl(stream.url)) continue;
-                    seenPlayable.add(stream.url);
-                    playable.push(stream);
+                const fallbackResolved = await Promise.allSettled(
+                    fallback
+                        .filter((stream) => stream && stream.url)
+                        .slice(0, 12)
+                        .map((stream) => resolveForExo({ ...stream, name: stream.name || 'Movix-Fallback' }))
+                );
+
+                for (const item of fallbackResolved) {
+                    if (item.status !== 'fulfilled' || !item.value || !item.value.url) continue;
+                    if (seenPlayable.has(item.value.url)) continue;
+                    seenPlayable.add(item.value.url);
+                    playable.push(item.value);
                 }
             }
         } catch (e) {

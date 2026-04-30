@@ -12,18 +12,21 @@ import { expandStreamQualities } from '../utils/resolvers.js';
  * @param {number} season - Season number (null for movies)
  * @param {number} episode - Episode number (null for movies)
  */
-async function getStreams(tmdbId, mediaType, season, episode) {
-    console.log(`[Frenchstream] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+function getStreams(tmdbId, mediaType, season, episode) {
+    console.log('[Frenchstream] Request: ' + mediaType + ' ' + tmdbId + ' S' + season + 'E' + episode);
 
-    try {
-        const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        const expanded = await expandStreamQualities(streams);
-        console.log(`[Frenchstream] Found ${expanded.length} stream(s)`);
-        return expanded;
-    } catch (error) {
-        console.error(`[Frenchstream] Error:`, error);
-        return [];
-    }
+    return extractStreams(tmdbId, mediaType, season, episode)
+        .then(function(streams) {
+            return expandStreamQualities(streams);
+        })
+        .then(function(expanded) {
+            console.log('[Frenchstream] Found ' + expanded.length + ' stream(s)');
+            return expanded;
+        })
+        .catch(function(error) {
+            console.error('[Frenchstream] Error:', error);
+            return [];
+        });
 }
 
 module.exports = { getStreams };

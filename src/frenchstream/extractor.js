@@ -11,7 +11,23 @@ const SEARCH_STOPWORDS = new Set([
     'the', 'and', 'for', 'with', 'from', 'des', 'les', 'une', 'dans', 'sur', 'via', 'de', 'du', 'la', 'le'
 ]);
 const MIN_MATCH_SCORE = 40;
+const STRONG_MATCH_SCORE = 90;
+const MAX_TITLE_QUERIES = 3;
 const FSTREAM_API_BASE = 'https://api.movix.cash';
+
+async function withTimeout(promise, ms) {
+    let timer = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((resolve) => {
+                timer = setTimeout(() => resolve(null), ms);
+            })
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
 
 function normalize(text) {
     return (text || '')
@@ -24,11 +40,9 @@ function normalize(text) {
 }
 
 function getOrigin(url) {
-    try {
-        return new URL(url).origin;
-    } catch (e) {
-        return BASE_URL;
-    }
+    if (!url || typeof url !== 'string') return BASE_URL;
+    const match = url.match(/^(https?:\/\/[^\/]+)/);
+    return match ? match[1] : BASE_URL;
 }
 
 function pickNewsId(onclick, href) {
@@ -93,19 +107,20 @@ function buildTitleQueries(titles) {
         if (typeof value !== 'string') return;
         const v = value.trim();
         if (!v) return;
+        const normalized = normalize(v);
+        if (normalized.length < 3) return;
+        if (/^[0-9\s]+$/.test(normalized)) return;
         if (!queries.some((q) => q.toLowerCase() === v.toLowerCase())) queries.push(v);
     };
 
-    for (const title of (titles || []).slice(0, 8)) {
+    for (const title of (titles || []).slice(0, 3)) {
         push(title);
-        push(title.replace(/['’]/g, ' '));
-        push(title.replace(/\s*\([^)]*\)\s*/g, ' '));
 
         const beforeColon = title.split(':')[0];
         if (beforeColon && beforeColon.length >= 3) push(beforeColon);
     }
 
-    return queries.slice(0, 10);
+    return queries.slice(0, MAX_TITLE_QUERIES);
 }
 
 function scoreCard(card, queryTitle, mediaType, season) {
@@ -154,7 +169,7 @@ async function searchByTitle(title, mediaType, season) {
     for (const baseUrl of BASE_URLS) {
         try {
             const url = `${baseUrl}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
-            const html = await fetchText(url, { baseUrl });
+            const html = await fetchText(url, { baseUrl, timeoutMs: 6500 });
             const cards = parseSearchCards(html, baseUrl);
             allCards.push(...cards);
         } catch (e) {
@@ -197,7 +212,6 @@ function languageLabel(languageKey) {
 
 function playbackHeadersFor(url, sourceUrl, headers = {}) {
     const sourceOrigin = getOrigin(sourceUrl || BASE_URL);
-    const directOrigin = getOrigin(url);
     const referer = headers.Referer || headers.referer || `${sourceOrigin}/`;
 
     return {
@@ -205,8 +219,7 @@ function playbackHeadersFor(url, sourceUrl, headers = {}) {
         Referer: referer,
         Origin: headers.Origin || headers.origin || (referer ? getOrigin(referer) : sourceOrigin),
         'User-Agent': headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-        Accept: headers.Accept || headers.accept || '*/*',
-        'X-Direct-Origin': directOrigin
+        Accept: headers.Accept || headers.accept || '*/*'
     };
 }
 
@@ -216,8 +229,19 @@ function toStream(name, host, language, url, sourceUrl) {
         title: `[${languageLabel(language)}] ${hostLabel(host)}`,
         url,
         quality: 'HD',
-        headers: playbackHeadersFor(url, sourceUrl)
+        headers: playbackHeadersFor(url, sourceUrl),
+        _sourceUrl: sourceUrl || BASE_URL
     };
+}
+
+function readHeader(headers, name) {
+    if (!headers) return '';
+    if (typeof headers.get === 'function') return headers.get(name) || '';
+    const wanted = String(name || '').toLowerCase();
+    for (const [key, value] of Object.entries(headers)) {
+        if (String(key).toLowerCase() === wanted) return value || '';
+    }
+    return '';
 }
 
 async function validatePlaybackUrl(url, headers = {}) {
@@ -231,7 +255,15 @@ async function validatePlaybackUrl(url, headers = {}) {
             redirect: 'follow'
         });
         if (!res) return false;
-        return res.status === 206 || (typeof res.status === 'number' && res.status >= 200 && res.status < 300);
+
+        if (res.status === 206) return true;
+        if (typeof res.status === 'number' && res.status >= 200 && res.status < 300) {
+            const contentType = String(readHeader(res.headers, 'content-type') || '');
+            if (/video\//i.test(contentType)) return true;
+            if (/mpegurl|application\/vnd\.apple\.mpegurl|application\/x-mpegurl/i.test(contentType)) return true;
+        }
+
+        return false;
     } catch (e) {
         return false;
     }
@@ -324,6 +356,7 @@ async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
             : `${FSTREAM_API_BASE}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
 
         const data = await fetchJson(url, {
+            timeoutMs: 15000,
             headers: {
                 Accept: 'application/json, text/plain, */*',
                 Referer: 'https://movix.cash/',
@@ -342,26 +375,76 @@ async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
 }
 
 async function resolveCandidates(candidates) {
-    const resolved = await Promise.allSettled(candidates.map((stream) => resolveStream(stream)));
     const direct = [];
-    for (const result of resolved) {
-        if (result.status !== 'fulfilled') continue;
-        const stream = result.value;
-        if (!stream?.url) continue;
-        if (!stream.isDirect) continue;
 
-        const headers = playbackHeadersFor(stream.url, stream.headers?.Referer || stream.headers?.referer || BASE_URL, stream.headers || {});
-        if (!(await validatePlaybackUrl(stream.url, headers))) continue;
+    // Helper: try resolving a stream with header variants and validate playback
+    async function tryResolveWithVariants(origStream) {
+        const sourceUrl = origStream._sourceUrl || origStream.headers?.Referer || origStream.headers?.referer || BASE_URL;
+        const sourceOrigin = getOrigin(sourceUrl);
+        const headerVariants = [
+            origStream.headers || {},
+            playbackHeadersFor(origStream.url, sourceUrl, origStream.headers || {}),
+            { ...(origStream.headers || {}), 'User-Agent': 'Mozilla/5.0', Referer: `${sourceOrigin}/`, Origin: sourceOrigin, Accept: '*/*' },
+        ];
 
-        direct.push({
-            ...stream,
-            headers
-        });
+        for (const hv of headerVariants) {
+            try {
+                const attemptStream = { ...origStream, headers: hv };
+                let resolved = null;
+                try {
+                    resolved = await resolveStream(attemptStream);
+                } catch (e) {
+                    resolved = null;
+                }
+                if (!resolved || !resolved.url) continue;
+
+                const resolvedOrigin = getOrigin(resolved.url);
+                const resolvedHeaderVariants = [
+                    playbackHeadersFor(resolved.url, sourceUrl, { ...(resolved.headers || {}), ...hv }),
+                    playbackHeadersFor(resolved.url, `${resolvedOrigin}/`, { ...(resolved.headers || {}), ...hv }),
+                    { ...(resolved.headers || {}), ...hv, 'User-Agent': 'Mozilla/5.0', Referer: `${resolvedOrigin}/`, Origin: resolvedOrigin, Accept: '*/*' },
+                ];
+
+                for (const headersToUse of resolvedHeaderVariants) {
+                    if (await validatePlaybackUrl(resolved.url, headersToUse)) {
+                        return {
+                            ...resolved,
+                            headers: headersToUse
+                        };
+                    }
+                }
+            } catch (e) {
+                continue;
+            }
+        }
+
+        return null;
     }
 
-    const uniqueDirect = dedupeByUrl(direct);
-    // ExoPlayer crashes on unresolved embed URLs; keep only direct links.
-    return uniqueDirect;
+    // Resolve in small parallel batches: much faster on TV while staying network-safe.
+    const queue = (Array.isArray(candidates) ? candidates : []).slice(0, 12);
+    const workerCount = Math.min(3, queue.length);
+    let cursor = 0;
+
+    async function worker() {
+        while (cursor < queue.length) {
+            const index = cursor++;
+            const candidate = queue[index];
+            if (!candidate) continue;
+
+            const settled = await Promise.race([
+                tryResolveWithVariants(candidate),
+                new Promise((resolve) => setTimeout(() => resolve(null), 18000))
+            ]);
+
+            if (settled && settled.url) {
+                direct.push(settled);
+            }
+        }
+    }
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return dedupeByUrl(direct);
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
@@ -369,6 +452,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (!titles || titles.length === 0) return [];
 
     const searchTitles = buildTitleQueries(titles);
+    const fallbackPromise = fetchFstreamApiFallback(tmdbId, mediaType, season, episode);
+
+    // Movie path: prioritize API fallback first to avoid slow web search fanout.
+    if (mediaType === 'movie') {
+        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        if (Array.isArray(fallbackCandidates) && fallbackCandidates.length > 0) {
+            const fallbackStreams = await resolveCandidates(fallbackCandidates);
+            if (fallbackStreams.length > 0) {
+                console.log(`[Frenchstream] API-first movie path returned ${fallbackStreams.length}`);
+                return fallbackStreams;
+            }
+        }
+    }
 
     let match = null;
     let bestScore = -Infinity;
@@ -378,6 +474,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             if (ranked.length > 0 && ranked[0]._score > bestScore) {
                 bestScore = ranked[0]._score;
                 match = ranked[0];
+                if (bestScore >= STRONG_MATCH_SCORE) break;
             }
         } catch (e) {
             console.warn(`[Frenchstream] Search failed for "${title}": ${e.message}`);
@@ -386,7 +483,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     if (!match || bestScore < MIN_MATCH_SCORE) {
         console.warn(`[Frenchstream] No confident web match for tmdb=${tmdbId} (bestScore=${bestScore}), trying API fallback`);
-        const fallbackCandidates = await fetchFstreamApiFallback(tmdbId, mediaType, season, episode);
+        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        if (!Array.isArray(fallbackCandidates)) return [];
         if (fallbackCandidates.length === 0) return [];
 
         const fallbackStreams = await resolveCandidates(fallbackCandidates);
@@ -400,9 +498,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         ? collectMovieCandidates(await fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase }), sourceBase)
         : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode, sourceBase);
 
-    if (candidates.length === 0) return [];
+    if (candidates.length === 0) {
+        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        if (!Array.isArray(fallbackCandidates)) return [];
+        if (fallbackCandidates.length === 0) return [];
+        const fallbackStreams = await resolveCandidates(fallbackCandidates);
+        return fallbackStreams;
+    }
 
     const streams = await resolveCandidates(candidates);
+    if (streams.length === 0) {
+        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        if (Array.isArray(fallbackCandidates) && fallbackCandidates.length > 0) {
+            const fallbackStreams = await resolveCandidates(fallbackCandidates);
+            if (fallbackStreams.length > 0) {
+                console.log(`[Frenchstream] Web match empty, API fallback returned ${fallbackStreams.length}`);
+                return fallbackStreams;
+            }
+        }
+    }
+
     console.log(`[Frenchstream] Candidates: ${candidates.length}, Returned: ${streams.length}`);
     return streams;
 }
