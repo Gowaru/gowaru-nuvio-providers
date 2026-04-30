@@ -6,6 +6,21 @@ import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://sekai.one";
 
+/**
+ * Batch fetch URLs with a modest concurrency limit to keep TV runtime responsive.
+ */
+async function batchFetchTexts(urls, maxConcurrent = 6) {
+    const results = [];
+    for (let i = 0; i < urls.length; i += maxConcurrent) {
+        const batch = urls.slice(i, i + maxConcurrent);
+        const batchResults = await Promise.allSettled(batch.map((url) => fetchText(url)));
+        batchResults.forEach((result) => {
+            results.push(result.status === 'fulfilled' ? result.value : "");
+        });
+    }
+    return results;
+}
+
 function decodeBase64Utf8(input) {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
     let output = '';
@@ -247,7 +262,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     console.log(`[Sekai] Found ${arcsUrls.length} arcs. Fetching...`);
     
     // fetch all arcs in parallel to find the episode map
-    const arcsHtmls = await Promise.all(arcsUrls.map(u => fetchText(u).catch(() => "")));
+    const arcsHtmls = await batchFetchTexts(arcsUrls);
     
     for(const html of arcsHtmls) {
          if(!html) continue;

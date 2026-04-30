@@ -17,11 +17,9 @@ export const HEADERS = {
 };
 
 function originFromUrl(url) {
-    try {
-        return new URL(url).origin;
-    } catch (e) {
-        return BASE_URL;
-    }
+    if (!url || typeof url !== 'string') return BASE_URL;
+    const match = url.match(/^(https?:\/\/[^\/]+)/);
+    return match ? match[1] : BASE_URL;
 }
 
 export async function fetchText(url, options = {}) {

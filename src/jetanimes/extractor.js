@@ -7,6 +7,23 @@ import { getTmdbTitles } from '../utils/metadata.js';
 const BASE_URL = "https://on.jetanimes.com";
 
 /**
+ * Batch resolve streams with parallelism limit to prevent network saturation
+ */
+async function batchResolveStreams(streamConfigs, maxConcurrent = 20) {
+    const results = [];
+    for (let i = 0; i < streamConfigs.length; i += maxConcurrent) {
+        const batch = streamConfigs.slice(i, i + maxConcurrent);
+        const batchResults = await Promise.allSettled(batch.map(cfg => resolveStream(cfg)));
+        batchResults.forEach(r => {
+            if (r.status === 'fulfilled' && r.value) {
+                results.push(r.value);
+            }
+        });
+    }
+    return results;
+}
+
+/**
  * Search for the anime on JetAnimes
  */
 async function searchAnime(title) {
@@ -175,8 +192,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     // Filter out unresolved iframes to prevent ExoPlayer crashing
     const validStreams = [];
-    const streamPromises = streams.map(s => resolveStream(s).catch(() => null));
-    const resolvedArray = await Promise.all(streamPromises);
+    const resolvedArray = await batchResolveStreams(streams);
     for (const resolved of resolvedArray) {
         if (resolved && resolved.isDirect) {
             validStreams.push(resolved);

@@ -3,6 +3,19 @@
  * Highly optimized for Nuvio (Hermes/React Native)
  */
 
+const _global = (typeof globalThis !== 'undefined') ? globalThis : 
+               (typeof global !== 'undefined') ? global : 
+               (typeof self !== 'undefined') ? self : {};
+
+if (typeof Promise !== 'undefined' && !Promise.allSettled) {
+    Promise.allSettled = function(promises) {
+        return Promise.all(promises.map(p => Promise.resolve(p).then(
+            value => ({ status: 'fulfilled', value }),
+            reason => ({ status: 'rejected', reason })
+        )));
+    };
+}
+
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
 };
@@ -149,7 +162,19 @@ async function expandSingleStreamQualities(stream) {
 
         let variantUrl = nextLine;
         try {
-            variantUrl = new URL(nextLine, url).toString();
+            if (nextLine.startsWith('http')) {
+                variantUrl = nextLine;
+            } else if (nextLine.startsWith('//')) {
+                variantUrl = (url.startsWith('https') ? 'https:' : 'http:') + nextLine;
+            } else {
+                const origin = url.match(/^https?:\/\/[^\/]+/)?.[0] || '';
+                if (nextLine.startsWith('/')) {
+                    variantUrl = origin + nextLine;
+                } else {
+                    const base = url.substring(0, url.lastIndexOf('/') + 1);
+                    variantUrl = base + nextLine;
+                }
+            }
         } catch (e) {}
 
         variants.push({
@@ -206,17 +231,38 @@ export async function expandStreamQualities(streams) {
 }
 
 export async function safeFetch(url, options = {}) {
+    const { __debug, timeoutMs, ...fetchOptions } = options || {};
+    const debug = Boolean(__debug);
+    const timeoutDuration = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+        ? Number(timeoutMs)
+        : 10000;
     let controller, timeout;
     try {
         const canAbort = typeof AbortController !== 'undefined';
         controller = canAbort ? new AbortController() : null;
-        if (controller) timeout = setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(url, {
-            ...options,
-            headers: { ...HEADERS, ...options.headers },
+
+        const requestOptions = {
+            ...fetchOptions,
+            headers: { ...HEADERS, ...(fetchOptions.headers || {}) },
             redirect: 'follow',
             signal: controller ? controller.signal : undefined
-        });
+        };
+
+        const fetchPromise = fetch(url, requestOptions);
+        let response;
+
+        if (controller) {
+            timeout = setTimeout(() => controller.abort(), timeoutDuration);
+            response = await fetchPromise;
+        } else {
+            response = await Promise.race([
+                fetchPromise,
+                new Promise((_, reject) => {
+                    timeout = setTimeout(() => reject(new Error('timeout')), timeoutDuration);
+                })
+            ]);
+        }
+
         if (timeout) clearTimeout(timeout);
         if (!response) return null;
 
@@ -240,6 +286,10 @@ export async function safeFetch(url, options = {}) {
         };
     } catch (e) {
         if (timeout) clearTimeout(timeout);
+        if (debug) {
+            const message = e && e.message ? e.message : String(e);
+            console.warn(`[safeFetch] ${url} failed: ${message}`);
+        }
         return null;
     }
 }

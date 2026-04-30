@@ -12,6 +12,23 @@ import { getTmdbTitles } from '../utils/metadata.js';
 const BASE_URL = "https://animevostfr.org";
 
 /**
+ * Batch resolve streams with parallelism limit to prevent network saturation
+ */
+async function batchResolveStreams(streamConfigs, maxConcurrent = 20) {
+    const results = [];
+    for (let i = 0; i < streamConfigs.length; i += maxConcurrent) {
+        const batch = streamConfigs.slice(i, i + maxConcurrent);
+        const batchResults = await Promise.allSettled(batch.map(cfg => resolveStream(cfg)));
+        batchResults.forEach(r => {
+            if (r.status === 'fulfilled' && r.value) {
+                results.push(r.value);
+            }
+        });
+    }
+    return results;
+}
+
+/**
  * Search for anime on AnimeVOSTFR
  */
 async function searchAnime(title) {
@@ -205,7 +222,8 @@ async function extractPlayersFromEpisode(episodeUrl) {
         console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
 
         // Resolve each trembed URL to get the real player iframe
-        const trembedPromises = trembedEntries.map(async (entry) => {
+        const trembedStreamConfigs = [];
+        for (const entry of trembedEntries) {
             try {
                 let trembedUrl = entry.src;
                 if (trembedUrl.startsWith('/')) trembedUrl = BASE_URL + trembedUrl;
@@ -227,25 +245,21 @@ async function extractPlayersFromEpisode(episodeUrl) {
 
                 if (playerSrc && playerSrc.startsWith('http')) {
                     const playerName = getPlayerName(playerSrc);
-                    const stream = await resolveStream({
+                    trembedStreamConfigs.push({
                         name: `AnimeVOSTFR`,
                         title: `${playerName} (${entry.serverName})`,
                         url: playerSrc,
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
-                    return stream;
                 }
             } catch (err) {
                 console.error(`[AnimeVOSTFR] Failed to resolve player "${entry.serverName}": ${err.message}`);
             }
-            return null;
-        });
-
-        const playerStreams = await Promise.all(trembedPromises);
-        for (const stream of playerStreams) {
-            if (stream) streams.push(stream);
         }
+
+        const playerStreams = await batchResolveStreams(trembedStreamConfigs);
+        streams.push(...playerStreams);
     } catch (e) {
         console.error(`[AnimeVOSTFR] Error extracting players: ${e.message}`);
     }

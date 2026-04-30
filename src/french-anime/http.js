@@ -17,7 +17,8 @@ import { safeFetch } from '../utils/resolvers.js';
  */
 export async function fetchText(url, options = {}) {
     console.log(`[French-Anime] Fetching: ${url}`);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    const timeoutMs = options.timeoutMs || 8000; // Default 8s
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, timeoutMs, ...options });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

@@ -21,7 +21,8 @@ export const HEADERS = {
 
 export async function fetchText(url, options = {}) {
     console.log(`[Anime-Sama] Fetching: ${url}`);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    const timeoutMs = options.timeoutMs || 8000; // Default 8s for JS file fetches
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, timeoutMs, ...options });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

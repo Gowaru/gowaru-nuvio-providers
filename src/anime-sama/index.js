@@ -13,17 +13,17 @@ import { expandStreamQualities } from '../utils/resolvers.js';
  * @param {number} season - Season number (for TV)
  * @param {number} episode - Episode number (for TV)
  */
-async function getStreams(tmdbId, mediaType, season, episode) {
-    try {
-        console.log(`[Anime-Sama] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+function getStreams(tmdbId, mediaType, season, episode) {
+    console.log('[Anime-Sama] Request: ' + mediaType + ' ' + tmdbId + ' S' + season + 'E' + episode);
 
-        // Call extraction logic
-        const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        return await expandStreamQualities(streams);
-    } catch (error) {
-        console.error(`[Anime-Sama] Error: ${error.message}`);
-        return [];
-    }
+    return extractStreams(tmdbId, mediaType, season, episode)
+        .then(function(streams) {
+            return expandStreamQualities(streams);
+        })
+        .catch(function(error) {
+            console.error('[Anime-Sama] Error: ' + (error ? error.message : 'unknown'));
+            return [];
+        });
 }
 
 module.exports = { getStreams };
