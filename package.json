@@ -11,7 +11,8 @@
     "serve": "node server.js",
     "test:provider": "node scripts/provider-success-runner.js",
     "test:provider:both": "node scripts/provider-success-runner.js --profile both",
-    "test:androidtv13": "node scripts/provider-success-runner.js --profile tv --android-tv13"
+    "test:androidtv13": "node scripts/provider-success-runner.js --profile tv --android-tv13",
+    "release-check": "node scripts/release-check.js"
   },
   "devDependencies": {
     "cheerio": "^1.1.2",

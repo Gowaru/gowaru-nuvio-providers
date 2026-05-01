@@ -13,7 +13,10 @@ const SEARCH_STOPWORDS = new Set([
 const MIN_MATCH_SCORE = 40;
 const STRONG_MATCH_SCORE = 90;
 const MAX_TITLE_QUERIES = 3;
-const FSTREAM_API_BASE = 'https://api.movix.cash';
+const FSTREAM_API_BASES = [
+    'https://api.movix.cash',
+    'https://movix.cash'
+];
 
 function getRuntimeProfile(options = {}) {
     const g = (typeof globalThis !== 'undefined')
@@ -44,8 +47,8 @@ function getNetworkConfig(profile) {
             fetchTimeoutMs: 12000,
             fstreamApiTimeoutMs: 18000,
             fallbackWaitMs: 12000,
-            resolveAttemptTimeoutMs: 22000,
-            maxCandidatesToResolve: 20,
+            resolveAttemptTimeoutMs: 12000,
+            maxCandidatesToResolve: 10,
             workerCount: 3
         };
     }
@@ -403,29 +406,31 @@ function collectFstreamApiTvCandidates(apiData, episode, sourceUrl) {
 }
 
 async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode, ctx = {}) {
-    try {
-        const timeoutMs = Number(ctx?.network?.fstreamApiTimeoutMs) || 15000;
-        const url = mediaType === 'movie'
-            ? `${FSTREAM_API_BASE}/api/fstream/movie/${tmdbId}`
-            : `${FSTREAM_API_BASE}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
+    const timeoutMs = Number(ctx?.network?.fstreamApiTimeoutMs) || 15000;
+    for (const apiBase of FSTREAM_API_BASES) {
+        try {
+            const url = mediaType === 'movie'
+                ? `${apiBase}/api/fstream/movie/${tmdbId}`
+                : `${apiBase}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
 
-        const data = await fetchJson(url, {
-            timeoutMs,
-            headers: {
-                Accept: 'application/json, text/plain, */*',
-                Referer: 'https://movix.cash/',
-                Origin: 'https://movix.cash'
-            }
-        });
+            const data = await fetchJson(url, {
+                timeoutMs,
+                headers: {
+                    Accept: 'application/json, text/plain, */*',
+                    Referer: 'https://movix.cash/',
+                    Origin: 'https://movix.cash'
+                }
+            });
 
-        if (!data || data.success === false) return [];
-        return mediaType === 'movie'
-            ? collectFstreamApiMovieCandidates(data, 'https://movix.cash/')
-            : collectFstreamApiTvCandidates(data, episode, 'https://movix.cash/');
-    } catch (e) {
-        console.warn(`[Frenchstream] FStream API fallback failed: ${e.message}`);
-        return [];
+            if (!data || data.success === false) continue;
+            return mediaType === 'movie'
+                ? collectFstreamApiMovieCandidates(data, 'https://movix.cash/')
+                : collectFstreamApiTvCandidates(data, episode, 'https://movix.cash/');
+        } catch (e) {
+            console.warn(`[Frenchstream] FStream API fallback failed on ${apiBase}: ${e.message}`);
+        }
     }
+    return [];
 }
 
 async function scrapePageIframes(pageUrl, language = 'vf', ctx = {}) {
@@ -558,13 +563,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         return fallbackStreams;
     }
 
-    // Movie path: prioritize API fallback first to avoid slow web search fanout.
-    if (mediaType === 'movie') {
+    // API-first path for both movies and TV:
+    // this avoids expensive web-search fanout on Android TV and keeps latency predictable.
+    {
         const fallbackCandidates = await withTimeout(fallbackPromise, network.fallbackWaitMs);
         if (Array.isArray(fallbackCandidates) && fallbackCandidates.length > 0) {
             const fallbackStreams = await resolveCandidates(fallbackCandidates, ctx);
             if (fallbackStreams.length > 0) {
-                console.log(`[Frenchstream][${requestId}] API-first movie path returned ${fallbackStreams.length}`);
+                console.log(`[Frenchstream][${requestId}] API-first ${mediaType} path returned ${fallbackStreams.length}`);
                 return fallbackStreams;
             }
         }
