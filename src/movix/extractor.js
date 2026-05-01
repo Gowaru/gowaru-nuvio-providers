@@ -3,7 +3,7 @@ import { resolveStream, safeFetch, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { extractStreams as extractFrenchstreamStreams } from '../frenchstream/extractor.js';
 
-const API_BASE = 'https://api.movix.cash';
+const API_BASES = ['https://api.movix.cash', 'https://movix.cash'];
 
 const RETRY_DELAYS_MS = [0, 1400, 2600];
 const API_TIMEOUT_MS = 14000;
@@ -188,6 +188,52 @@ async function fetchWithRetry(job) {
     return null;
 }
 
+function buildJobsForBase(apiBase, isMovie, tmdbId, seasonNum, episodeNum, streams) {
+    if (isMovie) {
+        return [
+            {
+                label: `fstream-movie@${apiBase}`,
+                url: `${apiBase}/api/fstream/movie/${tmdbId}`,
+                timeoutMs: 16000,
+                collect: (data) => collectFstreamMovie(streams, data)
+            },
+            {
+                label: `wiflix-movie@${apiBase}`,
+                url: `${apiBase}/api/wiflix/movie/${tmdbId}`,
+                timeoutMs: 11000,
+                collect: (data) => collectWiflixMovie(streams, data)
+            },
+            {
+                label: `cpasmal-movie@${apiBase}`,
+                url: `${apiBase}/api/cpasmal/movie/${tmdbId}`,
+                timeoutMs: 11000,
+                collect: (data) => collectCpasmal(streams, data)
+            }
+        ];
+    }
+
+    return [
+        {
+            label: `fstream-tv@${apiBase}`,
+            url: `${apiBase}/api/fstream/tv/${tmdbId}/season/${seasonNum}`,
+            timeoutMs: 16000,
+            collect: (data) => collectFstreamTv(streams, data, episodeNum)
+        },
+        {
+            label: `wiflix-tv@${apiBase}`,
+            url: `${apiBase}/api/wiflix/tv/${tmdbId}/${seasonNum}`,
+            timeoutMs: 11000,
+            collect: (data) => collectWiflixTv(streams, data, episodeNum)
+        },
+        {
+            label: `cpasmal-tv@${apiBase}`,
+            url: `${apiBase}/api/cpasmal/tv/${tmdbId}/${seasonNum}/${episodeNum}`,
+            timeoutMs: 11000,
+            collect: (data) => collectCpasmal(streams, data)
+        }
+    ];
+}
+
 async function resolveForExo(stream) {
     // Try resolution with retries (up to 2 attempts for timeouts)
     let resolved = null;
@@ -328,70 +374,38 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         console.log(`[Movix] Failed to load TMDB titles for ${tmdbId}: ${e.message}`);
     }
 
-    const jobs = isMovie
-        ? [
-            {
-                label: 'fstream-movie',
-                url: `${API_BASE}/api/fstream/movie/${tmdbId}`,
-                timeoutMs: 16000,
-                collect: (data) => collectFstreamMovie(streams, data)
-            },
-            {
-                label: 'wiflix-movie',
-                url: `${API_BASE}/api/wiflix/movie/${tmdbId}`,
-                timeoutMs: 11000,
-                collect: (data) => collectWiflixMovie(streams, data)
-            },
-            {
-                label: 'cpasmal-movie',
-                url: `${API_BASE}/api/cpasmal/movie/${tmdbId}`,
-                timeoutMs: 11000,
-                collect: (data) => collectCpasmal(streams, data)
-            }
-        ]
-        : [
-            {
-                label: 'fstream-tv',
-                url: `${API_BASE}/api/fstream/tv/${tmdbId}/season/${seasonNum}`,
-                timeoutMs: 16000,
-                collect: (data) => collectFstreamTv(streams, data, episodeNum)
-            },
-            {
-                label: 'wiflix-tv',
-                url: `${API_BASE}/api/wiflix/tv/${tmdbId}/${seasonNum}`,
-                timeoutMs: 11000,
-                collect: (data) => collectWiflixTv(streams, data, episodeNum)
-            },
-            {
-                label: 'cpasmal-tv',
-                url: `${API_BASE}/api/cpasmal/tv/${tmdbId}/${seasonNum}/${episodeNum}`,
-                timeoutMs: 11000,
-                collect: (data) => collectCpasmal(streams, data)
-            }
-        ];
+    for (const apiBase of API_BASES) {
+        const beforeCount = streams.length;
+        const jobs = buildJobsForBase(apiBase, isMovie, tmdbId, seasonNum, episodeNum, streams);
+        const results = await Promise.allSettled(
+            jobs.map(async (job) => {
+                const data = await fetchWithRetry(job);
+                if (!data) return;
+                if (data.success === false) {
+                    console.log(`[Movix] ${job.label} unavailable: ${data.error || 'unknown error'}`);
+                    return;
+                }
 
-    const results = await Promise.allSettled(
-        jobs.map(async (job) => {
-            const data = await fetchWithRetry(job);
-            if (!data) return;
-            if (data.success === false) {
-                console.log(`[Movix] ${job.label} unavailable: ${data.error || 'unknown error'}`);
-                return;
+                const sourceTitles = extractSourceTitles(data);
+                if (!titleMatchesAny(sourceTitles, tmdbTitles)) {
+                    console.log(`[Movix] ${job.label} skipped: source title mismatch (${sourceTitles.join(' | ') || 'no title'})`);
+                    return;
+                }
+
+                job.collect(data);
+            })
+        );
+
+        for (const r of results) {
+            if (r.status === 'rejected') {
+                console.log(`[Movix] source fetch failed: ${r.reason?.message || r.reason}`);
             }
+        }
 
-            const sourceTitles = extractSourceTitles(data);
-            if (!titleMatchesAny(sourceTitles, tmdbTitles)) {
-                console.log(`[Movix] ${job.label} skipped: source title mismatch (${sourceTitles.join(' | ') || 'no title'})`);
-                return;
-            }
-
-            job.collect(data);
-        })
-    );
-
-    for (const r of results) {
-        if (r.status === 'rejected') {
-            console.log(`[Movix] source fetch failed: ${r.reason?.message || r.reason}`);
+        const added = streams.length - beforeCount;
+        if (added > 0) {
+            console.log(`[Movix] Added ${added} candidate streams from ${apiBase}`);
+            break;
         }
     }
 

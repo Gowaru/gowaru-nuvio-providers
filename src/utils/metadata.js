@@ -5,6 +5,7 @@
 
 const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
+const CINEMETA_API_BASE = "https://v3-cinemeta.strem.io";
 
 import { safeFetch } from './resolvers.js';
 
@@ -45,6 +46,17 @@ function extractTitleFromTmdbHtml(html) {
     const titleTag = html.match(/<title>([^<]+)<\/title>/i)?.[1] || '';
     const cleanedTag = titleTag.replace(/\s*\(\d{4}\)\s*[-|].*$/i, '').trim();
     return cleanedTag;
+}
+
+async function fetchCinemetaTitle(tmdbId, mediaType) {
+    const type = mediaType === 'movie' ? 'movie' : 'series';
+    const url = `${CINEMETA_API_BASE}/meta/${type}/tmdb:${tmdbId}.json`;
+    try {
+        const data = await fetchJsonSafe(url, { timeoutMs: 12000 });
+        return data?.meta?.name || '';
+    } catch (e) {
+        return '';
+    }
 }
 
 /**
@@ -121,6 +133,12 @@ export async function getTmdbTitles(tmdbId, mediaType) {
                 const htmlTitle = extractTitleFromTmdbHtml(html);
                 if (htmlTitle) pushUniqueTitle(titles, htmlTitle);
             }
+        }
+
+        // 5. Cinemeta fallback (no TMDB key required)
+        if (titles.length === 0) {
+            const cinemetaTitle = await fetchCinemetaTitle(tmdbId, mediaType);
+            pushUniqueTitle(titles, cinemetaTitle);
         }
     } catch (e) {
         console.error(`[Metadata] TMDB API error: ${e.message}`);

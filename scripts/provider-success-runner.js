@@ -7,6 +7,7 @@
  *   node scripts/provider-success-runner.js --provider frenchstream --type movie
  *   node scripts/provider-success-runner.js --provider frenchstream --type movie --profile tv --android-tv13
  *   node scripts/provider-success-runner.js --provider frenchstream --type movie --profile both
+ *   node scripts/provider-success-runner.js ... --fail-below-pct 50    # exit 1 if any profile below 50%
  */
 
 const path = require('path');
@@ -126,6 +127,30 @@ async function main() {
     }
 
     const timeoutMs = Number(args.timeout || 30000);
+    const checkMovixApi = Boolean(args['check-movix-api']);
+    const failBelowPctRaw = args['fail-below-pct'];
+    const gatePercent = Number(failBelowPctRaw);
+    const enforceGate = failBelowPctRaw !== undefined && failBelowPctRaw !== '' && Number.isFinite(gatePercent);
+
+    /** @type {{ profile: string, okCount: number, total: number, rate: number }[]} */
+    const profileSummaries = [];
+
+    if (checkMovixApi) {
+        const probes = [
+            'https://api.movix.cash/api/fstream/movie/550',
+            'https://movix.cash/api/fstream/movie/550'
+        ];
+        for (const probe of probes) {
+            const started = Date.now();
+            try {
+                const res = await fetch(probe, { method: 'GET' });
+                const body = await res.text();
+                console.log(`[runner] probe=${probe} status=${res.status} ms=${Date.now() - started} body_len=${body.length}`);
+            } catch (e) {
+                console.log(`[runner] probe=${probe} status=ERR ms=${Date.now() - started} err=${e && e.message ? e.message : String(e)}`);
+            }
+        }
+    }
     for (const profile of profiles) {
         const rows = await runOneProfile(mod, {
             profile,
@@ -147,10 +172,27 @@ async function main() {
             console.log(`[runner] ${status} tmdb=${r.tmdbId} streams=${r.count} time=${r.ms}ms${err}`);
         }
         console.log(`[runner] Success rate (${profile}): ${okCount}/${total} (${rate}%)\n`);
+        profileSummaries.push({ profile, okCount, total, rate });
+    }
+
+    let exitCode = 0;
+    if (enforceGate) {
+        for (const s of profileSummaries) {
+            if (s.total === 0) {
+                console.error(`[runner] Gates failed: profile=${s.profile} (no IDs to test)`);
+                exitCode = 1;
+            } else if (s.rate < gatePercent) {
+                console.error(`[runner] Gates failed: profile=${s.profile} rate=${s.rate}% < required ${gatePercent}%`);
+                exitCode = 1;
+            }
+        }
+        if (!exitCode) {
+            console.log(`[runner] Gate OK: every profile meets >= ${gatePercent}% (${providerName})\n`);
+        }
     }
 
     // Force clean exit so pending network activity from timed-out provider calls doesn't keep the process alive.
-    process.exit(0);
+    process.exit(exitCode);
 }
 
 main().catch((e) => {

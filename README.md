@@ -123,6 +123,18 @@ npm run test:androidtv13 -- --provider frenchstream --type movie --ids 550,603,1
 npm run test:provider:both -- --provider frenchstream --type tv --season 1 --episode 1 --ids 1399,94605 --timeout 45000
 ```
 
+Pre-publish gate (build + movie tests default + simulated Android TV, exit code 1 if below threshold):
+
+```bash
+npm run release-check
+
+# Relax gate (e.g. flaky network)
+npm run release-check -- --gate-percent 25
+
+# Already built + log Movix API probes
+npm run release-check -- --skip-build --probe-api
+```
+
 Useful flags:
 - `--profile default|tv|both` to choose runtime profile.
 - `--android-tv13` to force an Android TV 13 user-agent + TV globals.
