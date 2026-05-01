@@ -545,11 +545,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const ctx = { profile, network, requestId };
     console.log(`[Frenchstream][${requestId}] profile=${profile.label} mediaType=${mediaType} tmdb=${tmdbId}`);
 
-    const titles = await getTmdbTitles(tmdbId, mediaType);
-    if (!titles || titles.length === 0) return [];
-
-    const searchTitles = buildTitleQueries(titles);
     const fallbackPromise = fetchFstreamApiFallback(tmdbId, mediaType, season, episode, ctx);
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    const searchTitles = buildTitleQueries(titles);
+
+    if (!titles || titles.length === 0 || searchTitles.length === 0) {
+        console.warn(`[Frenchstream][${requestId}] No TMDB titles available, using API fallback-only path`);
+        const fallbackCandidates = await withTimeout(fallbackPromise, network.fallbackWaitMs);
+        if (!Array.isArray(fallbackCandidates) || fallbackCandidates.length === 0) return [];
+        const fallbackStreams = await resolveCandidates(fallbackCandidates, ctx);
+        console.log(`[Frenchstream][${requestId}] Fallback-only candidates: ${fallbackCandidates.length}, returned: ${fallbackStreams.length}`);
+        return fallbackStreams;
+    }
 
     // Movie path: prioritize API fallback first to avoid slow web search fanout.
     if (mediaType === 'movie') {

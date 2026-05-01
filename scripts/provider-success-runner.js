@@ -5,6 +5,8 @@
  * Usage examples:
  *   node scripts/provider-success-runner.js --provider movix --type movie --ids 550,603,13
  *   node scripts/provider-success-runner.js --provider frenchstream --type movie
+ *   node scripts/provider-success-runner.js --provider frenchstream --type movie --profile tv --android-tv13
+ *   node scripts/provider-success-runner.js --provider frenchstream --type movie --profile both
  */
 
 const path = require('path');
@@ -26,37 +28,42 @@ function parseArgs(argv) {
     return out;
 }
 
-async function main() {
-    const args = parseArgs(process.argv);
-    const providerName = String(args.provider || 'frenchstream').trim();
-    const mediaType = String(args.type || 'movie').trim();
-    const season = Number(args.season || 1);
-    const episode = Number(args.episode || 1);
+function applyRuntimeProfile(profile, forceAndroidTv13Ua) {
+    const isTv = profile === 'tv';
+    globalThis.__NUVIO_RUNTIME_PROFILE = isTv ? 'tv' : 'default';
+    globalThis.__NUVIO_IS_TV = isTv;
+    globalThis.__IS_ANDROID_TV = isTv;
 
-    const defaultMovieIds = ['550', '603', '13', '680'];
-    const defaultTvIds = ['1399', '94605', '1434'];
-    const ids = String(args.ids || '')
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean);
-    const tmdbIds = ids.length > 0 ? ids : (mediaType === 'tv' ? defaultTvIds : defaultMovieIds);
+    if (!forceAndroidTv13Ua) return;
 
-    const providerPath = path.join(process.cwd(), 'providers', `${providerName}.js`);
-    let mod;
+    const tv13UA = 'Mozilla/5.0 (Linux; Android 13; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
     try {
-        mod = require(providerPath);
+        globalThis.navigator = {
+            userAgent: tv13UA,
+            platform: 'Android TV'
+        };
     } catch (e) {
-        console.error(`[runner] Cannot load provider ${providerName}: ${e.message}`);
-        process.exit(1);
+        // Fallback for readonly navigator in some runtimes.
+        if (!globalThis.navigator) {
+            globalThis.navigator = {};
+        }
+        globalThis.navigator.userAgent = tv13UA;
+        globalThis.navigator.platform = 'Android TV';
     }
+}
 
-    if (!mod || typeof mod.getStreams !== 'function') {
-        console.error(`[runner] Provider ${providerName} does not export getStreams`);
-        process.exit(1);
-    }
+async function runOneProfile(mod, options) {
+    const {
+        profile,
+        tmdbIds,
+        mediaType,
+        season,
+        episode,
+        timeoutMs,
+        forceAndroidTv13Ua
+    } = options;
 
-    const timeoutMs = Number(args.timeout || 30000);
-
+    applyRuntimeProfile(profile, forceAndroidTv13Ua);
     const rows = [];
     for (const tmdbId of tmdbIds) {
         const started = Date.now();
@@ -83,18 +90,64 @@ async function main() {
             });
         }
     }
+    return rows;
+}
 
-    const okCount = rows.filter((r) => r.ok).length;
-    const total = rows.length;
-    const rate = total === 0 ? 0 : Math.round((okCount / total) * 100);
+async function main() {
+    const args = parseArgs(process.argv);
+    const providerName = String(args.provider || 'frenchstream').trim();
+    const mediaType = String(args.type || 'movie').trim();
+    const season = Number(args.season || 1);
+    const episode = Number(args.episode || 1);
+    const profileArg = String(args.profile || 'default').trim().toLowerCase();
+    const profiles = profileArg === 'both' ? ['default', 'tv'] : [profileArg === 'tv' ? 'tv' : 'default'];
+    const forceAndroidTv13Ua = Boolean(args['android-tv13']);
 
-    console.log(`\n[runner] Provider=${providerName} Type=${mediaType} IDs=${total}`);
-    for (const r of rows) {
-        const status = r.ok ? 'OK' : 'FAIL';
-        const err = r.error ? ` err=${r.error}` : '';
-        console.log(`[runner] ${status} tmdb=${r.tmdbId} streams=${r.count} time=${r.ms}ms${err}`);
+    const defaultMovieIds = ['550', '603', '13', '680'];
+    const defaultTvIds = ['1399', '94605', '1434'];
+    const ids = String(args.ids || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+    const tmdbIds = ids.length > 0 ? ids : (mediaType === 'tv' ? defaultTvIds : defaultMovieIds);
+
+    const providerPath = path.join(process.cwd(), 'providers', `${providerName}.js`);
+    let mod;
+    try {
+        mod = require(providerPath);
+    } catch (e) {
+        console.error(`[runner] Cannot load provider ${providerName}: ${e.message}`);
+        process.exit(1);
     }
-    console.log(`[runner] Success rate: ${okCount}/${total} (${rate}%)\n`);
+
+    if (!mod || typeof mod.getStreams !== 'function') {
+        console.error(`[runner] Provider ${providerName} does not export getStreams`);
+        process.exit(1);
+    }
+
+    const timeoutMs = Number(args.timeout || 30000);
+    for (const profile of profiles) {
+        const rows = await runOneProfile(mod, {
+            profile,
+            tmdbIds,
+            mediaType,
+            season,
+            episode,
+            timeoutMs,
+            forceAndroidTv13Ua
+        });
+        const okCount = rows.filter((r) => r.ok).length;
+        const total = rows.length;
+        const rate = total === 0 ? 0 : Math.round((okCount / total) * 100);
+
+        console.log(`\n[runner] Provider=${providerName} Type=${mediaType} Profile=${profile} IDs=${total}`);
+        for (const r of rows) {
+            const status = r.ok ? 'OK' : 'FAIL';
+            const err = r.error ? ` err=${r.error}` : '';
+            console.log(`[runner] ${status} tmdb=${r.tmdbId} streams=${r.count} time=${r.ms}ms${err}`);
+        }
+        console.log(`[runner] Success rate (${profile}): ${okCount}/${total} (${rate}%)\n`);
+    }
 
     // Force clean exit so pending network activity from timed-out provider calls doesn't keep the process alive.
     process.exit(0);
