@@ -16,12 +16,16 @@ function getStreams(tmdbId, mediaType, season, episode) {
     console.log('[Frenchstream] Request: ' + mediaType + ' ' + tmdbId + ' S' + season + 'E' + episode);
 
     return extractStreams(tmdbId, mediaType, season, episode)
-        .then(function(streams) {
-            return expandStreamQualities(streams);
-        })
+        .then(function(streams) { return expandStreamQualities(streams); })
         .then(function(expanded) {
-            console.log('[Frenchstream] Found ' + expanded.length + ' stream(s)');
-            return expanded;
+            if (expanded.length > 0) return expanded;
+            console.warn('[Frenchstream] No streams with default profile, retrying with TV-safe profile');
+            return extractStreams(tmdbId, mediaType, season, episode, { forceTvProfile: true })
+                .then(function(tvStreams) { return expandStreamQualities(tvStreams); });
+        })
+        .then(function(finalStreams) {
+            console.log('[Frenchstream] Found ' + finalStreams.length + ' stream(s)');
+            return finalStreams;
         })
         .catch(function(error) {
             console.error('[Frenchstream] Error:', error);
