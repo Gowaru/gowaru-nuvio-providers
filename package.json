@@ -9,7 +9,9 @@
     "build:watch": "nodemon --watch src -e js,json --exec 'node build.js'",
     "build:provider": "node build.js",
     "serve": "node server.js",
-    "test:provider": "node scripts/provider-success-runner.js"
+    "test:provider": "node scripts/provider-success-runner.js",
+    "test:provider:both": "node scripts/provider-success-runner.js --profile both",
+    "test:androidtv13": "node scripts/provider-success-runner.js --profile tv --android-tv13"
   },
   "devDependencies": {
     "cheerio": "^1.1.2",

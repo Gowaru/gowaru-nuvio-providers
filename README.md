@@ -108,6 +108,26 @@ nuvio-providers/
 - Keep top-level code minimal so the provider can load cleanly inside Hermes.
 - Prefer lightweight parsing and avoid Node-only helpers such as `Buffer`, `fs`, or dynamic `require` in runtime code.
 
+### Local Android TV 13 test (no publish needed)
+
+Run local checks directly against compiled providers before pushing:
+
+```bash
+# 1) Rebuild providers locally
+npm run build
+
+# 2) Quick Android TV 13 simulation for Frenchstream
+npm run test:androidtv13 -- --provider frenchstream --type movie --ids 550,603,13 --timeout 45000
+
+# 3) Compare default profile vs TV profile on same IDs
+npm run test:provider:both -- --provider frenchstream --type tv --season 1 --episode 1 --ids 1399,94605 --timeout 45000
+```
+
+Useful flags:
+- `--profile default|tv|both` to choose runtime profile.
+- `--android-tv13` to force an Android TV 13 user-agent + TV globals.
+- `--timeout 45000` to increase max wait per item during heavy host resolution.
+
 ---
 
 ## 📜 License
