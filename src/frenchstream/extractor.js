@@ -15,6 +15,51 @@ const STRONG_MATCH_SCORE = 90;
 const MAX_TITLE_QUERIES = 3;
 const FSTREAM_API_BASE = 'https://api.movix.cash';
 
+function getRuntimeProfile(options = {}) {
+    const g = (typeof globalThis !== 'undefined')
+        ? globalThis
+        : ((typeof global !== 'undefined') ? global : {});
+    const explicitProfile = String(g?.__NUVIO_RUNTIME_PROFILE || g?.NUVIO_RUNTIME_PROFILE || '').toLowerCase();
+    const explicitTv = Boolean(g?.__NUVIO_IS_TV || g?.__IS_ANDROID_TV);
+    const nav = g?.navigator || {};
+    const ua = String(nav.userAgent || '');
+    const platform = String(nav.platform || '');
+    const tvUaHint = /(android tv|aft[0-9a-z-]+|bravia|shield|mibox|smarttv|googletv)/i.test(`${ua} ${platform}`);
+    const forcedTv = Boolean(options && (options.forceTvProfile || options.isTv));
+    const isTv = forcedTv || explicitTv || explicitProfile === 'tv' || tvUaHint;
+    return {
+        isTv,
+        label: isTv ? 'tv' : 'default'
+    };
+}
+
+function createRequestId(tmdbId, mediaType) {
+    const rnd = Math.random().toString(36).slice(2, 8);
+    return `${mediaType || 'media'}-${tmdbId || 'unknown'}-${Date.now().toString(36)}-${rnd}`;
+}
+
+function getNetworkConfig(profile) {
+    if (profile?.isTv) {
+        return {
+            fetchTimeoutMs: 12000,
+            fstreamApiTimeoutMs: 18000,
+            fallbackWaitMs: 12000,
+            resolveAttemptTimeoutMs: 22000,
+            maxCandidatesToResolve: 20,
+            workerCount: 3
+        };
+    }
+
+    return {
+        fetchTimeoutMs: 8000,
+        fstreamApiTimeoutMs: 15000,
+        fallbackWaitMs: 9000,
+        resolveAttemptTimeoutMs: 18000,
+        maxCandidatesToResolve: 30,
+        workerCount: 8
+    };
+}
+
 async function withTimeout(promise, ms) {
     let timer = null;
     try {
@@ -234,7 +279,7 @@ function toStream(name, host, language, url, sourceUrl) {
         name,
         title: `[${languageLabel(language)}] ${hostLabel(host)}`,
         url,
-        quality: (h === 'premium' || h === 'vidzy') ? '1080p' : 'HD',
+        quality: 'HD',
         headers: playbackHeadersFor(url, sourceUrl),
         _sourceUrl: sourceUrl || BASE_URL,
         _priority: priority,
@@ -357,14 +402,15 @@ function collectFstreamApiTvCandidates(apiData, episode, sourceUrl) {
     return streams;
 }
 
-async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
+async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode, ctx = {}) {
     try {
+        const timeoutMs = Number(ctx?.network?.fstreamApiTimeoutMs) || 15000;
         const url = mediaType === 'movie'
             ? `${FSTREAM_API_BASE}/api/fstream/movie/${tmdbId}`
             : `${FSTREAM_API_BASE}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
 
         const data = await fetchJson(url, {
-            timeoutMs: 15000,
+            timeoutMs,
             headers: {
                 Accept: 'application/json, text/plain, */*',
                 Referer: 'https://movix.cash/',
@@ -382,9 +428,10 @@ async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
     }
 }
 
-async function scrapePageIframes(pageUrl, language = 'vf') {
+async function scrapePageIframes(pageUrl, language = 'vf', ctx = {}) {
     try {
-        const html = await fetchText(pageUrl, { timeoutMs: 8000 });
+        const timeoutMs = Number(ctx?.network?.fetchTimeoutMs) || 8000;
+        const html = await fetchText(pageUrl, { timeoutMs });
         if (!html) return [];
         
         const $ = cheerio.load(html);
@@ -413,8 +460,12 @@ async function scrapePageIframes(pageUrl, language = 'vf') {
     }
 }
 
-async function resolveCandidates(candidates) {
+async function resolveCandidates(candidates, ctx = {}) {
     const direct = [];
+    const network = ctx?.network || {};
+    const resolveAttemptTimeoutMs = Number(network.resolveAttemptTimeoutMs) || 18000;
+    const maxCandidatesToResolve = Number(network.maxCandidatesToResolve) || 30;
+    const workerLimit = Number(network.workerCount) || 8;
 
     // Helper: try resolving a stream with header variants and validate playback
     async function tryResolveWithVariants(origStream) {
@@ -462,8 +513,8 @@ async function resolveCandidates(candidates) {
 
     // Resolve in small parallel batches: much faster on TV while staying network-safe.
     const sorted = [...(candidates || [])].sort((a, b) => (b._priority || 0) - (a._priority || 0));
-    const queue = sorted.slice(0, 15);
-    const workerCount = Math.min(4, queue.length);
+    const queue = sorted.slice(0, maxCandidatesToResolve);
+    const workerCount = Math.min(workerLimit, queue.length);
     let cursor = 0;
 
     async function worker() {
@@ -474,7 +525,7 @@ async function resolveCandidates(candidates) {
 
             const settled = await Promise.race([
                 tryResolveWithVariants(candidate),
-                new Promise((resolve) => setTimeout(() => resolve(null), 18000))
+                new Promise((resolve) => setTimeout(() => resolve(null), resolveAttemptTimeoutMs))
             ]);
 
             if (settled && settled.url) {
@@ -487,20 +538,26 @@ async function resolveCandidates(candidates) {
     return dedupeByUrl(direct);
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const profile = getRuntimeProfile(options);
+    const network = getNetworkConfig(profile);
+    const requestId = createRequestId(tmdbId, mediaType);
+    const ctx = { profile, network, requestId };
+    console.log(`[Frenchstream][${requestId}] profile=${profile.label} mediaType=${mediaType} tmdb=${tmdbId}`);
+
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
 
     const searchTitles = buildTitleQueries(titles);
-    const fallbackPromise = fetchFstreamApiFallback(tmdbId, mediaType, season, episode);
+    const fallbackPromise = fetchFstreamApiFallback(tmdbId, mediaType, season, episode, ctx);
 
     // Movie path: prioritize API fallback first to avoid slow web search fanout.
     if (mediaType === 'movie') {
-        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        const fallbackCandidates = await withTimeout(fallbackPromise, network.fallbackWaitMs);
         if (Array.isArray(fallbackCandidates) && fallbackCandidates.length > 0) {
-            const fallbackStreams = await resolveCandidates(fallbackCandidates);
+            const fallbackStreams = await resolveCandidates(fallbackCandidates, ctx);
             if (fallbackStreams.length > 0) {
-                console.log(`[Frenchstream] API-first movie path returned ${fallbackStreams.length}`);
+                console.log(`[Frenchstream][${requestId}] API-first movie path returned ${fallbackStreams.length}`);
                 return fallbackStreams;
             }
         }
@@ -522,16 +579,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     if (!match || bestScore < MIN_MATCH_SCORE) {
-        console.warn(`[Frenchstream] No confident web match for tmdb=${tmdbId} (bestScore=${bestScore}), trying API fallback`);
-        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        console.warn(`[Frenchstream][${requestId}] No confident web match for tmdb=${tmdbId} (bestScore=${bestScore}), trying API fallback`);
+        const fallbackCandidates = await withTimeout(fallbackPromise, network.fallbackWaitMs);
         if (!Array.isArray(fallbackCandidates)) return [];
         if (fallbackCandidates.length === 0) return [];
 
-        const fallbackStreams = await resolveCandidates(fallbackCandidates);
-        console.log(`[Frenchstream] API fallback candidates: ${fallbackCandidates.length}, returned: ${fallbackStreams.length}`);
+        const fallbackStreams = await resolveCandidates(fallbackCandidates, ctx);
+        console.log(`[Frenchstream][${requestId}] API fallback candidates: ${fallbackCandidates.length}, returned: ${fallbackStreams.length}`);
         return fallbackStreams;
     }
-    console.log(`[Frenchstream] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
+    console.log(`[Frenchstream][${requestId}] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
 
     const sourceBase = match.baseUrl || BASE_URL;
     const apiCandidates = mediaType === 'movie'
@@ -539,29 +596,30 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode, sourceBase);
 
     // Complement with page scraping for more sources
-    const scrapedCandidates = await scrapePageIframes(match.href, 'vf');
+    const scrapedCandidates = await scrapePageIframes(match.href, 'vf', ctx);
     const candidates = dedupeByUrl([...apiCandidates, ...scrapedCandidates]);
+    console.log(`[Frenchstream][${requestId}] candidates api=${apiCandidates.length} scraped=${scrapedCandidates.length} unique=${candidates.length}`);
 
     if (candidates.length === 0) {
-        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        const fallbackCandidates = await withTimeout(fallbackPromise, network.fallbackWaitMs);
         if (!Array.isArray(fallbackCandidates)) return [];
         if (fallbackCandidates.length === 0) return [];
-        const fallbackStreams = await resolveCandidates(fallbackCandidates);
+        const fallbackStreams = await resolveCandidates(fallbackCandidates, ctx);
         return fallbackStreams;
     }
 
-    const streams = await resolveCandidates(candidates);
+    const streams = await resolveCandidates(candidates, ctx);
     if (streams.length === 0) {
-        const fallbackCandidates = await withTimeout(fallbackPromise, 9000);
+        const fallbackCandidates = await withTimeout(fallbackPromise, network.fallbackWaitMs);
         if (Array.isArray(fallbackCandidates) && fallbackCandidates.length > 0) {
-            const fallbackStreams = await resolveCandidates(fallbackCandidates);
+            const fallbackStreams = await resolveCandidates(fallbackCandidates, ctx);
             if (fallbackStreams.length > 0) {
-                console.log(`[Frenchstream] Web match empty, API fallback returned ${fallbackStreams.length}`);
+                console.log(`[Frenchstream][${requestId}] Web match empty, API fallback returned ${fallbackStreams.length}`);
                 return fallbackStreams;
             }
         }
     }
 
-    console.log(`[Frenchstream] Candidates: ${candidates.length}, Returned: ${streams.length}`);
+    console.log(`[Frenchstream][${requestId}] Candidates: ${candidates.length}, Returned: ${streams.length}`);
     return streams;
 }

@@ -124,6 +124,46 @@ function getSafeOrigin(url) {
     return match ? match[1] : null;
 }
 
+function hostFromUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    try {
+        const host = url.match(/^https?:\/\/([^\/]+)/i)?.[1] || '';
+        return host.toLowerCase();
+    } catch (e) {
+        return '';
+    }
+}
+
+function shouldPreserveEmbedReferer(finalUrl, originalUrl) {
+    const host = `${hostFromUrl(finalUrl)} ${hostFromUrl(originalUrl)}`;
+    return /vidmoly|uqload|oneupload|dood|voe|streamtape|filemoon|moonplayer|sendvid|myvi|mytv|lulu|lulustream|luluvdo|wishonly|veev|fsvid|vidzy/.test(host);
+}
+
+function mergeFinalHeaders(streamHeaders, resolverHeaders, finalUrl, originalUrl) {
+    const videoOrigin = getSafeOrigin(finalUrl);
+    const mergedHeaders = { 'User-Agent': USER_AGENT, ...streamHeaders, ...(resolverHeaders || {}) };
+    const keepEmbedReferer = shouldPreserveEmbedReferer(finalUrl, originalUrl);
+    const existingReferer = mergedHeaders.Referer || mergedHeaders.referer || '';
+    const refererOrigin = getSafeOrigin(existingReferer);
+
+    if (keepEmbedReferer) {
+        if (existingReferer && refererOrigin) {
+            mergedHeaders.Referer = existingReferer;
+            mergedHeaders.Origin = refererOrigin;
+        } else if (videoOrigin) {
+            mergedHeaders.Referer = `${videoOrigin}/`;
+            mergedHeaders.Origin = videoOrigin;
+        }
+    } else if (mergedHeaders.Origin || mergedHeaders.origin) {
+        mergedHeaders.Origin = videoOrigin;
+        mergedHeaders.Referer = videoOrigin ? `${videoOrigin}/` : mergedHeaders.Referer;
+    }
+
+    if (mergedHeaders.origin) delete mergedHeaders.origin;
+    if (mergedHeaders.referer) delete mergedHeaders.referer;
+    return mergedHeaders;
+}
+
 async function expandSingleStreamQualities(stream) {
     if (!stream || !stream.url || typeof stream.url !== 'string') return [];
     const url = stream.url;
@@ -160,10 +200,10 @@ async function expandSingleStreamQualities(stream) {
         let quality = resolution ? `${resolution}p` : null;
         if (!quality && bandwidth) {
             const bw = Number(bandwidth);
-            if (bw >= 8_000_000) quality = '2160p';
-            else if (bw >= 4_000_000) quality = '1080p';
-            else if (bw >= 2_000_000) quality = '720p';
-            else if (bw >= 1_000_000) quality = '480p';
+            if (bw >= 8000000) quality = '2160p';
+            else if (bw >= 4000000) quality = '1080p';
+            else if (bw >= 2000000) quality = '720p';
+            else if (bw >= 1000000) quality = '480p';
             else quality = '360p';
         }
         if (!quality && frameRate) quality = `${normalizeQualityLabel(stream.quality || 'HD')}`;
@@ -740,15 +780,7 @@ export async function resolveStream(stream, depth = 0) {
         
         // If a specific resolver found a different URL, it's the final direct link
         if (result && result.url !== originalUrl && !isKnownFakeDirectUrl(result.url)) {
-            const videoOrigin = getSafeOrigin(result.url);
-            const mergedHeaders = { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) };
-            
-            // If we have an Origin, it MUST match the video server or be removed
-            // to avoid 403 Forbidden on strict servers.
-            if (mergedHeaders.Origin || mergedHeaders.origin) {
-                mergedHeaders.Origin = videoOrigin;
-                if (mergedHeaders.origin) delete mergedHeaders.origin;
-            }
+            const mergedHeaders = mergeFinalHeaders(stream.headers, result.headers, result.url, originalUrl);
 
             return {
                 ...stream,
@@ -805,13 +837,7 @@ export async function resolveStream(stream, depth = 0) {
         }
 
         if (result && result.url !== originalUrl && result.url.startsWith('http') && !isKnownFakeDirectUrl(result.url)) {
-            const videoOrigin = getSafeOrigin(result.url);
-            const mergedHeaders = { 'User-Agent': USER_AGENT, ...stream.headers, ...(result.headers || {}) };
-            
-            if (mergedHeaders.Origin || mergedHeaders.origin) {
-                mergedHeaders.Origin = videoOrigin;
-                if (mergedHeaders.origin) delete mergedHeaders.origin;
-            }
+            const mergedHeaders = mergeFinalHeaders(stream.headers, result.headers, result.url, originalUrl);
 
             return {
                 ...stream,

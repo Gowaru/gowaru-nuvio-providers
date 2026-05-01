@@ -247,7 +247,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films et Séries en VF et VOSTFR via l'API de Frenchstream.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
