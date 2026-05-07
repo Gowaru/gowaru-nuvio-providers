@@ -6,8 +6,11 @@
  * Bundles each provider from src/<provider>/ into a single file at providers/<provider>.js
  * 
  * Usage:
- *   node build.js              # Build all providers
- *   node build.js vixsrc       # Build only vixsrc
+ *   node build.js              # Build all providers (Hermes legacy)
+ *   node build.js movix        # Build only movix
+ *   node build.js --minify     # Build with minification
+ *   node build.js --engine quickjs    # Build for QuickJS (native async/await)
+ *   node build.js movix --engine quickjs --minify  # Full QuickJS build
  *   node build.js --watch      # Watch mode (requires nodemon)
  */
 
@@ -17,13 +20,50 @@ const path = require('path');
 
 const srcDir = path.join(__dirname, 'src');
 const outDir = path.join(__dirname, 'providers');
+const polyfillsPath = path.join(__dirname, 'src', 'utils', 'polyfills.js');
+
+function getPolyfillsContent() {
+    if (fs.existsSync(polyfillsPath)) {
+        return fs.readFileSync(polyfillsPath, 'utf-8') + '\n';
+    }
+    return '';
+}
+
+// Parse command line arguments
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const result = {
+        providers: [],
+        minify: false,
+        engine: 'hermes', // 'hermes' (default, transpile async/await) or 'quickjs' (native async/await)
+        watch: false
+    };
+
+    let i = 0;
+    while (i < args.length) {
+        const arg = args[i];
+        if (arg === '--minify') {
+            result.minify = true;
+        } else if (arg === '--engine') {
+            if (i + 1 < args.length) {
+                result.engine = args[i + 1];
+                i++;
+            }
+        } else if (arg === '--watch') {
+            result.watch = true;
+        } else if (!arg.startsWith('-')) {
+            result.providers.push(arg);
+        }
+        i++;
+    }
+
+    return result;
+}
 
 // Get provider names from command line or discover all
-function getProvidersToBuild() {
-    const args = process.argv.slice(2).filter(arg => !arg.startsWith('-'));
-
-    if (args.length > 0) {
-        return args;
+function getProvidersToBuild(providersFromArgs) {
+    if (providersFromArgs.length > 0) {
+        return providersFromArgs;
     }
 
     // Discover all provider folders in src/
@@ -37,7 +77,7 @@ function getProvidersToBuild() {
         .map(d => d.name);
 }
 
-async function buildProvider(providerName, minify = false) {
+async function buildProvider(providerName, minify = false, engine = 'hermes') {
     const providerDir = path.join(srcDir, providerName);
     const entryPoint = path.join(providerDir, 'index.js');
     const outFile = path.join(outDir, `${providerName}.js`);
@@ -47,6 +87,10 @@ async function buildProvider(providerName, minify = false) {
         return false;
     }
 
+    const isQuickJS = engine === 'quickjs';
+    const polyfillsContent = getPolyfillsContent();
+    const target = isQuickJS ? 'es2020' : 'es2015';
+
     try {
         const result = await esbuild.build({
             entryPoints: [entryPoint],
@@ -54,12 +98,12 @@ async function buildProvider(providerName, minify = false) {
             outfile: outFile,
             format: 'iife',             // Sandbox-friendly script output
             platform: 'browser',        // Avoid require/module assumptions in TV runtimes
-            target: 'es2015',           // More compatible than es2016 for older TV engines
+            target: target,             // QuickJS supports ES2020, Hermes uses ES2015
             minify: minify,             // Minify bundle
             sourcemap: false,
             globalName: '__provider',
             banner: {
-                js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${new Date().toISOString()}\n */`
+                js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Engine: ${engine}\n * Generated: ${new Date().toISOString()}\n */\n${polyfillsContent}`
             },
             footer: {
                 js: `
@@ -144,12 +188,14 @@ async function transpileSingleFile(filename) {
 }
 
 async function main() {
-    const args = process.argv.slice(2);
-    const isMinify = args.includes('--minify');
+    const cliArgs = parseArgs();
+    const isMinify = cliArgs.minify;
+    const engine = cliArgs.engine;
+    const isQuickJS = engine === 'quickjs';
 
-    // Handle --transpile flag for single-file providers
-    if (args.includes('--transpile')) {
-        const files = args.filter(a => a !== '--transpile' && a !== '--minify' && !a.startsWith('-'));
+    // Handle --transpile flag for single-file providers (Hermes legacy)
+    if (process.argv.includes('--transpile')) {
+        const files = process.argv.slice(2).filter(a => a !== '--transpile' && a !== '--minify' && !a.startsWith('-'));
 
         if (files.length === 0) {
             // Transpile all .js files in providers/ that aren't from src/
@@ -177,7 +223,7 @@ async function main() {
         return;
     }
 
-    const providers = getProvidersToBuild();
+    const providers = getProvidersToBuild(cliArgs.providers);
 
     if (providers.length === 0) {
         console.log('No providers found in src/ directory.');
@@ -185,7 +231,8 @@ async function main() {
         return;
     }
 
-    console.log(`\n📦 Building ${providers.length} provider(s)${isMinify ? ' (Minified)' : ''}...\n`);
+    const engineLabel = isQuickJS ? 'QuickJS (native async)' : 'Hermes (transpiled)';
+    console.log(`\n📦 Building ${providers.length} provider(s)${isMinify ? ' (Minified)' : ''} [${engineLabel}]...\n`);
 
     // Ensure output directory exists
     if (!fs.existsSync(outDir)) {
@@ -196,9 +243,13 @@ async function main() {
     let failed = 0;
 
     for (const provider of providers) {
-        const result = await buildProvider(provider, isMinify);
+        const result = await buildProvider(provider, isMinify, engine);
         if (result) success++;
         else failed++;
+    }
+
+    if (isQuickJS) {
+        console.log(`\n⚠️  QuickJS bundles require Kotlin bridge for fetch/crypto/URL.\n`);
     }
 
     console.log(`\n✨ Done! ${success} built, ${failed} skipped/failed\n`);

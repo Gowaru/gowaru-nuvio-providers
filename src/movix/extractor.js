@@ -1,9 +1,6 @@
-import { fetchJson } from './http.js';
+import { fetchJson, detectDomain, getBaseUrl, tryAllapis } from './http.js';
 import { resolveStream, safeFetch, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { extractStreams as extractFrenchstreamStreams } from '../frenchstream/extractor.js';
-
-const API_BASES = ['https://api.movix.cash', 'https://movix.cash'];
 
 const RETRY_DELAYS_MS = [0, 1400, 2600];
 const API_TIMEOUT_MS = 14000;
@@ -26,16 +23,7 @@ function originFromUrl(url) {
 
 function directHeadersFor(url, headers = {}) {
     const origin = originFromUrl(url);
-    const referer = headers.Referer || headers.referer;
     const out = { ...headers };
-
-    if (!referer) {
-        out.Referer = 'https://movix.cash/';
-    }
-
-    if (!out.Origin) {
-        out.Origin = 'https://movix.cash';
-    }
 
     if (!out['User-Agent'] && !out['user-agent']) {
         out['User-Agent'] = USER_AGENT;
@@ -44,6 +32,17 @@ function directHeadersFor(url, headers = {}) {
     if (!out.Accept && !out.accept) {
         out.Accept = '*/*';
     }
+
+    if (!out.Referer && !out.referer) {
+        out.Referer = `${origin}/`;
+    }
+
+    delete out.Origin;
+    delete out.origin;
+    delete out.RefererOrigin;
+    delete out['Sec-Fetch-Dest'];
+    delete out['Sec-Fetch-Mode'];
+    delete out['Sec-Fetch-Site'];
 
     return out;
 }
@@ -61,25 +60,14 @@ function readHeader(headers, name) {
 async function validateDirectUrl(url, headers = {}) {
     try {
         const res = await safeFetch(url, {
-            method: 'GET',
-            headers: {
-                ...directHeadersFor(url, headers),
-                Range: 'bytes=0-0'
-            },
+            method: 'HEAD',
+            headers: directHeadersFor(url, headers),
             redirect: 'follow'
         });
-        if (!res) return false;
-
-        if (res.status === 206) return true;
-        if (typeof res.status === 'number' && res.status >= 200 && res.status < 300) {
-            const contentType = String(readHeader(res.headers, 'content-type') || '');
-            if (/video\//i.test(contentType)) return true;
-            if (/mpegurl|application\/vnd\.apple\.mpegurl|application\/x-mpegurl/i.test(contentType)) return true;
-        }
-
-        return false;
+        if (res?.ok) return true;
+        return isExoPlayableUrl(url);
     } catch (e) {
-        return false;
+        return isExoPlayableUrl(url);
     }
 }
 
@@ -123,6 +111,7 @@ function normalizeLangTag(lang) {
 
 function pushStream(streams, provider, server, lang, url, quality) {
     if (!url || typeof url !== 'string') return;
+    const origin = originFromUrl(url);
     streams.push({
         name: 'Movix',
         title: `[${normalizeLangTag(lang)}] ${provider} - ${server || 'Player'}`,
@@ -130,8 +119,7 @@ function pushStream(streams, provider, server, lang, url, quality) {
         url,
         quality: quality || 'HD',
         headers: {
-            Origin: originFromUrl(url),
-            Referer: `${originFromUrl(url)}/`,
+            Referer: `${origin}/`,
             'User-Agent': USER_AGENT
         }
     });
@@ -262,8 +250,8 @@ async function resolveForExo(stream) {
     const baseHeaders = directHeadersFor(resolved.url, resolved.headers || stream.headers);
     const headerVariants = [
         baseHeaders,
-        { ...baseHeaders, Referer: `${originFromUrl(stream.url)}/`, Origin: originFromUrl(stream.url) },
-        { ...baseHeaders, Referer: `${originFromUrl(resolved.url)}/`, Origin: originFromUrl(resolved.url) },
+        { ...baseHeaders, Referer: `${originFromUrl(stream.url)}/` },
+        { ...baseHeaders, Referer: `${originFromUrl(resolved.url)}/` },
     ];
 
     let normalizedHeaders = null;
@@ -374,39 +362,38 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         console.log(`[Movix] Failed to load TMDB titles for ${tmdbId}: ${e.message}`);
     }
 
-    for (const apiBase of API_BASES) {
-        const beforeCount = streams.length;
-        const jobs = buildJobsForBase(apiBase, isMovie, tmdbId, seasonNum, episodeNum, streams);
-        const results = await Promise.allSettled(
-            jobs.map(async (job) => {
-                const data = await fetchWithRetry(job);
-                if (!data) return;
-                if (data.success === false) {
-                    console.log(`[Movix] ${job.label} unavailable: ${data.error || 'unknown error'}`);
-                    return;
-                }
-
-                const sourceTitles = extractSourceTitles(data);
-                if (!titleMatchesAny(sourceTitles, tmdbTitles)) {
-                    console.log(`[Movix] ${job.label} skipped: source title mismatch (${sourceTitles.join(' | ') || 'no title'})`);
-                    return;
-                }
-
-                job.collect(data);
-            })
-        );
-
-        for (const r of results) {
-            if (r.status === 'rejected') {
-                console.log(`[Movix] source fetch failed: ${r.reason?.message || r.reason}`);
+    const apiBase = await detectDomain();
+    const baseUrl = getBaseUrl();
+    const beforeCount = streams.length;
+    const jobs = buildJobsForBase(apiBase, isMovie, tmdbId, seasonNum, episodeNum, streams);
+    const results = await Promise.allSettled(
+        jobs.map(async (job) => {
+            const data = await fetchWithRetry(job);
+            if (!data) return;
+            if (data.success === false) {
+                console.log(`[Movix] ${job.label} unavailable: ${data.error || 'unknown error'}`);
+                return;
             }
-        }
 
-        const added = streams.length - beforeCount;
-        if (added > 0) {
-            console.log(`[Movix] Added ${added} candidate streams from ${apiBase}`);
-            break;
+            const sourceTitles = extractSourceTitles(data);
+            if (!titleMatchesAny(sourceTitles, tmdbTitles)) {
+                console.log(`[Movix] ${job.label} skipped: source title mismatch (${sourceTitles.join(' | ') || 'no title'})`);
+                return;
+            }
+
+            job.collect(data);
+        })
+    );
+
+    for (const r of results) {
+        if (r.status === 'rejected') {
+            console.log(`[Movix] source fetch failed: ${r.reason?.message || r.reason}`);
         }
+    }
+
+    const added = streams.length - beforeCount;
+    if (added > 0) {
+        console.log(`[Movix] Added ${added} candidate streams from ${apiBase}`);
     }
 
     const seen = new Set();
@@ -427,30 +414,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (seenPlayable.has(r.value.url)) continue;
         seenPlayable.add(r.value.url);
         playable.push(r.value);
-    }
-
-    if (playable.length === 0) {
-        try {
-            console.log('[Movix] No playable stream from Movix API, trying Frenchstream fallback...');
-            const fallback = await extractFrenchstreamStreams(tmdbId, mediaType, seasonNum, episodeNum);
-            if (Array.isArray(fallback) && fallback.length > 0) {
-                const fallbackResolved = await Promise.allSettled(
-                    fallback
-                        .filter((stream) => stream && stream.url)
-                        .slice(0, 12)
-                        .map((stream) => resolveForExo({ ...stream, name: stream.name || 'Movix-Fallback' }))
-                );
-
-                for (const item of fallbackResolved) {
-                    if (item.status !== 'fulfilled' || !item.value || !item.value.url) continue;
-                    if (seenPlayable.has(item.value.url)) continue;
-                    seenPlayable.add(item.value.url);
-                    playable.push(item.value);
-                }
-            }
-        } catch (e) {
-            console.log(`[Movix] Frenchstream fallback failed: ${e.message}`);
-        }
     }
 
     console.log(`[Movix] Total streams found: ${unique.length}, Exo-playable: ${playable.length}`);

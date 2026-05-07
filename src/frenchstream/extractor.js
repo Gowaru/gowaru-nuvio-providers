@@ -14,8 +14,8 @@ const MIN_MATCH_SCORE = 40;
 const STRONG_MATCH_SCORE = 90;
 const MAX_TITLE_QUERIES = 3;
 const FSTREAM_API_BASES = [
-    'https://api.movix.cash',
-    'https://movix.cash'
+    'https://french-stream.one',
+    'https://french-stream.top'
 ];
 
 function getRuntimeProfile(options = {}) {
@@ -378,11 +378,21 @@ function collectFstreamApiMovieCandidates(apiData, sourceUrl) {
     if (!players || typeof players !== 'object') return [];
 
     const streams = [];
-    for (const [lang, list] of Object.entries(players)) {
-        if (!Array.isArray(list)) continue;
-        for (const item of list) {
-            if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url, sourceUrl));
+    // New API structure: { "premium": { "default": "url", "vff": "url" }, "vidzy": {...} }
+    for (const [hostKey, versions] of Object.entries(players)) {
+        if (!versions || typeof versions !== 'object') continue;
+        
+        for (const [version, url] of Object.entries(versions)) {
+            if (typeof url !== 'string' || !url.startsWith('http')) continue;
+            
+            // Map version keys to language labels
+            let lang = 'VF';
+            if (version === 'vostfr') lang = 'VOSTFR';
+            else if (version === 'vo' || version === 'voeng') lang = 'VO';
+            else if (version === 'vfq' || version === 'vff') lang = 'VF';
+            else lang = 'VF'; // default
+            
+            streams.push(toStream('Frenchstream', hostKey, lang, url, sourceUrl));
         }
     }
     return streams;
@@ -407,6 +417,33 @@ function collectFstreamApiTvCandidates(apiData, episode, sourceUrl) {
 
 async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode, ctx = {}) {
     const timeoutMs = Number(ctx?.network?.fstreamApiTimeoutMs) || 15000;
+    
+    // Try new API method using search + film_api
+    const searchResult = await searchFilmByTmdbId(tmdbId, mediaType);
+    if (searchResult && searchResult.filmId) {
+        try {
+            const apiBase = 'https://french-stream.one';
+            const url = `${apiBase}/engine/ajax/film_api.php?id=${searchResult.filmId}`;
+            
+            const data = await fetchJson(url, {
+                timeoutMs,
+                headers: {
+                    Accept: 'application/json, text/plain, */*',
+                    Referer: apiBase + '/',
+                    Origin: apiBase
+                }
+            });
+
+            if (data && data.players) {
+                console.log(`[Frenchstream] Found film via new API: ID ${searchResult.filmId}`);
+                return collectFstreamApiMovieCandidates(data, apiBase + '/');
+            }
+        } catch (e) {
+            console.warn(`[Frenchstream] New API method failed: ${e.message}`);
+        }
+    }
+    
+    // Fallback to old API endpoints (may not work with new domain)
     for (const apiBase of FSTREAM_API_BASES) {
         try {
             const url = mediaType === 'movie'
@@ -417,20 +454,84 @@ async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode, ctx =
                 timeoutMs,
                 headers: {
                     Accept: 'application/json, text/plain, */*',
-                    Referer: 'https://movix.cash/',
-                    Origin: 'https://movix.cash'
+                    Referer: 'https://french-stream.one/',
+                    Origin: 'https://french-stream.one'
                 }
             });
 
             if (!data || data.success === false) continue;
             return mediaType === 'movie'
-                ? collectFstreamApiMovieCandidates(data, 'https://movix.cash/')
-                : collectFstreamApiTvCandidates(data, episode, 'https://movix.cash/');
+                ? collectFstreamApiMovieCandidates(data, 'https://french-stream.one/')
+                : collectFstreamApiTvCandidates(data, episode, 'https://french-stream.one/');
         } catch (e) {
             console.warn(`[Frenchstream] FStream API fallback failed on ${apiBase}: ${e.message}`);
         }
     }
     return [];
+}
+
+async function searchFilmByTmdbId(tmdbId, mediaType) {
+    // Get TMDB titles for search
+    let tmdbTitles = [];
+    try {
+        tmdbTitles = await getTmdbTitles(tmdbId, mediaType);
+    } catch (e) {
+        console.warn(`[Frenchstream] Failed to get TMDB titles: ${e.message}`);
+    }
+    
+    if (tmdbTitles.length === 0) {
+        console.warn(`[Frenchstream] No TMDB titles for ID ${tmdbId}`);
+        return null;
+    }
+    
+    const searchTitle = tmdbTitles[0];
+    console.log(`[Frenchstream] Searching for: ${searchTitle}`);
+    
+    // Use the direct search API via fetchText
+    const apiBase = 'https://french-stream.one';
+    const searchUrl = `${apiBase}/engine/ajax/search.php`;
+    
+    try {
+        // Use safeFetch directly with POST
+        const res = await safeFetch(searchUrl, {
+            method: 'POST',
+            body: `query=${encodeURIComponent(searchTitle)}`,
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': USER_AGENT,
+                'Referer': apiBase + '/',
+                'Accept': '*/*'
+            },
+            timeoutMs: 10000
+        });
+        
+        if (!res || !res.ok) {
+            console.warn(`[Frenchstream] Search API returned ${res?.status || 'no response'}`);
+            return null;
+        }
+        
+        const html = await res.text();
+        
+        // Debug: log first chars
+        console.log(`[Frenchstream] Search response length: ${html.length}, starts with: ${html.substring(0, 50)}`);
+        
+        // Parse the HTML response to find the first movie/series link
+        // Format: <div class='search-item' onclick="location.href='/1761-fight-club-film-streaming-complet-vf.html'">
+        const match = html.match(/\/(\d+)-[^.]+\.html/i);
+        
+        if (match && match[1]) {
+            const filmId = match[1];
+            console.log(`[Frenchstream] Found film ID: ${filmId} for "${searchTitle}"`);
+            return { filmId, title: searchTitle };
+        }
+        
+        console.warn(`[Frenchstream] No film found in search results for "${searchTitle}"`);
+        return null;
+        
+    } catch (e) {
+        console.warn(`[Frenchstream] Search failed: ${e.message}`);
+        return null;
+    }
 }
 
 async function scrapePageIframes(pageUrl, language = 'vf', ctx = {}) {

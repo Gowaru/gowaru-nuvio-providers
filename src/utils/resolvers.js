@@ -16,7 +16,7 @@ if (typeof Promise !== 'undefined' && !Promise.allSettled) {
     };
 }
 
-export const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+export const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const HEADERS = {
     "User-Agent": USER_AGENT,
@@ -149,16 +149,15 @@ function mergeFinalHeaders(streamHeaders, resolverHeaders, finalUrl, originalUrl
     if (keepEmbedReferer) {
         if (existingReferer && refererOrigin) {
             mergedHeaders.Referer = existingReferer;
-            mergedHeaders.Origin = refererOrigin;
         } else if (videoOrigin) {
             mergedHeaders.Referer = `${videoOrigin}/`;
-            mergedHeaders.Origin = videoOrigin;
         }
-    } else if (mergedHeaders.Origin || mergedHeaders.origin) {
-        mergedHeaders.Origin = videoOrigin;
-        mergedHeaders.Referer = videoOrigin ? `${videoOrigin}/` : mergedHeaders.Referer;
+    } else if (videoOrigin) {
+        mergedHeaders.Referer = `${videoOrigin}/`;
     }
 
+    delete mergedHeaders.Origin;
+    delete mergedHeaders.origin;
     if (mergedHeaders.origin) delete mergedHeaders.origin;
     if (mergedHeaders.referer) delete mergedHeaders.referer;
     return mergedHeaders;
