@@ -222,7 +222,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films et Séries en VF et VOSTFR.",
-      "version": "1.0.21",
+      "version": "1.0.22",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
