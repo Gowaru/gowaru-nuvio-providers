@@ -156,7 +156,11 @@ async function resolveForExo(stream) {
     if (!isExoPlayableUrl(resolved.url)) return null;
 
     return {
-        ...resolved,
+        name: resolved.name || stream.name,
+        title: resolved.title || stream.title,
+        url: resolved.url,
+        quality: resolved.quality || 'HD',
+        isDirect: true,
         headers: {
             ...resolved.headers,
             'User-Agent': USER_AGENT
