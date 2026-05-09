@@ -1,7 +1,6 @@
 import { fetchJson } from './http.js';
 import { resolveStream, safeFetch } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { extractStreams as extractFrenchstreamStreams } from '../frenchstream/extractor.js';
 
 const API_BASE = 'https://api.movix.cash';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -329,24 +328,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (seenPlayable.has(r.value.url)) continue;
         seenPlayable.add(r.value.url);
         playable.push(r.value);
-    }
-
-    if (playable.length === 0) {
-        try {
-            console.log('[Movix] No playable stream from Movix API, trying Frenchstream fallback...');
-            const fallback = await extractFrenchstreamStreams(tmdbId, mediaType, seasonNum, episodeNum);
-            if (Array.isArray(fallback) && fallback.length > 0) {
-                for (const stream of fallback) {
-                    if (!stream?.url) continue;
-                    if (seenPlayable.has(stream.url)) continue;
-                    if (!isExoPlayableUrl(stream.url)) continue;
-                    seenPlayable.add(stream.url);
-                    playable.push(stream);
-                }
-            }
-        } catch (e) {
-            console.log(`[Movix] Frenchstream fallback failed: ${e.message}`);
-        }
     }
 
     console.log(`[Movix] Total streams found: ${unique.length}, Exo-playable: ${playable.length}`);

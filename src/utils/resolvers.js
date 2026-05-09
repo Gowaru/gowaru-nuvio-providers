@@ -412,9 +412,8 @@ export async function resolveUqload(url) {
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
     const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || 'uqload.co';
     const uniqueDomains = [...new Set([originalDomain, 'uqload.co', 'oneupload.to'])];
-    const baseRef = 'https://uqload.co/';
-    
-    // Check domains concurrently to avoid long serial timeouts
+    const baseRef = `https://${originalDomain}/`;
+
     return new Promise((resolve) => {
         let failures = 0;
         let resolved = false;
@@ -422,14 +421,15 @@ export async function resolveUqload(url) {
         const checkDomain = async (domain) => {
             try {
                 const tryUrl = `https://${domain}${normalizedPath}`;
-                const res = await safeFetch(tryUrl, { headers: { ...HEADERS, 'Referer': baseRef } });
+                const ref = `https://${domain}/`;
+                const res = await safeFetch(tryUrl, { headers: { ...HEADERS, 'Referer': ref } });
                 if (res) {
                     const html = await res.text();
                     const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
                                   html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
                     if (match && !resolved) {
                         resolved = true;
-                        resolve({ url: match[1], headers: { "Referer": baseRef } });
+                        resolve({ url: match[1], headers: { "Referer": ref } });
                         return;
                     }
                 }
@@ -437,7 +437,7 @@ export async function resolveUqload(url) {
             
             failures++;
             if (failures === uniqueDomains.length && !resolved) {
-                resolve({ url }); // All failed
+                resolve({ url });
             }
         };
 
