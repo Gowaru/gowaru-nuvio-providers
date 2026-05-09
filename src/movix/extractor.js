@@ -66,13 +66,17 @@ function normalizeLangTag(lang) {
 
 function pushStream(streams, provider, server, lang, url, quality) {
     if (!url || typeof url !== 'string') return;
-    const ref = originFromUrl(url) + '/';
+    const origin = originFromUrl(url);
     streams.push({
         name: 'Movix',
         title: `[${normalizeLangTag(lang)}] ${provider} - ${server || 'Player'}`,
         url,
         quality: quality || 'HD',
-        headers: { Referer: ref }
+        headers: {
+            Referer: origin + '/',
+            Origin: origin,
+            'User-Agent': USER_AGENT
+        }
     });
 }
 
@@ -155,7 +159,8 @@ async function resolveForExo(stream) {
     return {
         ...resolved,
         headers: {
-            Referer: originFromUrl(resolved.url) + '/'
+            ...resolved.headers,
+            'User-Agent': USER_AGENT
         }
     };
 }
