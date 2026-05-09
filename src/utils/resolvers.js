@@ -369,23 +369,41 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        // Vidmoly.net often has Cloudflare Turnstile, use vidmoly.me instead
-        const fetchUrl = url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.me');
+        const domains = [
+            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.me'),
+            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.biz'),
+            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.bz')
+        ];
+        const uniqueDomains = [...new Set(domains)];
         const headers = { 'Referer': 'https://vidmoly.me/', 'Origin': 'https://vidmoly.me' };
-        let res = await safeFetch(fetchUrl, { headers });
-        if (!res) return { url };
-        let html = await res.text();
-        // Follow JS window.location.replace() anti-bot redirect
-        const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
-                           html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
-        if (jsRedirect && jsRedirect[1] !== fetchUrl) {
-            res = await safeFetch(jsRedirect[1], { headers });
-            if (res) html = await res.text();
+
+        for (const fetchUrl of uniqueDomains) {
+            try {
+                let res = await safeFetch(fetchUrl, { headers });
+                if (!res) continue;
+                let html = await res.text();
+                if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
+
+                const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                              html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
+                              html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+                if (match) return { url: match[1], headers: { "Referer": "https://vidmoly.me/" } };
+
+                const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
+                                   html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+                if (jsRedirect && jsRedirect[1] !== fetchUrl) {
+                    res = await safeFetch(jsRedirect[1], { headers });
+                    if (res) {
+                        html = await res.text();
+                        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
+                        const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                                       html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
+                                       html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+                        if (match2) return { url: match2[1], headers: { "Referer": "https://vidmoly.me/" } };
+                    }
+                }
+            } catch (e) {}
         }
-        if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
-        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
-                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-        if (match) return { url: match[1], headers: { "Referer": "https://vidmoly.me/" } };
     } catch (e) {}
     return { url };
 }
@@ -432,19 +450,27 @@ export async function resolveVoe(url) {
         const res = await safeFetch(url);
         if (!res) return { url };
         let html = await res.text();
+
+        let fetchUrl = url;
         const redirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
         if (redirect) {
-            const res2 = await safeFetch(redirect[1]);
+            fetchUrl = redirect[1];
+            const res2 = await safeFetch(fetchUrl);
             if (res2) html = await res2.text();
         }
+
+        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
+
         const match = html.match(/'hls'\s*:\s*'([^']+)'/) || 
                       html.match(/"hls"\s*:\s*"([^"]+)"/) ||
+                      html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                       html.match(/https?:\/\/[^"']+\.m3u8[^"']*/);
         if (match) {
             let videoUrl = match[1] || match[0];
             if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
             if (isKnownFakeDirectUrl(videoUrl)) return { url };
-            return { url: videoUrl, headers: { "Referer": url } };
+            return { url: videoUrl, headers: { "Referer": fetchUrl } };
         }
     } catch (e) {}
     return { url };
@@ -628,7 +654,7 @@ export async function resolveStream(stream, depth = 0) {
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
         else if (urlLower.includes('vidmoly.')) result = await resolveVidmoly(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
-        else if (urlLower.includes('voe') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother')) result = await resolveVoe(originalUrl);
+        else if (urlLower.includes('voe') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
         else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
@@ -661,19 +687,29 @@ export async function resolveStream(stream, depth = 0) {
             const res = await safeFetch(originalUrl, { headers: stream.headers });
             if (res) {
                 let html = await res.text();
-                // Check for P.A.C.K.E.R encoding
                 if (html.includes('p,a,c,k,e,d')) html = unpack(html);
 
-                // Look for direct media links in HTML
-                const m3u8 = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || 
-                             html.match(/https?:\/\/[^"']+\.mp4[^"']*/) ||
-                             html.match(/file\s*:\s*["']([^"']+)["']/);
+                // Follow JS window.location redirects
+                const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
+                if (jsRedirect && jsRedirect[1] !== originalUrl) {
+                    const res2 = await safeFetch(jsRedirect[1], { headers: stream.headers });
+                    if (res2) {
+                        html = await res2.text();
+                        if (html.includes('p,a,c,k,e,d')) html = unpack(html);
+                    }
+                }
 
-                if (m3u8) {
-                    let extractedUrl = m3u8[1] || m3u8[0];
+                const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) ||
+                                 html.match(/https?:\/\/[^"']+\.mp4[^"']*/) ||
+                                 html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                                 html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
+                                 html.match(/'hls'\s*:\s*'([^']+)'/) ||
+                                 html.match(/"hls"\s*:\s*"([^"]+)"/);
+
+                if (directUrl) {
+                    let extractedUrl = directUrl[1] || directUrl[0];
                     if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
                     
-                    // Filter out non-video extensions that might be caught by the generic 'file:' regex
                     const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
                     
                     if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
@@ -681,7 +717,6 @@ export async function resolveStream(stream, depth = 0) {
                     }
                 }
 
-                // Look for nested iframes (Peeling)
                 if (!result) {
                     const iframeMatch = html.match(/<iframe\s+[^>]*src=["']([^"']+)["']/i);
                     if (iframeMatch) {

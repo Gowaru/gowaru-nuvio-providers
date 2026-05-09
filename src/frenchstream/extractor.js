@@ -96,7 +96,7 @@ function buildTitleQueries(titles) {
         if (!queries.some((q) => q.toLowerCase() === v.toLowerCase())) queries.push(v);
     };
 
-    for (const title of (titles || []).slice(0, 8)) {
+    for (const title of (titles || []).slice(0, 2)) {
         push(title);
         push(title.replace(/['’]/g, ' '));
         push(title.replace(/\s*\([^)]*\)\s*/g, ' '));
@@ -333,16 +333,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
 
-    const searchTitles = buildTitleQueries(titles);
+    const queries = buildTitleQueries(titles);
 
     let match = null;
     let bestScore = -Infinity;
-    for (const title of searchTitles) {
+    for (const title of queries) {
         try {
             const ranked = await searchByTitle(title, mediaType, season);
             if (ranked.length > 0 && ranked[0]._score > bestScore) {
                 bestScore = ranked[0]._score;
                 match = ranked[0];
+                if (bestScore >= MIN_MATCH_SCORE) break;
             }
         } catch (e) {
             console.warn(`[Frenchstream] Search failed for "${title}": ${e.message}`);

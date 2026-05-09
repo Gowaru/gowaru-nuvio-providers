@@ -142,13 +142,72 @@ function extractEpisodeUrls(saison, lang) {
     return urls;
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
-    const titles = await getTmdbTitles(tmdbId, mediaType);
-    if (!titles || titles.length === 0) return [];
+const SOURCE_LABELS = ['Sibnet', 'Vidmoly', 'Sendvid', 'VK', 'Youtube', 'Other'];
 
-    let slug = null;
-    let animeData = null;
+function buildStreamEntry(url, label, langLabel, title, quality) {
+    let resolvedUrl = url;
+    if (typeof resolvedUrl === 'string' && resolvedUrl.startsWith('//')) resolvedUrl = 'https:' + resolvedUrl;
+    return {
+        name: `Mugiwara (${langLabel})`,
+        title: `${title} - ${label}`,
+        url: resolvedUrl,
+        quality: quality || 'HD',
+        headers: { 'Referer': BASE + '/' }
+    };
+}
 
+async function resolveStreams(streams) {
+    const resolved = [];
+    for (const stream of streams) {
+        try {
+            const r = await resolveStream(stream);
+            if (r && r.url && r.isDirect) resolved.push(r);
+        } catch (e) {
+            resolved.push(stream);
+        }
+    }
+    return resolved.length > 0 ? resolved : streams;
+}
+
+function collectSourceUrls(episodeSourceUrls) {
+    if (!episodeSourceUrls || episodeSourceUrls.length === 0) return [];
+    const streams = [];
+    for (let i = 0; i < episodeSourceUrls.length; i++) {
+        let url = episodeSourceUrls[i];
+        if (!url || typeof url !== 'string') continue;
+        if (url.startsWith('//')) url = 'https:' + url;
+        streams.push({ url, sourceIndex: i });
+    }
+    return streams;
+}
+
+function extractFilmStreams(filmOptions) {
+    if (!filmOptions || !filmOptions.lang) return [];
+
+    const labels = SOURCE_LABELS;
+    const filmNames = (filmOptions.names || []).map(n => n && n.name ? n.name : 'Film');
+    const filmCount = filmNames.length > 0 ? filmNames.length : 1;
+
+    const allFilmStreams = [];
+    for (let filmIdx = 0; filmIdx < filmCount; filmIdx++) {
+        const filmName = filmNames[filmIdx] || `Film ${filmIdx + 1}`;
+        for (const [lang, langData] of Object.entries(filmOptions.lang)) {
+            if (!Array.isArray(langData)) continue;
+            const langLabel = lang === 'vf' ? 'VF' : lang.toUpperCase();
+            for (let sourceIdx = 0; sourceIdx < langData.length; sourceIdx++) {
+                const arr = langData[sourceIdx];
+                if (!Array.isArray(arr) || filmIdx >= arr.length) continue;
+                const url = arr[filmIdx];
+                if (!url || typeof url !== 'string') continue;
+                const sourceLabel = sourceIdx < labels.length ? labels[sourceIdx] : `Source ${sourceIdx + 1}`;
+                allFilmStreams.push(buildStreamEntry(url, sourceLabel, langLabel, filmName));
+            }
+        }
+    }
+    return allFilmStreams;
+}
+
+async function findSlug(titles) {
     const seenQueries = new Set();
     const tryQueries = [];
     for (const t of titles) {
@@ -189,11 +248,17 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
         }
 
         if (best && bestScore >= 80) {
-            slug = best.slug;
-            break;
+            return best.slug;
         }
     }
+    return null;
+}
 
+export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    if (!titles || titles.length === 0) return [];
+
+    const slug = await findSlug(titles);
     if (!slug) {
         console.log(`[Mugiwara] No anime found for tmdbId ${tmdbId}`);
         return [];
@@ -202,24 +267,43 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     console.log(`[Mugiwara] Found slug: ${slug}`);
 
     let pageHtml = null;
-    for (let s = 1; s <= 20; s++) {
+    if (mediaType === 'movie') {
         try {
-            pageHtml = await fetchText(`${BASE}/catalogue/${slug}/episodes/saison${s}`);
-            break;
+            pageHtml = await fetchText(`${BASE}/catalogue/${slug}/films`);
         } catch (e) {
-            continue;
+            console.log(`[Mugiwara] No films page for ${slug}`);
+            return [];
+        }
+    } else {
+        for (let s = 1; s <= 20; s++) {
+            try {
+                pageHtml = await fetchText(`${BASE}/catalogue/${slug}/episodes/saison${s}`);
+                break;
+            } catch (e) {
+                continue;
+            }
+        }
+        if (!pageHtml) {
+            console.log(`[Mugiwara] No valid season page found for ${slug}`);
+            return [];
         }
     }
 
-    if (!pageHtml) {
-        console.log(`[Mugiwara] No valid season page found for ${slug}`);
-        return [];
-    }
-
-    animeData = extractAnimeServerData(pageHtml);
+    const animeData = extractAnimeServerData(pageHtml);
     if (!animeData) {
         console.log(`[Mugiwara] Could not extract anime data from page`);
         return [];
+    }
+
+    if (mediaType === 'movie') {
+        const filmOptions = animeData.options && animeData.options.FILM_OPTIONS;
+        if (!filmOptions) {
+            console.log(`[Mugiwara] No FILM_OPTIONS in extracted data`);
+            return [];
+        }
+        const streams = extractFilmStreams(filmOptions);
+        console.log(`[Mugiwara] Found ${streams.length} film sources for ${slug}`);
+        return await resolveStreams(streams);
     }
 
     if (!animeData.options || !animeData.options.saisons) {
@@ -228,7 +312,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     }
 
     const saisons = animeData.options.saisons;
-    const lang = mediaType === 'movie' ? 'vf' : 'vostfr';
+    const lang = 'vostfr';
 
     const matched = matchSaison(saisons, season, episodeNum);
     if (!matched) {
@@ -244,37 +328,11 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     }
 
     const sourceUrls = episodeUrls[epIndex];
-    const streams = [];
-    const labels = ['Sibnet', 'Vidmoly', 'Sendvid', 'VK', 'Youtube', 'Other'];
-
-    for (let i = 0; i < sourceUrls.length; i++) {
-        let url = sourceUrls[i];
-        if (!url || typeof url !== 'string') continue;
-        if (url.startsWith('//')) url = 'https:' + url;
-
-        const sourceLabel = i < labels.length ? labels[i] : `Source ${i + 1}`;
-        const langLabel = lang === 'vf' ? 'VF' : 'VOSTFR';
-
-        streams.push({
-            name: `Mugiwara (${langLabel})`,
-            title: `${matchedSaison.name || 'Saison ' + matchedSaison.id} - ${sourceLabel}`,
-            url: url,
-            quality: 'HD',
-            headers: { 'Referer': BASE + '/' }
-        });
-    }
+    const streams = collectSourceUrls(sourceUrls).map(s => {
+        const label = s.sourceIndex < SOURCE_LABELS.length ? SOURCE_LABELS[s.sourceIndex] : `Source ${s.sourceIndex + 1}`;
+        return buildStreamEntry(s.url, label, lang === 'vf' ? 'VF' : 'VOSTFR', matchedSaison.name || 'Saison ' + matchedSaison.id);
+    });
 
     console.log(`[Mugiwara] Found ${streams.length} sources for S${season}E${episodeNum}`);
-
-    const resolved = [];
-    for (const stream of streams) {
-        try {
-            const r = await resolveStream(stream);
-            if (r && r.url && r.isDirect) resolved.push(r);
-        } catch (e) {
-            resolved.push(stream);
-        }
-    }
-
-    return resolved.length > 0 ? resolved : streams;
+    return await resolveStreams(streams);
 }

@@ -247,7 +247,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -272,7 +272,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films et Séries en VF et VOSTFR via l'API de Frenchstream.",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

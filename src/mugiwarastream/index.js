@@ -2,7 +2,8 @@ import { extractStreams } from './extractor.js';
 import { expandStreamQualities } from '../utils/resolvers.js';
 
 async function getStreams(tmdbId, mediaType, season, episode) {
-    console.log(`[Mugiwara] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+    const se = mediaType === 'movie' ? '' : ` S${season}E${episode}`;
+    console.log(`[Mugiwara] Request: ${mediaType} ${tmdbId}${se}`);
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
