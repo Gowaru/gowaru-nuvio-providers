@@ -108,13 +108,4 @@ test_showboxog.js
 test_vidsrc.js
 vidsrcextractor.js
 
-moviebox.js
-test_showbox.js
-videasy-scraper.js
-test_videasy.js
-test_vidnest.js
-test_mapple.js
-test_cinevibe.js
-castle_cli-2.py
-providers/mbox.js
-mbox.kt
+test_providers.js

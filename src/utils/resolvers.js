@@ -8,10 +8,8 @@ const HEADERS = {
 };
 
 const _atob = (str) => {
-    try {
-        if (typeof atob === 'function') return atob(str);
-        return Buffer.from(str, 'base64').toString('binary');
-    } catch (e) { return str; }
+    try { return atob(str); }
+    catch (e) { return str; }
 };
 
 function isKnownFakeDirectUrl(url) {
@@ -186,18 +184,12 @@ export async function expandStreamQualities(streams) {
 }
 
 export async function safeFetch(url, options = {}) {
-    let controller, timeout;
     try {
-        const canAbort = typeof AbortController !== 'undefined';
-        controller = canAbort ? new AbortController() : null;
-        if (controller) timeout = setTimeout(() => controller.abort(), 10000);
         const response = await fetch(url, {
             ...options,
             headers: { ...HEADERS, ...options.headers },
-            redirect: 'follow',
-            signal: controller ? controller.signal : undefined
+            redirect: 'follow'
         });
-        if (timeout) clearTimeout(timeout);
         if (!response) return null;
 
         const status = response.status;
@@ -219,7 +211,6 @@ export async function safeFetch(url, options = {}) {
             headers: response.headers
         };
     } catch (e) {
-        if (timeout) clearTimeout(timeout);
         return null;
     }
 }
@@ -413,10 +404,6 @@ export async function resolveUqload(url) {
         const checkDomain = async (domain) => {
             try {
                 const tryUrl = `https://${domain}${normalizedPath}`;
-                const canAbort = typeof AbortController !== 'undefined';
-                const controller = canAbort ? new AbortController() : null;
-                const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null; // Fast fail 4s
-                
                 const res = await safeFetch(tryUrl, { headers: { ...HEADERS, 'Referer': baseRef } });
                 if (res) {
                     const html = await res.text();

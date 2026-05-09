@@ -1,5 +1,5 @@
 import { fetchText } from './http.js';
-import { getAbsoluteEpisode } from '../utils/armsync.js';
+import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 // Import btoa/atob from global if needed, Hermes should have them or we can implement a fallback.
 // In Nuvio, atob/btoa might not be present globally depending on env, but let's assume it is or use polyfill.
@@ -60,35 +60,52 @@ async function getSeriesData() {
 function buildEpisodeMap(html) {
     const epMap = {}; // { num: { sd, hd, low } }
 
+    // Step 1: Decode all atob constants and detect embed prefix
     const b64Regex = /var\s+([a-zA-Z0-9_]+)\s*=\s*atob\("([^"]+)"\)/g;
     const constants = {};
+    let embedPrefix = null;
+    let embedPrefixName = null;
     for (const match of html.matchAll(b64Regex)) {
-        // Safe atob fallback via Buffer if in NodeJS (local testing) or global.atob in app
-        if (typeof atob === 'function') {
-            constants[match[1]] = atob(match[2]);
-        } else {
-            constants[match[1]] = Buffer.from(match[2], 'base64').toString('utf8');
+        const varName = match[1];
+        const decoded = atob(match[2]);
+        constants[varName] = decoded;
+        // Detect embed domain prefixes (vidmoly, mugiwara, etc.)
+        // Prefer the explicitly-named "mugiwara" variable; otherwise use the first mugiwara domain
+        if (/embed-?$/.test(decoded) || /mugiwara/.test(decoded)) {
+            if (!embedPrefix || varName === 'mugiwara') {
+                embedPrefix = decoded;
+                embedPrefixName = varName;
+            }
         }
     }
 
-    const scriptMatch = html.match(/<script>\s*(?:var\s+[a-zA-Z0-9_]+\s*=\s*[0-9]+;|var\s+[a-zA-Z0-9_]+\s*=\s*atob)[\s\S]*?<\/script>/);
-    if (!scriptMatch) return epMap;
-    const jsCode = scriptMatch[0];
-    
+    // Step 2: Process ALL script blocks (episode data can be in any of them)
+    const scriptBlocks = html.match(/<script>[\s\S]*?<\/script>/g);
+    if (!scriptBlocks) return epMap;
+    const jsCode = scriptBlocks.join('\n');
+
+    // Step 3: Extract numeric constants (var lastXxx = N)
+    const numConstants = {};
+    const varLastRegex = /var\s+([a-zA-Z0-9_]+)\s*=\s*(\d+);/g;
+    for (const match of jsCode.matchAll(varLastRegex)) {
+        numConstants[match[1]] = parseInt(match[2]);
+    }
+
+    // Step 4: Hardcoded indices with .mp4: episodeHD[28] = mu5 + "path/" + 28 + "-2.mp4"
     const hardcodeRegex = /(episode(?:HD|Low)?)\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*\+?\s*(\d+)?\s*\+\s*['"](\.mp4)['"]/g;
     for (const match of jsCode.matchAll(hardcodeRegex)) {
-        const type = match[1]; // episode, episodeHD, episodeLow
+        const type = match[1];
         const num = parseInt(match[2]);
         const domain = constants[match[3]] || "";
         const path = match[4];
         const numStr = match[5] ? match[5] : "";
         const ext = match[6];
-        
         if (!epMap[num]) epMap[num] = {};
         epMap[num][type] = domain + path + numStr + ext;
     }
-    
-    // Fallback direct url pattern (sans concat avec padding array)
+
+    // Step 5: Simple domain + path patterns (no .mp4 suffix in assignment)
+    // episode[N] = domain + "path/name"  OR  episode[N] = "path/name.mp4"
     const simpleRegex = /(episode(?:HD|Low)?)\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*;/g;
     for (const match of jsCode.matchAll(simpleRegex)) {
         const type = match[1];
@@ -96,25 +113,33 @@ function buildEpisodeMap(html) {
         const domain = constants[match[3]] || "";
         const path = match[4];
         if (!epMap[num]) epMap[num] = {};
-        if(!epMap[num][type] && path.endsWith('.mp4')) {
-             epMap[num][type] = domain + path;
+        if (!epMap[num][type] && path.endsWith('.mp4')) {
+            epMap[num][type] = domain + path;
         }
     }
 
-    const loopRegex = /for\s*\(\s*var\s+num\s*=\s*(\d+);\s*num\s*<=\s*([0-9a-zA-Z_]+);\s*num\+\+\s*\)\s*\{([^}]+)\}/g;
-    const varLastRegex = /var\s+([a-zA-Z0-9_]+)\s*=\s*(\d+);/g;
-    const numConstants = {};
-    for (const match of jsCode.matchAll(varLastRegex)) {
-        numConstants[match[1]] = parseInt(match[2]);
+    // Step 6: Direct embed ID pattern: episode[N] = "id.html" (vidmoly style)
+    // The prefix domain is from the detected embedPrefix (e.g., mugiwara = atob("https://vidmoly.biz/embed-"))
+    const embedRegex = /(episode(?:HD|Low)?)\s*\[\s*(\d+)\s*\]\s*=\s*['"]([^'"]+\.html)['"]\s*;/g;
+    for (const match of jsCode.matchAll(embedRegex)) {
+        const type = match[1];
+        const num = parseInt(match[2]);
+        const embedId = match[3];
+        if (!epMap[num]) epMap[num] = {};
+        if (!epMap[num][type] && embedPrefix) {
+            epMap[num][type] = embedPrefix + embedId;
+        }
     }
 
+    // Step 7: Loop-based construction: for(var num=start; num<=end; num++) { episode[num] = domain + "path/" + num + ".mp4"; }
+    const loopRegex = /for\s*\(\s*var\s+num\s*=\s*(\d+);\s*num\s*<=\s*([0-9a-zA-Z_]+);\s*num\+\+\s*\)\s*\{([^}]+)\}/g;
     for (const match of jsCode.matchAll(loopRegex)) {
         const start = parseInt(match[1]);
         const endVar = match[2];
         const end = isNaN(parseInt(endVar)) ? numConstants[endVar] || 1000 : parseInt(endVar);
         const body = match[3];
 
-        const bodyRegex = /(episode(?:HD|Low)?)\s*\[\s*num\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*\+\s*(?:num)\s*\+\s*['"](\.mp4)['"](;)/g;
+        const bodyRegex = /(episode(?:HD|Low)?)\s*\[\s*num\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*\+\s*(?:num)\s*\+\s*['"](\.mp4)['"]\s*;/g;
         for(let n=start; n<=end; n++) {
             if (!epMap[n]) epMap[n] = {};
             for (const bMatch of body.matchAll(bodyRegex)) {
@@ -135,14 +160,19 @@ function buildEpisodeMap(html) {
 
 function extractArcsUrls(html, baseUrl) {
     const arcs = [];
-    const attrRegex = /<a\s+href="([^"]+)">\s*<div\s+class="hover-arc">/g;
-    for(const match of html.matchAll(attrRegex)) {
+    
+    // Method 1: Find arc URLs from href attributes in JS string literals
+    // Pattern: href="series-slug-streaming/arc-N" (often in JS template strings)
+    const hrefRegex = /href="([^"]*arc[^"]*)"/gi;
+    for(const match of html.matchAll(hrefRegex)) {
         let uri = match[1];
-        if(!uri.includes('?') && !uri.startsWith('http')) {
-            arcs.push((baseUrl.replace(/\?.*$/, '') + '/' + uri).replace(/([^:]\/)\/+/g, "$1")); // basic join
+        if(uri.includes('arc-') && !uri.includes('?') && !uri.startsWith('http') && !uri.startsWith('#')) {
+            const fullUrl = (baseUrl.replace(/\?.*$/, '') + '/' + uri).replace(/([^:]\/)\/+/g, "$1");
+            arcs.push(fullUrl);
         }
     }
     
+    // Method 2: Find arc URLs from redirectTo() calls
     if(arcs.length === 0) {
         const fallbackRegex = /redirectTo\(['"]([^'"]+)['"]\)/g;
         for(const match of html.matchAll(fallbackRegex)) {
@@ -167,7 +197,15 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
     
-    const absEp = await getAbsoluteEpisode(tmdbId, mediaType, season, episodeNum);
+    let absEp = episodeNum;
+    try {
+        const imdbId = await getImdbId(tmdbId, mediaType);
+        if (imdbId) {
+            const resolved = await getAbsoluteEpisode(imdbId, season, episodeNum);
+            if (resolved) absEp = resolved;
+        }
+    } catch (e) {}
+
     console.log(`[Sekai] Checking S${season} E${episodeNum} -> Absolute: ${absEp}`);
     
     // 1. Get Series Data

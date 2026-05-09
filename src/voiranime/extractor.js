@@ -285,8 +285,21 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
       }
 
       let episodeUrl = null;
-      $(".listing-chapters a, .list-chapter a, .wp-manga-chapter a").each(
-        (i, el) => {
+      const epSelectors = [
+        ".listing-chapters a",
+        ".list-chapter a",
+        ".wp-manga-chapter a",
+        ".episodes a",
+        "ul.episodes li a",
+        ".episode-list a",
+        "ul.main.version-chap.no-volumn li.wp-manga-chapter a",
+        'a[href*="/episode/"]',
+        'a[href*="/ep/"]'
+      ];
+      // First pass: try pattern matching on text/href
+      for (const sel of epSelectors) {
+        $(sel).each((i, el) => {
+          if (episodeUrl) return false;
           const text = $(el).text().trim();
           const href = $(el).attr("href");
           for (const pattern of epPatterns) {
@@ -296,8 +309,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
               return false;
             }
           }
-        },
-      );
+        });
+        if (episodeUrl) break;
+      }
+
+      // Second pass: fallback to auto-increment counter if pattern matching failed
+      if (!episodeUrl) {
+        const chapterLinks = [];
+        $(".wp-manga-chapter a, ul.main.version-chap.no-volumn li.wp-manga-chapter a").each((i, el) => {
+          chapterLinks.push($(el).attr("href"));
+        });
+        for (const ep of targetEpisodes) {
+          const idx = ep - 1;
+          if (idx >= 0 && idx < chapterLinks.length) {
+            episodeUrl = chapterLinks[idx];
+            break;
+          }
+        }
+      }
 
       if (!episodeUrl) continue;
 

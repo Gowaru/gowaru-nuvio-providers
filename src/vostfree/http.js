@@ -12,6 +12,8 @@ export const HEADERS = {
     "Connection": "keep-alive",
 };
 
+const HTTP_SKIP_CODES = [403, 404, 429, 500, 502, 503, 504, 522, 523, 524];
+
 /**
  * Fetch text content from a URL
  */
@@ -20,6 +22,7 @@ export async function fetchText(url, options = {}) {
     const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        if (HTTP_SKIP_CODES.includes(status)) throw new Error(`HTTP_SKIP ${status}`);
         throw new Error(`HTTP error ${status} for ${url}`);
     }
     return await res.text();

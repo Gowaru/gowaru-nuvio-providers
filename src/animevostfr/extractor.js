@@ -10,6 +10,7 @@ import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://animevostfr.org";
+const MAX_SEARCH_TITLES = 5;
 
 /**
  * Search for anime on AnimeVOSTFR
@@ -298,7 +299,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     let matches = [];
-    for (const t of titlesOrdered) {
+    for (const t of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
         matches = await searchAnime(t);
         if (matches && matches.length > 0) break;
     }

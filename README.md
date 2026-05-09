@@ -1,7 +1,7 @@
 # 🚀 Nuvio French Providers Bundle
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.51-green.svg)](manifest.json)
+[![Version](https://img.shields.io/badge/version-1.2.0-green.svg)](manifest.json)
 [![Safety](https://img.shields.io/badge/vulnerabilities-0-brightgreen.svg)](package.json)
 
 An optimized collection of French streaming plugins for the **Nuvio** application. This repository bundles the best anime sources (VF/VOSTFR) with a direct link resolution system for smooth mobile playback.
@@ -23,7 +23,7 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 11 pillars of the French streaming scene:
+This bundle integrates 12 pillars of the French streaming scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
@@ -37,6 +37,7 @@ This bundle integrates 11 pillars of the French streaming scene:
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
 | **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ❌  |
 | **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | ✅ |
+| **Mugiwara-no-Streaming** | Anime streaming via Next.js API with Sibnet, Vidmoly, Sendvid, VK sources. | VF / VOSTFR | ✅ |
 | **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*

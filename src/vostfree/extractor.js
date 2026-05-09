@@ -9,6 +9,7 @@ import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://vostfree.ws";
+const MAX_SEARCH_TITLES = 5;
 
 /**
  * Search for the anime on Vostfree
@@ -112,7 +113,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     let matches = [];
-    for (const title of titlesOrdered) {
+    for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
         matches = await searchAnime(title);
         if (matches && matches.length > 0) break;
     }

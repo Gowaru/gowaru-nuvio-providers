@@ -9,6 +9,8 @@ import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://anime-sama.to";
+const MAX_FALLBACK_TITLES = 3;
+const MAX_FALLBACK_SLUGS = 3;
 
 /**
  * Search for a slug on Anime-Sama
@@ -118,11 +120,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     streams.push(...resolvedFirstBatch.filter(s => s != null));
 
     if (streams.length === 0) {
-        // Search with all title variations (EN, FR, Original romaji)
         const foundSlugs = [];
-        for (const t of titles) {
+        for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
             const slugs = await searchSlugs(t);
-            slugs.forEach(s => { if (!foundSlugs.includes(s)) foundSlugs.push(s); });
+            for (const s of slugs) {
+                if (!foundSlugs.includes(s)) foundSlugs.push(s);
+                if (foundSlugs.length >= MAX_FALLBACK_SLUGS) break;
+            }
+            if (foundSlugs.length >= MAX_FALLBACK_SLUGS) break;
         }
         const checkedSlugs = new Set([slug]);
         const fallbackPromises = [];

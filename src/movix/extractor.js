@@ -145,7 +145,10 @@ function isExoPlayableUrl(url) {
 }
 
 function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise(resolve => {
+        const start = Date.now();
+        (function check() { if (Date.now() - start >= ms) resolve(); else Promise.resolve().then(check); })();
+    });
 }
 
 async function fetchWithRetry(job) {
@@ -169,18 +172,13 @@ async function fetchWithRetry(job) {
 }
 
 async function resolveForExo(stream) {
-    // Try resolution with retries (up to 2 attempts for timeouts)
     let resolved = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-            resolved = await Promise.race([
-                resolveStream(stream),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-            ]);
+            resolved = await resolveStream(stream);
             break;
         } catch (e) {
             if (attempt === 2) {
-                // Second attempt failed, try original URL if it looks direct
                 if (isExoPlayableUrl(stream.url)) {
                     resolved = { ...stream, isDirect: true };
                 } else {
