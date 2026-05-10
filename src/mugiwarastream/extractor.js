@@ -6,9 +6,6 @@ function unescapeJsString(str) {
     return str
         .replace(/\\"/g, '"')
         .replace(/\\\\/g, '\\')
-        .replace(/\\n/g, '\n')
-        .replace(/\\t/g, '\t')
-        .replace(/\\r/g, '\r')
         .replace(/\\\//g, '/')
         .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
@@ -63,14 +60,16 @@ function searchAnime(html) {
 
 function getEpisodeCount(saison) {
     if (!saison || !saison.lang) return 0;
-    const langs = Object.values(saison.lang);
-    for (const langData of langs) {
+    let maxCount = 0;
+    for (const langData of Object.values(saison.lang)) {
         if (Array.isArray(langData) && langData.length > 0) {
             const first = langData[0];
-            if (Array.isArray(first)) return first.length;
+            if (Array.isArray(first) && first.length > maxCount) {
+                maxCount = first.length;
+            }
         }
     }
-    return 0;
+    return maxCount;
 }
 
 function matchSaison(saisons, tmdbSeason, episodeNum) {
@@ -116,7 +115,27 @@ function matchSaison(saisons, tmdbSeason, episodeNum) {
     const ordered = saisons.filter(s => !s.notASeason);
     const idx = tmdbSeason - 1;
     if (idx >= 0 && idx < ordered.length) {
-        return { saison: ordered[idx], episodeIndex: episodeNum - 1 };
+        const s = ordered[idx];
+        const count = getEpisodeCount(s);
+        if (episodeNum <= count) {
+            return { saison: s, episodeIndex: episodeNum - 1 };
+        }
+    }
+
+    const mainSeasons = saisons.filter(s => {
+        if (s.notASeason) return false;
+        if (!s.lang || Object.keys(s.lang).length === 0) return false;
+        if (/[a-zA-Z]/.test(s.id.replace(/-/g, ''))) return false;
+        return true;
+    });
+
+    let cumulativeStart = 0;
+    for (const s of mainSeasons) {
+        const count = getEpisodeCount(s);
+        if (count > 0 && episodeNum > cumulativeStart && episodeNum <= cumulativeStart + count) {
+            return { saison: s, episodeIndex: episodeNum - cumulativeStart - 1 };
+        }
+        cumulativeStart += count;
     }
 
     return null;

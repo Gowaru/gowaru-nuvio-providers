@@ -33,16 +33,18 @@ const SPECIAL_SLUG_RE =
 function extractBaseSlug(url) {
   const m = url.match(/\/anime\/([^/]+)\//);
   if (!m) return null;
-  const slug = m[1];
+  let slug = m[1];
   // Skip slugs belonging to OVAs, films, specials, etc.
   if (SPECIAL_SLUG_RE.test(slug)) return null;
-  // Strip trailing -N, -N-vf, -vf, -vostfr suffixes
-  return slug
-    .replace(
-      /-(?:the-final-season|saison-\d+|\d+|vf|vostfr|part-\d+|cour-\d+)(?:-(?:vf|vostfr))?$/i,
+  let prev;
+  do {
+    prev = slug;
+    slug = slug.replace(
+      /(?:-\d+|-\d+-(?:vf|vostfr)|-(?:vf|vostfr)|-the-final-season|-saison-\d+|-(?:part|cour)-\d+)+$/i,
       "",
-    )
-    .replace(/-+$/, "");
+    );
+  } while (slug !== prev);
+  return slug.replace(/-+$/, "");
 }
 
 /**
@@ -213,7 +215,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
   if (titles.length === 0) return [];
 
   // --- ARMSYNC Metadata Resolution ---
-  let targetEpisodes = [episode];
+  let targetEpisodes = [episode || 1];
   try {
     const imdbId = await getImdbId(tmdbId, mediaType);
     if (imdbId) {
@@ -319,6 +321,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         $(".wp-manga-chapter a, ul.main.version-chap.no-volumn li.wp-manga-chapter a").each((i, el) => {
           chapterLinks.push($(el).attr("href"));
         });
+        // Site lists episodes descending; reverse for ascending index mapping
+        chapterLinks.reverse();
         for (const ep of targetEpisodes) {
           const idx = ep - 1;
           if (idx >= 0 && idx < chapterLinks.length) {

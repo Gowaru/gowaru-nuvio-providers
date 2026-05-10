@@ -9,20 +9,39 @@ import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://vostfree.ws";
-const MAX_SEARCH_TITLES = 5;
+const MAX_SEARCH_TITLES = 20;
+
+function normalize(s) {
+    if (!s) return '';
+    return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, '').replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function titleMatches(resultTitle, searchTitle) {
+    const nResult = normalize(resultTitle);
+    const nSearch = normalize(searchTitle);
+    if (!nResult || !nSearch) return false;
+    if (nResult.includes(nSearch)) return true;
+    const searchWords = nSearch.split(/\s+/).filter(w => w.length > 2);
+    if (searchWords.length === 0) return false;
+    const matched = searchWords.filter(w => nResult.includes(w));
+    return matched.length >= Math.min(searchWords.length, 2);
+}
 
 /**
  * Search for the anime on Vostfree
+ * Returns array of { title, url, genre? }
  */
 async function searchAnime(title) {
     try {
         const results = [];
         const seen = new Set();
 
-        const add = (h, t) => {
+        const add = (h, t, genre) => {
             if (h && h.length > 10 && t && t.length > 2 && !seen.has(h)) {
                 seen.add(h);
-                results.push({ title: t, url: h.startsWith('http') ? h : BASE_URL + h });
+                const r = { title: t, url: h.startsWith('http') ? h : BASE_URL + h };
+                if (genre) r.genre = genre;
+                results.push(r);
             }
         };
 
@@ -38,42 +57,23 @@ async function searchAnime(title) {
                 body: `do=search&subaction=search&story=${encodeURIComponent(title)}`
             });
             const $ = cheerio.load(postHtml);
-            // POST results: links ending in .htm / .html / numeric slugs
-            $('a[href]').each((i, el) => {
-                const h = $(el).attr('href') || '';
-                const t = $(el).text().trim() || $(el).attr('title') || '';
-                if ((h.includes(BASE_URL) || h.startsWith('/')) && t.length > 2 &&
-                    !h.includes('/category/') && !h.includes('/page/') && !h.includes('?do=') && !h.includes('#') &&
-                    (/\.\w{2,4}$/.test(h) || /\/\d+/.test(h))) {
-                    add(h, t);
+            $('.search-result').each((i, block) => {
+                const link = $(block).find('.title a');
+                const h = link.attr('href') || '';
+                const t = link.text().trim() || link.attr('title') || '';
+                const genre = $(block).find('.genre').text().trim().toUpperCase();
+                if (h && t && (h.includes(BASE_URL) || h.startsWith('/')) && t.length > 2) {
+                    add(h, t, genre || undefined);
                 }
             });
         } catch (e) { /* POST failed, fall through to GET */ }
 
-        // --- Method 2: GET /?s= (broader search) ---
-        if (results.length === 0) {
-            const getHtml = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`);
-            const $ = cheerio.load(getHtml);
-            const selectors = ['.post-title a', '.film-name a', 'h2.title a', 'h3.title a', '.title a'];
-            for (const sel of selectors) {
-                $(sel).each((i, el) => {
-                    const h = $(el).attr('href') || '';
-                    const t = $(el).text().trim() || $(el).attr('title') || '';
-                    if (h.includes(BASE_URL) && t.length > 2 &&
-                        !h.includes('/category/') && !h.includes('/page/')) {
-                        add(h, t);
-                    }
-                });
-                if (results.length > 0) break;
-            }
-        }
-
-        const normalize = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, '').replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
-        const simplifiedTitle = normalize(title);
+        // --- Method 2: GET /?s= (broader search, disabled for performance) ---
+        // if (results.length === 0) { ... }
 
         console.log(`[Vostfree] Results found: ${results.length}`);
 
-        const matches = results.filter(r => normalize(r.title).includes(simplifiedTitle));
+        const matches = results.filter(r => titleMatches(r.title, title));
 
         if (matches.length > 0) {
             console.log(`[Vostfree] Found ${matches.length} matches for "${title}"`);
@@ -98,84 +98,135 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     });
 
     // --- ARMSYNC Metadata Resolution ---
-    let targetEpisodes = [episode];
-    try {
-        const imdbId = await getImdbId(tmdbId, mediaType);
-        if (imdbId) {
-            const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
-            if (absoluteEpisode && absoluteEpisode !== episode) {
-                targetEpisodes.push(absoluteEpisode);
+    let targetEpisodes = episode !== undefined && episode !== null ? [episode] : [];
+    if (mediaType === 'tv' && targetEpisodes.length > 0) {
+        try {
+            const imdbId = await getImdbId(tmdbId, mediaType);
+            if (imdbId) {
+                const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
+                if (absoluteEpisode && absoluteEpisode !== episode) {
+                    targetEpisodes.push(absoluteEpisode);
+                }
             }
+        } catch (e) {
+            console.warn(`[Vostfree] ArmSync failed: ${e.message}`);
         }
-    } catch (e) {
-        console.warn(`[Vostfree] ArmSync failed: ${e.message}`);
     }
     // ------------------------------------
 
-    let matches = [];
+    let allMatches = [];
+    const seenUrls = new Set();
+    const searchedNormalized = new Set();
     for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
-        matches = await searchAnime(title);
-        if (matches && matches.length > 0) break;
+        // Skip very long or non-descriptive titles (> 60 chars unlikely to match on VostFree)
+        if (title.length > 60) continue;
+        // Deduplicate by normalized form (avoids searching similar variants)
+        const n = normalize(title);
+        if (!n || searchedNormalized.has(n)) continue;
+        searchedNormalized.add(n);
+        const batch = await searchAnime(title);
+        if (batch && batch.length > 0) {
+            for (const m of batch) {
+                if (!seenUrls.has(m.url)) {
+                    seenUrls.add(m.url);
+                    allMatches.push(m);
+                }
+            }
+        }
     }
     
-    if (!matches || matches.length === 0) return [];
+    if (allMatches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned
-    matches = matches.sort((a, b) => {
-        const aT = a.title.toLowerCase();
-        const bT = b.title.toLowerCase();
-        const sMatch = `saison ${season}`;
-        const hasA = aT.includes(sMatch);
-        const hasB = bT.includes(sMatch);
-        if (hasA && !hasB) return -1;
-        if (!hasA && hasB) return 1;
-        return 0;
-    });
+    if (mediaType === 'tv' && season !== undefined && season !== null) {
+        allMatches = allMatches.sort((a, b) => {
+            const aT = a.title.toLowerCase();
+            const bT = b.title.toLowerCase();
+            const aUrl = a.url.toLowerCase().replace(/-/g, ' ');
+            const bUrl = b.url.toLowerCase().replace(/-/g, ' ');
+            const sMatch = `saison ${season}`;
+            const hasA = aT.includes(sMatch) || aUrl.includes(sMatch);
+            const hasB = bT.includes(sMatch) || bUrl.includes(sMatch);
+            if (hasA && !hasB) return -1;
+            if (!hasA && hasB) return 1;
+            return 0;
+        });
+    }
 
     const streams = [];
     const checkedUrls = new Set();
+    const MAX_MATCHES_TO_PROCESS = 3;
+    let processedCount = 0;
 
-    for (const match of matches) {
+    for (const match of allMatches) {
         if (checkedUrls.has(match.url)) continue;
         checkedUrls.add(match.url);
+        if (processedCount >= MAX_MATCHES_TO_PROCESS) break;
 
         const matchLower = match.title.toLowerCase();
+        const matchUrlLower = match.url.toLowerCase();
         const animeUrl = match.url;
         const lang = (match.title.toUpperCase().includes(' VF') || match.url.includes('/vf/')) ? 'VF' : 'VOSTFR';
 
-        // Optimization: if the result is explicitly for a different season, 
-        // skip it unless targetEpisodes contains an absolute episode
-        const seasonMatch = matchLower.match(/saison\s*(\d+)/);
-        if (seasonMatch && parseInt(seasonMatch[1]) !== season && targetEpisodes.length === 1) {
-            continue;
+        // Skip OAV/OVA/FILM/Movie/Special results for TV series (non-film entries)
+        if (mediaType === 'tv') {
+            const skipKeywords = /\b(oav|ova|film|movie)\b/;
+            if (match.genre === 'FILM' || match.genre === 'OAV' ||
+                skipKeywords.test(matchLower) || skipKeywords.test(matchUrlLower)) {
+                continue;
+            }
         }
 
+        // Optimization: if the result is explicitly for a different season, 
+        // skip it unless targetEpisodes contains a unique absolute episode
+        if (mediaType === 'tv' && season !== undefined && season !== null) {
+            const combined = matchLower + ' ' + matchUrlLower.replace(/-/g, ' ');
+            const seasonMatch = combined.match(/saison\s*(\d+)/);
+            const uniqueEpisodes = [...new Set(targetEpisodes.filter(e => e !== undefined && e !== null))];
+            if (seasonMatch && parseInt(seasonMatch[1]) !== season && uniqueEpisodes.length <= 1) {
+                continue;
+            }
+        }
+
+        processedCount++;
         try {
             const html = await fetchText(animeUrl);
             const $ = cheerio.load(html);
 
             let buttonsId = null;
 
-            $('select.new_player_selector option').each((i, el) => {
-                const text = $(el).text().trim();
-                for (const ep of targetEpisodes) {
-                    const epNum = parseInt(ep, 10);
-                    // Vostfree pads ALL numbers to 2+ digits: "Episode 01", "Episode 010"
-                    // Extract the numeric part from the option text and compare directly
-                    const numMatch = text.match(/[Ee]pisode\s*(0*)(\d+)/i);
-                    if (numMatch) {
-                        const parsedEp = parseInt(numMatch[1] + numMatch[2], 10);
-                        if (parsedEp === epNum) {
-                            buttonsId = $(el).val();
-                            return false;
+            // Movies: no episode selector, use default buttons_1
+            if (mediaType === 'movie') {
+                buttonsId = 'buttons_1';
+            } else {
+                // TV: find episode in selector
+                $('select.new_player_selector option').each((i, el) => {
+                    const text = $(el).text().trim();
+                    for (const ep of targetEpisodes) {
+                        const epNum = parseInt(ep, 10);
+                        const numMatch = text.match(/[Ee]pisode\s*(0*)(\d+)/i);
+                        if (numMatch) {
+                            const parsedEp = parseInt(numMatch[1] + numMatch[2], 10);
+                            if (parsedEp === epNum) {
+                                buttonsId = $(el).val();
+                                return false;
+                            }
                         }
                     }
+                });
+
+                // Fallback: if selector exists but empty (single-episode page), use buttons_1
+                if (!buttonsId) {
+                    const hasSelector = $('select.new_player_selector').length > 0;
+                    if (hasSelector) {
+                        console.warn(`[Vostfree] Episode ${episode} not found in selector on ${animeUrl}`);
+                        continue;
+                    }
                 }
-            });
+            }
 
             if (!buttonsId) {
-                console.warn(`[Vostfree] Episode ${episode} not found in selector on ${animeUrl}`);
-                continue;
+                buttonsId = 'buttons_1';
             }
 
             console.log(`[Vostfree] Using buttons ID: ${buttonsId} for ${lang}`);
@@ -184,6 +235,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             const playerPromises = playerElements.map(async (el) => {
                 const playerId = $(el).attr('id').replace('player_', '');
                 const playerName = $(el).text().trim() || "Player";
+                const elClass = ($(el).attr('class') || '').toLowerCase();
 
                 const contentDivId = `content_player_${playerId}`;
                 const content = $(`#${contentDivId}`).text().trim();
@@ -191,20 +243,29 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 if (content) {
                     let url = content;
                     if (!url.startsWith('http')) {
-                        if (playerName.toLowerCase().includes('sibnet')) {
+                        if (elClass.includes('sibnet') || playerName.toLowerCase().includes('sibnet')) {
                             url = `https://video.sibnet.ru/shell.php?videoid=${content}`;
-                        } else if (playerName.toLowerCase().includes('vidmoly')) {
+                        } else if (elClass.includes('vidmoly') || playerName.toLowerCase().includes('vidmoly')) {
                             url = `https://vidmoly.to/embed-${content}.html`;
-                        } else if (playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) {
+                        } else if (elClass.includes('uqload') || elClass.includes('oneupload') || playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) {
                             url = `https://uqload.com/embed-${content}.html`;
-                        } else if (playerName.toLowerCase().includes('sendvid')) {
+                        } else if (elClass.includes('sendvid') || playerName.toLowerCase().includes('sendvid')) {
                             url = `https://sendvid.com/embed/${content}`;
-                        } else if (playerName.toLowerCase().includes('voe')) {
+                        } else if (elClass.includes('voe') || playerName.toLowerCase().includes('voe')) {
                             url = `https://voe.sx/e/${content}`;
-                        } else if (playerName.toLowerCase().includes('dood')) {
+                        } else if (elClass.includes('dood') || playerName.toLowerCase().includes('dood')) {
                             url = `https://dood.to/e/${content}`;
-                        } else if (playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) {
+                        } else if (elClass.includes('stape') || elClass.includes('streamtape') || playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) {
                             url = `https://streamtape.com/e/${content}`;
+                        } else if (elClass.includes('myvi') || elClass.includes('mytv') || playerName.toLowerCase().includes('myvi') || playerName.toLowerCase().includes('mytv')) {
+                            url = `https://www.myvi.ru/embed/${content}`;
+                        } else if (elClass.includes('vip')) {
+                            // VIP class can be VOE or Vudeo — content already has full URL or needs passing through
+                            if (content.includes('voe.sx') || content.includes('vudeo')) {
+                                url = content;
+                            }
+                        } else if (elClass.includes('mail') || elClass.includes('ok')) {
+                            // Mail.ru or OK.ru — pass as-is to resolver
                         }
                     }
 
@@ -228,6 +289,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             for (const stream of results) {
                 if (stream) streams.push(stream);
             }
+            if (streams.length > 0) {
+                console.log(`[Vostfree] Found ${streams.length} streams from ${animeUrl}, stopping early`);
+                break;
+            }
         } catch (e) {
             console.error(`[Vostfree] Match handle error: ${e.message}`);
         }
@@ -235,9 +300,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const validStreams = streams.filter(s => s && s.isDirect);
     console.log(`[Vostfree] Total streams found: ${validStreams.length}`);
+
+    const cleaned = validStreams.map(s => ({
+        name: s.name || 'Vostfree',
+        title: s.title || 'Stream',
+        url: s.url || '',
+        quality: s.quality || 'HD',
+        isDirect: true,
+        headers: s.headers || {}
+    }));
     
     // Sort streams to prioritize VF (French) over VOSTFR
-    validStreams.sort((a, b) => {
+    cleaned.sort((a, b) => {
         const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
         const aIsVf = isVf(a.name) || isVf(a.title);
         const bIsVf = isVf(b.name) || isVf(b.title);
@@ -247,5 +321,5 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         return 0;
     });
 
-    return validStreams;
+    return cleaned;
 }
