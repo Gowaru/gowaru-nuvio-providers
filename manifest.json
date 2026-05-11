@@ -76,30 +76,6 @@
       "supportsExternalPlayer": false
     },
     {
-      "id": "franime",
-      "name": "FRAnime",
-      "description": "Regarder des animes VF et VOSTFR gratuitement sur FRAnime.",
-      "version": "1.1.34",
-      "author": "Gowaru",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "filename": "providers/franime.js",
-      "enabled": true,
-      "logo": "https://franime.fr/logo.png",
-      "contentLanguage": [
-        "fr"
-      ],
-      "formats": [
-        "mp4",
-        "mkv"
-      ],
-      "limited": false,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": false
-    },
-    {
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
