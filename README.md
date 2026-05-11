@@ -30,7 +30,6 @@ This bundle integrates 12 pillars of the French streaming scene:
 | **Sekai** | Specialized in big anime series. Ultra-fast direct streams. | VF / VOSTFR | ⚠️ |
 | **Anime-Sama** | Massive catalog, daily updates. | VF / VOSTFR | ✅ |
 | **AnimesUltra** | Complete catalog based on DataLife Engine. | VF / VOSTFR | ✅ |
-| **FRAnime** | Modern interface, fast API. | VF / VOSTFR | ❌ |
 | **VoirAnime** | Comprehensive historical archive. | VF / VOSTFR | ✅ |
 | **Vostfree** | Specialist in streaming & downloads. | VF / VOSTFR | ✅ |
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
