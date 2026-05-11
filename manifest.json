@@ -270,6 +270,30 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "animesite",
+      "name": "AnimeSite",
+      "description": "Animés en streaming VF et VOSTFR sur AnimeSite.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/animesite.js",
+      "enabled": true,
+      "logo": "https://animesite.fr/anime-site-og.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": true,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films et Séries en VF et VOSTFR via l'API de Frenchstream.",

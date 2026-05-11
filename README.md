@@ -39,6 +39,7 @@ This bundle integrates 12 pillars of the French streaming scene:
 | **Mugiwara-no-Streaming** | Anime streaming via Next.js API with Sibnet, Vidmoly, Sendvid, VK sources. | VF / VOSTFR | ✅ |
 | **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |
 | **AnimoFlix** | Modern PHP-based streaming site with clean embed URLs, no Cloudflare on core pages. | VF / VOSTFR | ✅ |
+| **AnimeSite** | Anime streaming in French and Japanese with French subtitles for free. Complete catalog, ad-free, in HD | VF / VOSTFR | ✅ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
@@ -46,13 +47,6 @@ This bundle integrates 12 pillars of the French streaming scene:
 - ✅ = Fully functional
 - ⚠️ = Operational but with known issues/limitations  
 - ❌ = Offline/Unavailable
-
-### Recent Changes
-
-| Change | Detail |
-| :--- | :--- |
-| **+ AnimoFlix** | New provider added: `animoflix` — PHP site, embed URLs in HTML, no Cloudflare on search/anime/season/episode pages. Hosts: Sibnet, Sendvid, Mail.ru. |
-| **− FRAnime** | Removed — fully blocked by Cloudflare on both `/api/anime/{id}/...` endpoint and `/watch2/` pages. No viable path for server-side extraction. |
 
 ---
 
