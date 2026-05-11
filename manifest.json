@@ -76,6 +76,30 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "animoflix",
+      "name": "AnimoFlix",
+      "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/animoflix.js",
+      "enabled": true,
+      "logo": "https://animoflix.to/img/logo.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
@@ -242,6 +266,30 @@
         "m3u8"
       ],
       "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "animesite",
+      "name": "AnimeSite",
+      "description": "Animés en streaming VF et VOSTFR sur AnimeSite.",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/animesite.js",
+      "enabled": true,
+      "logo": "https://animesite.fr/anime-site-og.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "mkv"
+      ],
+      "limited": true,
       "disabledPlatforms": [],
       "supportsExternalPlayer": false
     },
