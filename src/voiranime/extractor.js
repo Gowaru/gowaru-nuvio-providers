@@ -377,10 +377,13 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         $(sel).each((i, el) => {
           if (episodeUrl) return false;
           const text = $(el).text().trim();
+          // Strip "Saison X" / "Season X" labels to avoid false matches
+          // e.g. "Overlord (Saison 1) - 01 VOSTFR - 01" should not match "1" on "Saison 1"
+          const cleanText = text.replace(/\b[Ss](?:aison|eason)\s+\d+\b/g, '');
           const href = $(el).attr("href");
           for (const pattern of epPatterns) {
             const regex = new RegExp(`(?:^|[^0-9])${pattern}(?:$|[^0-9])`, "i");
-            if (regex.test(text)) {
+            if (regex.test(cleanText)) {
               episodeUrl = href;
               return false;
             }

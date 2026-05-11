@@ -30,7 +30,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
