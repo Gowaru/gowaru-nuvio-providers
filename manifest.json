@@ -151,7 +151,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.14",
+      "version": "1.0.15",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

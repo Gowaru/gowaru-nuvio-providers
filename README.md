@@ -34,7 +34,7 @@ This bundle integrates 13 pillars of the French streaming scene:
 | **Vostfree** | Specialist in streaming & downloads. | VF / VOSTFR | ✅ |
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
 | **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
-| **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ❌  |
+| **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ⚠️ |
 | **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | ✅ |
 | **Mugiwara-no-Streaming** | Anime streaming via Next.js API with Sibnet, Vidmoly, Sendvid, VK sources. | VF / VOSTFR | ✅ |
 | **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |

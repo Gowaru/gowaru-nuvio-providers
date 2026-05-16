@@ -6,16 +6,27 @@ import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://ww.animesultra.org";
 
-/**
- * Search for the anime on AnimesUltra
- */
-function slugify(str) {
-    return str.toLowerCase()
-        .replace(/[':!.,?()\/–—]/g, ' ')
-        .replace(/[^a-z0-9\s-]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
+function normalize(s) {
+    return s.toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[':!.,?()\/–—]/g, '')
+        .replace(/\s+/g, ' ').trim();
+}
+
+function scoreSearchMatch(resultTitle, searchTitle) {
+    const nResult = normalize(resultTitle.replace(/ (VF|VOSTFR)$/i, ''));
+    const nSearch = normalize(searchTitle);
+    if (!nResult || !nSearch) return 0;
+    let score = 0;
+    if (nResult === nSearch) score += 150;
+    else if (nResult.includes(nSearch) || nSearch.includes(nResult)) score += 100;
+    const resultWords = new Set(nResult.split(/\s+/).filter(Boolean));
+    const searchWords = nSearch.split(/\s+/).filter(Boolean);
+    const matched = searchWords.filter(w => resultWords.has(w)).length;
+    if (searchWords.length > 0) score += (matched / searchWords.length) * 50;
+    const extra = resultWords.size - searchWords.length;
+    if (extra > 0) score -= Math.min(extra * 40, 80);
+    return score;
 }
 
 function detectLang(title) {
@@ -33,8 +44,11 @@ async function searchAnime(title) {
         const add = (url, t) => {
             const key = url || t;
             if (url && url.length > 5 && t && !seen.has(key)) {
-                seen.add(key);
-                results.push({ title: t, url: url.startsWith('http') ? url : BASE_URL + url });
+                const score = scoreSearchMatch(t, title);
+                if (score >= 30) {
+                    seen.add(key);
+                    results.push({ title: t, url: url.startsWith('http') ? url : BASE_URL + url, score });
+                }
             }
         };
 
@@ -53,7 +67,6 @@ async function searchAnime(title) {
             }
         });
 
-        // Fallback for items without data-id: use actual href from site
         if (results.length === 0) {
             $('a[href*="-au.html"]').each((i, el) => {
                 const h = $(el).attr('href');
@@ -62,7 +75,7 @@ async function searchAnime(title) {
             });
         }
 
-        return results;
+        return results.sort((a, b) => b.score - a.score);
     } catch (e) {
         console.error(`[AnimesUltra] Search error: ${e.message}`);
         return [];
@@ -73,11 +86,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (titles.length === 0) return [];
 
-    // Order titles: French first (site is FR), then English, then others.
     const titlesOrdered = [...titles].sort((a, b) => {
-        const aFr = /[àâéèêëîïôùûüç]/i.test(a) ? 0 : (/[\x20-\x7F]/.test(a) ? 1 : 2);
-        const bFr = /[àâéèêëîïôùûüç]/i.test(b) ? 0 : (/[\x20-\x7F]/.test(b) ? 1 : 2);
-        return aFr - bFr;
+        const score = t => /[àâéèêëîïôùûüç]/i.test(t) ? 0 : (/[\x20-\x7F]/.test(t) ? 1 : 2);
+        return score(a) - score(b);
     });
 
     const epNum = episode || 1;
@@ -166,12 +177,31 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         return null;
     };
 
+    const seenStreamUrls = new Set();
+
+    const pushStream = (url, lang, serverName) => {
+        if (!url || seenStreamUrls.has(url)) return;
+        seenStreamUrls.add(url);
+        if (/^[0-9]+$/.test(url)) url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
+        streams.push({
+            name: `AnimesUltra (${lang})`,
+            title: `${serverName} - ${lang}`,
+            url,
+            quality: "HD",
+            headers: {
+                "Referer": BASE_URL + '/',
+                "Origin": BASE_URL,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+        });
+    };
+
     for (const match of matches) {
         if (!match.url) continue;
-        if (processedCount >= 2) break;
+        if (processedCount >= 6) break;
 
         let lang = "VOSTFR";
-        if (detectLang(match.title) === 'vf' || match.title.toLowerCase().includes(' vf ')) lang = "VF";
+        if (detectLang(match.title) === 'vf') lang = "VF";
 
         const matchSeasonNum = parseInt(match.title.match(/saison\s*(\d+)/i)?.[1], 10);
         if (season && matchSeasonNum && matchSeasonNum !== season) continue;
@@ -201,7 +231,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
             console.log(`[AnimesUltra DEBUG] match=${newsId} title="${match.title}" epHrefs=${epHrefs.length} targetEps=[${targetEpisodes}]`);
             if (epHrefs.length === 0) {
-                // Log all available data-numbers for debugging
                 const avail = [];
                 $('.ep-item').each((i, el) => {
                     const epNum = $(el).attr('data-number');
@@ -218,56 +247,34 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 const epHtml = epRes ? await epRes.text() : '';
                 const $ep = cheerio.load(epHtml);
 
-                const serverIds = [];
                 $ep('.server-item').each((i, el) => {
                     const sId = $ep(el).attr('data-server-id');
-                    if (sId) serverIds.push(sId);
-                });
+                    const embed = $ep(el).attr('data-embed');
+                    const sname = $ep(el).text().trim() || `Srv_${sId}`;
 
-                for (const sId of serverIds) {
-                    const box = $(`#content_player_${sId}`);
-                    if (box.length > 0) {
-                        let url = box.text().trim() || box.find('iframe').attr('src');
-                        if (url && (url.startsWith('http') || /^[0-9]+$/.test(url))) {
-                            
-                            if (/^[0-9]+$/.test(url)) {
-                                url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
+                    let url = null;
+                    if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) {
+                        url = embed;
+                    }
+                    if (sId) {
+                        const box = $(`#content_player_${sId}`);
+                        if (box.length > 0) {
+                            const textUrl = box.text().trim();
+                            const iframeUrl = box.find('iframe').attr('src');
+                            const altUrl = textUrl || iframeUrl;
+                            if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) {
+                                url = altUrl;
                             }
-
-                            let serverName = "Serveur";
-                            const snameLower = $ep(`.server-item[data-server-id="${sId}"]`).text().trim();
-                            if (snameLower) {
-                                serverName = snameLower;
-                            } else {
-                                if (sId.toLowerCase().includes('sen')) serverName = "Sendvid";
-                                else if (sId.toLowerCase().includes('my')) serverName = "Mytv";
-                                else if (sId.toLowerCase().includes('vidc')) serverName = "VidCDN";
-                                else if (sId.toLowerCase() === '20' || url.includes('sibnet.ru')) serverName = "Sibnet";
-                                else serverName = `Srv_${sId}`;
-                            }
-
-                            streams.push({
-                                name: `AnimesUltra (${lang})`,
-                                title: `${serverName} - ${lang}`,
-                                url: url,
-                                quality: "HD",
-                                headers: {
-                                    "Referer": BASE_URL + '/',
-                                    "Origin": BASE_URL,
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                                }
-                            });
                         }
                     }
-                }
+                    if (url) pushStream(url, lang, sname);
+                });
             }
         } catch (e) {
             console.error(`[AnimesUltra] Extract error: ${e.message}`);
         }
     }
 
-    // Fallback: offset-based episode matching for multi-part seasons
-    console.log(`[AnimesUltra DEBUG] offset fallback check: streams=${streams.length}, season=${season}, matches=${matches.length}`);
     if (streams.length === 0 && season && matches.length > 1) {
         const seasonParts = [];
         for (const m of matches) {
@@ -286,7 +293,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             }
         }
         seasonParts.sort((a, b) => a.partNum - b.partNum);
-        console.log(`[AnimesUltra DEBUG] seasonParts: ${seasonParts.map(p => 'P'+p.partNum+':'+p.episodeCount+'eps').join(', ')}`);
         let cumOffset = 0;
         for (const sp of seasonParts) {
             const $c = cheerio.load(sp.html);
@@ -303,7 +309,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     }
                 }
             });
-            console.log(`[AnimesUltra DEBUG] offset: part=${sp.partNum} cumOffset=${cumOffset} epHrefs=${epHrefs.length}`);
             if (epHrefs.length > 0) {
                 let lang = "VOSTFR";
                 const match = sp.match;
@@ -312,39 +317,28 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     const epRes = await safeFetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
                     const epHtml = epRes ? await epRes.text() : '';
                     const $ep = cheerio.load(epHtml);
-                    const serverIds = [];
                     $ep('.server-item').each((i, el) => {
                         const sId = $ep(el).attr('data-server-id');
-                        if (sId) serverIds.push(sId);
-                    });
-                    for (const sId of serverIds) {
-                        const box = $c(`#content_player_${sId}`);
-                        if (box.length > 0) {
-                            let url = box.text().trim() || box.find('iframe').attr('src');
-                            if (url && (url.startsWith('http') || /^[0-9]+$/.test(url))) {
-                                if (/^[0-9]+$/.test(url)) url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
-                                let serverName = "Serveur";
-                                const snameLower = $ep(`.server-item[data-server-id="${sId}"]`).text().trim();
-                                if (snameLower) serverName = snameLower;
-                                else if (sId.toLowerCase().includes('sen')) serverName = "Sendvid";
-                                else if (sId.toLowerCase().includes('my')) serverName = "Mytv";
-                                else if (sId.toLowerCase().includes('vidc')) serverName = "VidCDN";
-                                else if (sId.toLowerCase() === '20' || url.includes('sibnet.ru')) serverName = "Sibnet";
-                                else serverName = `Srv_${sId}`;
-                                streams.push({
-                                    name: `AnimesUltra (${lang})`,
-                                    title: `${serverName} - ${lang}`,
-                                    url: url,
-                                    quality: "HD",
-                                    headers: {
-                                        "Referer": BASE_URL + '/',
-                                        "Origin": BASE_URL,
-                                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                                    }
-                                });
+                        const embed = $ep(el).attr('data-embed');
+                        const sname = $ep(el).text().trim() || `Srv_${sId}`;
+
+                        let url = null;
+                        if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) {
+                            url = embed;
+                        }
+                        if (sId) {
+                            const box = $c(`#content_player_${sId}`);
+                            if (box.length > 0) {
+                                const textUrl = box.text().trim();
+                                const iframeUrl = box.find('iframe').attr('src');
+                                const altUrl = textUrl || iframeUrl;
+                                if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) {
+                                    url = altUrl;
+                                }
                             }
                         }
-                    }
+                        if (url) pushStream(url, lang, sname);
+                    });
                 }
                 break;
             }
