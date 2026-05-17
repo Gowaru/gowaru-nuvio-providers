@@ -36,6 +36,31 @@ function detectLang(title) {
     return null;
 }
 
+const SEASON_PATTERNS = [
+    /saison\s*(\d+)/i,
+    /\bfin[ae]l\s+season\b/i,
+    /\bS(\d+)\b/i,
+    /\b(\d+)\s*(?:vf|vostfr)\s*$/i,
+];
+
+function detectSeason(title, url) {
+    for (const pat of SEASON_PATTERNS) {
+        const m = title.match(pat);
+        if (m) {
+            if (pat === SEASON_PATTERNS[1]) return 'final';
+            return parseInt(m[1], 10);
+        }
+    }
+    const urlSeason = url.match(/saison[-\s]*(\d+)/i)?.[1];
+    if (urlSeason) return parseInt(urlSeason, 10);
+    const numEnd = title.match(/(?:^|\s)(\d{1,2})\s*(?:vf|vostfr)?\s*$/i);
+    if (numEnd) {
+        const v = parseInt(numEnd[1], 10);
+        if (v >= 1 && v <= 30) return v;
+    }
+    return null;
+}
+
 async function searchAnime(title) {
     try {
         const results = [];
@@ -203,8 +228,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         let lang = "VOSTFR";
         if (detectLang(match.title) === 'vf') lang = "VF";
 
-        const matchSeasonNum = parseInt(match.title.match(/saison\s*(\d+)/i)?.[1], 10);
-        if (season && matchSeasonNum && matchSeasonNum !== season) continue;
+        const matchSeasonNum = detectSeason(match.title, match.url);
+        if (season && matchSeasonNum != null) {
+            if (matchSeasonNum === 'final' && season < 6) continue;
+            if (typeof matchSeasonNum === 'number' && matchSeasonNum !== season) continue;
+        }
 
         try {
             const newsIdMatch = match.url.match(/\/(\d+)-/);
@@ -278,7 +306,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (streams.length === 0 && season && matches.length > 1) {
         const seasonParts = [];
         for (const m of matches) {
-            const sNum = parseInt(m.title.match(/saison\s*(\d+)/i)?.[1], 10);
+            const sNum = detectSeason(m.title, m.url);
             const pNum = parseInt(m.title.match(/(?:partie|part)\s*(\d+)/i)?.[1], 10);
             if (sNum === season) {
                 const nId = m.url.match(/\/(\d+)-/)?.[1];
