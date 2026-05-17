@@ -36,6 +36,31 @@ function detectLang(title) {
     return null;
 }
 
+const SEASON_PATTERNS = [
+    /saison\s*(\d+)/i,
+    /\bfin[ae]l\s+season\b/i,
+    /\bS(\d+)\b/i,
+    /\b(\d+)\s*(?:vf|vostfr)\s*$/i,
+];
+
+function detectSeason(title, url) {
+    for (const pat of SEASON_PATTERNS) {
+        const m = title.match(pat);
+        if (m) {
+            if (pat === SEASON_PATTERNS[1]) return 'final';
+            return parseInt(m[1], 10);
+        }
+    }
+    const urlSeason = url.match(/saison[-\s]*(\d+)/i)?.[1];
+    if (urlSeason) return parseInt(urlSeason, 10);
+    const numEnd = title.match(/(?:^|\s)(\d{1,2})\s*(?:vf|vostfr)?\s*$/i);
+    if (numEnd) {
+        const v = parseInt(numEnd[1], 10);
+        if (v >= 1 && v <= 30) return v;
+    }
+    return null;
+}
+
 async function searchAnime(title) {
     try {
         const results = [];
@@ -196,6 +221,39 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         });
     };
 
+    const fetchEpisodeServers = async (epHref, $context, lang) => {
+        const epRes = await safeFetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
+        if (!epRes || !epRes.ok) {
+            console.log(`[AnimesUltra] Episode page not OK (${epRes?.status}) for ${epHref}`);
+            return [];
+        }
+        const epHtml = await epRes.text();
+        const $ep = cheerio.load(epHtml);
+        if ($ep('.server-item').length === 0) {
+            console.log(`[AnimesUltra] No server items on ${epHref}`);
+            return [];
+        }
+        const servers = [];
+        $ep('.server-item').each((i, el) => {
+            const sId = $ep(el).attr('data-server-id');
+            const embed = $ep(el).attr('data-embed');
+            const sname = $ep(el).text().trim() || `Srv_${sId}`;
+            let url = null;
+            if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) url = embed;
+            if (sId) {
+                const box = $context(`#content_player_${sId}`);
+                if (box.length > 0) {
+                    const textUrl = box.text().trim();
+                    const iframeUrl = box.find('iframe').attr('src');
+                    const altUrl = textUrl || iframeUrl;
+                    if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) url = altUrl;
+                }
+            }
+            if (url) servers.push({ url, lang, sname });
+        });
+        return servers;
+    };
+
     for (const match of matches) {
         if (!match.url) continue;
         if (processedCount >= 6) break;
@@ -203,8 +261,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         let lang = "VOSTFR";
         if (detectLang(match.title) === 'vf') lang = "VF";
 
-        const matchSeasonNum = parseInt(match.title.match(/saison\s*(\d+)/i)?.[1], 10);
-        if (season && matchSeasonNum && matchSeasonNum !== season) continue;
+        const matchSeasonNum = detectSeason(match.title, match.url);
+        if (season && matchSeasonNum != null) {
+            if (matchSeasonNum === 'final' && season < 6) continue;
+            if (typeof matchSeasonNum === 'number' && matchSeasonNum !== season) continue;
+        }
 
         try {
             const newsIdMatch = match.url.match(/\/(\d+)-/);
@@ -243,32 +304,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             processedCount++;
 
             for (const epHref of epHrefs) {
-                const epRes = await safeFetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
-                const epHtml = epRes ? await epRes.text() : '';
-                const $ep = cheerio.load(epHtml);
-
-                $ep('.server-item').each((i, el) => {
-                    const sId = $ep(el).attr('data-server-id');
-                    const embed = $ep(el).attr('data-embed');
-                    const sname = $ep(el).text().trim() || `Srv_${sId}`;
-
-                    let url = null;
-                    if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) {
-                        url = embed;
-                    }
-                    if (sId) {
-                        const box = $(`#content_player_${sId}`);
-                        if (box.length > 0) {
-                            const textUrl = box.text().trim();
-                            const iframeUrl = box.find('iframe').attr('src');
-                            const altUrl = textUrl || iframeUrl;
-                            if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) {
-                                url = altUrl;
-                            }
-                        }
-                    }
-                    if (url) pushStream(url, lang, sname);
-                });
+                const servers = await fetchEpisodeServers(epHref, $, lang);
+                for (const { url, sname } of servers) {
+                    pushStream(url, lang, sname);
+                }
             }
         } catch (e) {
             console.error(`[AnimesUltra] Extract error: ${e.message}`);
@@ -278,7 +317,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (streams.length === 0 && season && matches.length > 1) {
         const seasonParts = [];
         for (const m of matches) {
-            const sNum = parseInt(m.title.match(/saison\s*(\d+)/i)?.[1], 10);
+            const sNum = detectSeason(m.title, m.url);
             const pNum = parseInt(m.title.match(/(?:partie|part)\s*(\d+)/i)?.[1], 10);
             if (sNum === season) {
                 const nId = m.url.match(/\/(\d+)-/)?.[1];
@@ -311,34 +350,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             });
             if (epHrefs.length > 0) {
                 let lang = "VOSTFR";
-                const match = sp.match;
-                if (detectLang(match.title) === 'vf') lang = "VF";
+                if (detectLang(sp.match.title) === 'vf') lang = "VF";
                 for (const epHref of epHrefs) {
-                    const epRes = await safeFetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
-                    const epHtml = epRes ? await epRes.text() : '';
-                    const $ep = cheerio.load(epHtml);
-                    $ep('.server-item').each((i, el) => {
-                        const sId = $ep(el).attr('data-server-id');
-                        const embed = $ep(el).attr('data-embed');
-                        const sname = $ep(el).text().trim() || `Srv_${sId}`;
-
-                        let url = null;
-                        if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) {
-                            url = embed;
-                        }
-                        if (sId) {
-                            const box = $c(`#content_player_${sId}`);
-                            if (box.length > 0) {
-                                const textUrl = box.text().trim();
-                                const iframeUrl = box.find('iframe').attr('src');
-                                const altUrl = textUrl || iframeUrl;
-                                if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) {
-                                    url = altUrl;
-                                }
-                            }
-                        }
-                        if (url) pushStream(url, lang, sname);
-                    });
+                    const servers = await fetchEpisodeServers(epHref, $c, lang);
+                    for (const { url, sname } of servers) {
+                        pushStream(url, lang, sname);
+                    }
                 }
                 break;
             }
