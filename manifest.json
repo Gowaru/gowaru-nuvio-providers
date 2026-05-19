@@ -79,7 +79,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -103,7 +103,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
-      "version": "1.1.35",
+      "version": "1.1.36",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -175,7 +175,7 @@
       "id": "jetanimes",
       "name": "JetAnimes",
       "description": "Regarder vos animes en streaming sur JetAnimes.",
-      "version": "1.0.12",
+      "version": "1.0.13",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -273,7 +273,7 @@
       "id": "animesite",
       "name": "AnimeSite",
       "description": "Animés en streaming VF et VOSTFR sur AnimeSite.",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -296,8 +296,8 @@
     {
       "id": "frenchstream",
       "name": "Frenchstream",
-      "description": "Films, séries et animes en VF et VOSTFR via l'API Movix.",
-      "version": "1.1.0",
+      "description": "Films, séries et animes en VF et VOSTFR (séries site-native, films par catégories).",
+      "version": "2.0.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
