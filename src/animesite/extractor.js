@@ -1,4 +1,4 @@
-import { fetchText, BASE_URL, TIMEOUT, GLOBAL_TIMEOUT } from './http.js';
+import { fetchText, BASE_URL, TIMEOUT } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
@@ -12,19 +12,10 @@ const SEARCH_TIMEOUT = 8000;
 const SEARCH_RETRIES = 0;
 
 function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
-
-async function withGlobalTimeout(promise, ms) {
-    try {
-        return await Promise.race([
-            promise,
-            sleep(ms).then(() => { throw new Error('Page timeout'); })
-        ]);
-    } catch (e) {
-        if (e.message === 'Page timeout') throw e;
-        throw e;
-    }
+    const start = Date.now();
+    return new Promise(resolve => {
+        (function check() { if (Date.now() - start >= ms) resolve(); else check(); })();
+    });
 }
 
 function slugifyTitle(title) {
@@ -229,7 +220,7 @@ async function searchAnime(title, isMovie, doDeepSearch, tmdbId) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-    return withGlobalTimeout(_extractStreams(tmdbId, mediaType, season, episode), GLOBAL_TIMEOUT);
+    return _extractStreams(tmdbId, mediaType, season, episode);
 }
 
 async function getTitlesCached(tmdbId, mediaType) {

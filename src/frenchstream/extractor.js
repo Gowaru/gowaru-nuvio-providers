@@ -356,14 +356,8 @@ function parseCategoryMovies(html) {
 async function fetchCategoryMovies(catPath) {
     const url = BASE_URL + catPath;
     return cached('cat_' + catPath.replace(/[\/\s]/g, '_'), async () => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), CATEGORY_FETCH_TIMEOUT);
-        try {
-            const html = await fetchText(url, { signal: controller.signal, baseUrl: BASE_URL });
-            return parseCategoryMovies(html);
-        } finally {
-            clearTimeout(timer);
-        }
+        const html = await fetchText(url, { timeout: CATEGORY_FETCH_TIMEOUT, baseUrl: BASE_URL });
+        return parseCategoryMovies(html);
     });
 }
 

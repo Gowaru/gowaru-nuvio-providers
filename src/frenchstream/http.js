@@ -17,24 +17,10 @@ export const HEADERS = {
     'Connection': 'keep-alive'
 };
 
-function originFromUrl(url) {
-    try {
-        return new URL(url).origin;
-    } catch (e) {
-        return BASE_URL;
-    }
-}
-
-function fetchWithTimeout(url, options = {}) {
-    const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    return safeFetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
-}
-
 export async function fetchText(url, options = {}) {
     console.log(`[Frenchstream] Fetching: ${url}`);
-    const base = options.baseUrl || originFromUrl(url);
+    const base = options.baseUrl || (() => { try { return new URL(url).origin; } catch (e) { return BASE_URL; } })();
+    const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
     const mergedHeaders = {
         ...HEADERS,
         Referer: `${base}/`,
@@ -43,7 +29,7 @@ export async function fetchText(url, options = {}) {
     };
 
     const { baseUrl, headers, ...restOptions } = options;
-    const res = await fetchWithTimeout(url, { headers: mergedHeaders, ...restOptions });
+    const res = await safeFetch(url, { headers: mergedHeaders, ...restOptions, timeout });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

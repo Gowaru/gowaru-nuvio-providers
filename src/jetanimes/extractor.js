@@ -1,200 +1,206 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, safeFetch } from '../utils/resolvers.js';
-import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://on.jetanimes.com";
 
-/**
- * Search for the anime on JetAnimes
- */
+function normalize(s) {
+    return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function titleScore(cardTitle, queryTitle) {
+    const q = normalize(queryTitle);
+    const t = normalize(cardTitle);
+    if (!q || !t) return 0;
+    if (t === q || q.includes(t) || t.includes(q)) return 80;
+    const qWords = q.split(' ').filter(w => w.length > 1);
+    const tWords = new Set(t.split(' '));
+    const common = qWords.filter(w => tWords.has(w)).length;
+    if (qWords.length === 0) return 0;
+    const ratio = common / qWords.length;
+    if (ratio >= 0.8) return 60;
+    if (ratio >= 0.5) return ratio * 50;
+    return 0;
+}
+
 async function searchAnime(title) {
     try {
+        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: 10000 });
+        const $ = cheerio.load(html);
         const results = [];
         const seen = new Set();
 
-        const add = (h, t) => {
-            if (h && h.length > 5 && t && !seen.has(h)) {
-                seen.add(h);
-                results.push({ title: t, url: h.startsWith('http') ? h : BASE_URL + h });
+        $('.result-item').each((_, el) => {
+            const $a = $('.title a', el).first();
+            const href = $a.attr('href');
+            const text = $a.text().trim();
+            if (href && text && !seen.has(href)) {
+                seen.add(href);
+                results.push({
+                    title: text,
+                    url: href.startsWith('http') ? href : BASE_URL + href,
+                    isMovie: href.includes('/films/'),
+                    score: titleScore(text, title)
+                });
             }
-        };
-
-        const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(title)}`;
-        const html = await fetchText(searchUrl, {
-            headers: { "User-Agent": "Mozilla/5.0" }
-        });
-        const $ = cheerio.load(html);
-
-        $('.result-item, .post-item, .anime-item').each((i, el) => {
-            const h = $(el).find('a').attr('href');
-            const t = $(el).find('a').attr('title') || $(el).find('.title').text().trim();
-            add(h, t);
         });
 
-        if (results.length === 0) {
-            // Fallback for standard links
-            $('a').each((i, el) => {
-                const h = $(el).attr('href');
-                const t = $(el).attr('title') || $(el).text().trim();
-                // Filter what looks like series
-                if (h && h.includes('serie') && t && t.toLowerCase().includes(title.toLowerCase())) {
-                    add(h, t);
-                }
-            });
-        }
-
+        results.sort((a, b) => b.score - a.score);
         return results;
     } catch (e) {
-        console.error(`[JetAnimes] Search error: ${e.message}`);
         return [];
     }
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const titles = await getTmdbTitles(tmdbId, mediaType);
-    if (titles.length === 0) return [];
+function parseNumerando(text) {
+    const cleaned = text.replace(/[-\u2013\u2014]/g, '-').trim();
+    const parts = cleaned.split('-').map(s => parseInt(s.trim(), 10));
+    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        return { season: parts[0], episode: parts[1] };
+    }
+    const single = parseInt(cleaned, 10);
+    if (!isNaN(single)) return { season: 1, episode: single };
+    return null;
+}
 
-    let targetEpisodes = [episode];
+async function fetchEmbed(postId, nume, type, referer) {
     try {
-        const imdbId = await getImdbId(tmdbId, mediaType);
-        if (imdbId) {
-            const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
-            if (absoluteEpisode && absoluteEpisode !== episode) {
-                targetEpisodes.push(absoluteEpisode);
+        const params = new URLSearchParams();
+        params.append('action', 'doo_player_ajax');
+        params.append('post', postId);
+        params.append('nume', String(nume));
+        params.append('type', type);
+
+        const sf = await safeFetch(`${BASE_URL}/wp-admin/admin-ajax.php`, {
+            method: 'POST',
+            body: params.toString(),
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Referer': referer,
+                'Origin': BASE_URL
+            }
+        });
+        if (!sf) return null;
+        const j = await sf.json();
+        return j && j.embed_url ? j.embed_url : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function detectLang(html) {
+    const lower = html.toLowerCase();
+    const hasVf = lower.includes('vf') || lower.includes('français') || lower.includes('francais');
+    const hasVostfr = lower.includes('vostfr') || lower.includes('vost');
+    return hasVf && !hasVostfr ? 'VF' : 'VOSTFR';
+}
+
+function getPostId($) {
+    const bodyClass = $('body').attr('class') || '';
+    const m = bodyClass.match(/postid[-_](\d+)/);
+    return m ? m[1] : null;
+}
+
+export async function extractStreams(tmdbId, mediaType, season, episode) {
+    console.log(`[JetAnimes] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+
+    const titles = await getTmdbTitles(tmdbId, mediaType);
+    if (!titles || titles.length === 0) return [];
+
+    const seen = new Set();
+    const candidates = [];
+    // Prioritize French titles
+    for (const t of titles) {
+        if (/[àâçéèêëîïôûùüÿ]/i.test(t) || /[Ll]['\u2019]/.test(t) || t.toLowerCase().includes(' fr') || t.toLowerCase().includes('vf')) {
+            const key = normalize(t);
+            if (key && key.length >= 2 && !seen.has(key)) {
+                seen.add(key); candidates.push(t);
             }
         }
-    } catch (e) {
-        console.warn(`[JetAnimes] ArmSync failed: ${e.message}`);
+    }
+    // Then try primary English + other unique titles
+    for (const t of titles) {
+        const key = normalize(t);
+        if (!key || key.length < 2 || seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(t);
+        if (candidates.length >= 5) break;
     }
 
     let matches = [];
-    for (const title of titles) {
-        matches = await searchAnime(title);
-        if (matches && matches.length > 0) break;
+    for (const t of candidates) {
+        matches = await searchAnime(t);
+        if (matches.length > 0 && matches[0].score >= 30) break;
     }
-    
-    if (!matches || matches.length === 0) return [];
-    const streams = [];
 
-    // Parse JetAnimes series page
+    if (matches.length === 0) return [];
+
+    const isMovie = mediaType === 'movie';
+
     for (const match of matches) {
-        if (!match.url) continue;
+        if (isMovie && !match.isMovie) continue;
+        if (!isMovie && match.isMovie) continue;
 
         try {
-            const html = await fetchText(match.url, { headers: { "User-Agent": "Mozilla/5.0" } });
+            const html = await fetchText(match.url);
             const $ = cheerio.load(html);
-            
-            const langName = match.title.toUpperCase().includes('VF') ? 'VF' : 'VOSTFR';
+            const langName = detectLang(html);
+            const postId = getPostId($);
 
-            // JetAnimes represents eps like '1 - 1' meaning Season 1, Ep 1
-            let epLinks = [];
-            $('.episodios li').each((i, el) => {
-                const numText = $(el).find('.numerando').text().trim(); // "1 - 1"
-                const link = $(el).find('a').attr('href');
-                if (numText && link) {
-                    const parts = numText.split('-');
-                    if(parts.length >= 2) {
-                        const s = parseInt(parts[0].trim(), 10);
-                        const e = parseInt(parts[1].trim(), 10);
-                        // If it matches exactly our requested season and episode or absolute episode
-                        if (s === season && targetEpisodes.includes(e)) {
-                            epLinks.push(link);
-                        }
-                    }
-                }
-            });
-
-            // Iterate over found matching episode pages to extract servers
-            for (const epLink of epLinks) {
-                const epHtml = await fetchText(epLink, { headers: { "User-Agent": "Mozilla/5.0" } });
-                const $ep = cheerio.load(epHtml);
-                
-                // Dooplay relies on post ID for WP ajax
-                const postIdAttr = $ep('body').attr('class') || '';
-                const postMatch = postIdAttr.match(/postid-(\d+)/);
-                const postId = postMatch ? postMatch[1] : null;
-
-                const servers = [];
-                $ep('ul#playeroptionsul li').each((idx, el) => {
-                    servers.push({
-                        nume: $ep(el).attr('data-nume'),
-                        type: $ep(el).attr('data-type') || 'tv',
-                        name: $ep(el).find('.title').text().trim() || 'Server'
+            if (isMovie) {
+                if (!postId) continue;
+                for (let n = 1; n <= 3; n++) {
+                    const embedUrl = await fetchEmbed(postId, n, 'movie', match.url);
+                    if (!embedUrl) continue;
+                    const resolved = await resolveStream({
+                        name: 'JetAnimes', title: langName, url: embedUrl,
+                        quality: 'HD', headers: { Referer: BASE_URL }
                     });
+                    if (resolved && resolved.isDirect) return [resolved];
+                }
+            } else {
+                const targetSeason = Number(season) || 1;
+                const targetEpisode = Number(episode) || 1;
+                let epLink = null;
+
+                $('.episodios li').each((_, el) => {
+                    const $el = $(el);
+                    const parsed = parseNumerando($('.numerando', $el).text().trim());
+                    if (parsed && parsed.season === targetSeason && parsed.episode === targetEpisode) {
+                        const href = $('.episodiotitle a', $el).attr('href');
+                        if (href) epLink = href.startsWith('http') ? href : BASE_URL + href;
+                    }
                 });
 
-                if (servers.length > 0 && postId) {
-                    for (const server of servers) {
-                        if (!server.nume) continue;
-                        
-                        try {
-                            const params = new URLSearchParams();
-                            params.append('action', 'doo_player_ajax');
-                            params.append('post', postId);
-                            params.append('nume', server.nume);
-                            params.append('type', server.type);
+                if (!epLink) continue;
 
-                            const sf = await safeFetch(`${BASE_URL}/wp-admin/admin-ajax.php`, {
-                                method: 'POST',
-                                body: params.toString(),
-                                headers: {
-                                    'Content-Type': 'application/x-www-form-urlencoded',
-                                    'User-Agent': 'Mozilla/5.0'
-                                }
-                            });
-                            if (!sf) continue;
-                            let j = null;
-                            try { j = await sf.json(); } catch (e) { j = null; }
-                            if (j && j.embed_url) {
-                                // sometimes embedded in an iframe tag
-                                let url = j.embed_url;
-                                const iframeMatch = url.match(/src="([^"]+)"/);
-                                if (iframeMatch) url = iframeMatch[1];
-                                
-                                streams.push({
-                                    name: `JetAnimes (${langName})`,
-                                    title: `${server.name} - ${langName}`,
-                                    url: url,
-                                    quality: "HD",
-                                    headers: { "Referer": BASE_URL }
-                                });
-                            }
-                        } catch(e) {
-                            // ignore individual server errors
-                        }
-                    }
+                const epHtml = await fetchText(epLink);
+                const $ep = cheerio.load(epHtml);
+                const epPostId = getPostId($ep);
+
+                if (!epPostId) continue;
+
+                for (let n = 1; n <= 5; n++) {
+                    const embedUrl = await fetchEmbed(epPostId, n, 'tv', epLink);
+                    if (!embedUrl) continue;
+                    const resolved = await resolveStream({
+                        name: 'JetAnimes',
+                        title: `${langName} - Player ${n}`,
+                        url: embedUrl,
+                        quality: 'HD',
+                        headers: { Referer: BASE_URL }
+                    });
+                    if (resolved && resolved.isDirect) return [resolved];
                 }
             }
-
         } catch (e) {
-            console.error(`[JetAnimes] Extract error: ${e.message}`);
+            console.error(`[JetAnimes] Error: ${e.message}`);
         }
     }
 
-    // Filter out unresolved iframes to prevent ExoPlayer crashing
-    const validStreams = [];
-    const streamPromises = streams.map(s => resolveStream(s).catch(() => null));
-    const resolvedArray = await Promise.all(streamPromises);
-    for (const resolved of resolvedArray) {
-        if (resolved && resolved.isDirect) {
-            validStreams.push(resolved);
-        }
-    }
-
-    console.log(`[JetAnimes] Total valid streams found: ${validStreams.length}`);
-    
-    // Sort streams to prioritize VF (French) over VOSTFR
-    validStreams.sort((a, b) => {
-        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
-        const aIsVf = isVf(a.name) || isVf(a.title);
-        const bIsVf = isVf(b.name) || isVf(b.title);
-        
-        if (aIsVf && !bIsVf) return -1;
-        if (!aIsVf && bIsVf) return 1;
-        return 0;
-    });
-
-    return validStreams;
+    return [];
 }

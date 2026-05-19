@@ -6,15 +6,6 @@ import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://french-anime.com";
 const SPINOFF_KEYWORDS = ['fan letter', 'log:', 'memories', 'vigilante', 'illegals', 'film', 'movie', 'special', 'oav', 'ona'];
-const FETCH_TIMEOUT = 20000;
-
-function fetchWithTimeout(url, options = {}) {
-    return Promise.race([
-        fetchText(url, options),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), FETCH_TIMEOUT))
-    ]);
-}
-
 function normalize(s) {
     return s.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
