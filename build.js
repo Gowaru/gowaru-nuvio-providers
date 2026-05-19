@@ -11,6 +11,8 @@
  *   node build.js --watch      # Watch mode (requires nodemon)
  */
 
+const { Temporal } = require('@js-temporal/polyfill');
+
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
@@ -59,7 +61,7 @@ async function buildProvider(providerName, minify = false) {
             sourcemap: false,
             globalName: '__provider',
             banner: {
-                js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${new Date().toISOString()}\n */`
+                js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${Temporal.Now.instant().toString()}\n */`
             },
             footer: {
                 js: `\nif (typeof module !== 'undefined' && module.exports) {\n    module.exports = __provider;\n}\nif (__provider && __provider.getStreams) {\n    if (typeof globalThis !== 'undefined') {\n        globalThis.getStreams = __provider.getStreams;\n    }\n    if (typeof global !== 'undefined') {\n        global.getStreams = __provider.getStreams;\n    }\n    if (typeof self !== 'undefined') {\n        self.getStreams = __provider.getStreams;\n    }\n}`

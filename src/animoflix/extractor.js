@@ -29,8 +29,37 @@ async function withGlobalTimeout(promise, ms) {
 }
 
 async function searchAnime(title) {
-    const results = await fetchJson(`${SEARCH_URL}?q=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
-    return Array.isArray(results) ? results : [];
+    try {
+        const results = await fetchJson(`${SEARCH_URL}?q=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
+        if (Array.isArray(results) && results.length > 0) return results;
+    } catch (e) {
+        console.warn(`[AnimoFlix] Search API failed for "${title}": ${e.message}`);
+    }
+    // Fallback: scrape HTML search page
+    try {
+        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
+        const $ = cheerio.load(html);
+        const results = [];
+        $('.post-title a, .TPost a[href*="/anime/"], a[href*="/anime/"]').each((i, el) => {
+            const href = $(el).attr('href');
+            const rawText = $(el).text().trim();
+            const text = rawText.replace(/\s+/g, ' ').trim();
+            if (href && href.includes('/anime/') && text.length > 2) {
+                const imgAlt = $(el).closest('.TPost, .TPostMv, article, li').find('img').first().attr('alt');
+                const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
+                results.push({
+                    title: cleanTitle,
+                    title2: cleanTitle,
+                    slug: href.replace(/.*\/anime\//, '').replace(/\/$/, ''),
+                    url: href
+                });
+            }
+        });
+        if (results.length > 0) return results;
+    } catch (e) {
+        console.warn(`[AnimoFlix] Search HTML fallback also failed: ${e.message}`);
+    }
+    return [];
 }
 
 function normalize(s) {
@@ -166,93 +195,105 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     const seasons = [];
-    let hasFilmSeason = false;
+    let filmSeasonHref = null;
     $('.season-card').each((i, el) => {
         const href = $(el).attr('href');
         const title = $(el).find('.season-title').text().trim();
         if (href && title) {
-            if (/film|movie|oav|ona/i.test(title)) {
-                if (/film|movie/i.test(title)) hasFilmSeason = true;
+            if (/film|movie/i.test(title)) {
+                filmSeasonHref = href;
                 return;
             }
+            if (/oav|ona/i.test(title)) return;
             const seasonNum = parseSeasonNumber(href);
             seasons.push({ href, title, seasonNum });
         }
     });
 
-    if ((!isMovie && seasons.length === 0 && !hasFilmSeason) || (!isMovie && seasons.length === 0)) {
-        if (hasFilmSeason) {
-            return extractMovieStreams(slug);
+    if (isMovie) {
+        // Try season-based URL first (movies listed under Saison 1), then fall back to film URL
+        const movieSeasonHref = filmSeasonHref || seasons.find(s => s.seasonNum === 1)?.href;
+        if (movieSeasonHref) {
+            return extractMovieStreams(slug, movieSeasonHref);
         }
+        return extractMovieStreams(slug, null);
+    }
+
+    if (seasons.length === 0) {
+        if (filmSeasonHref) return extractMovieStreams(slug, filmSeasonHref);
         return [];
     }
 
     const streams = [];
 
-    if (isMovie) {
-        return extractMovieStreams(slug);
-    }
-
-    let targetSeason = null;
-    for (const s of seasons) {
-        if (s.seasonNum === season) {
-            targetSeason = s;
-            break;
-        }
-    }
-
-    if (!targetSeason && seasons.length > 0) {
-        const bestMatchSeason = seasons.reduce((best, s) => {
-            const diff = s.seasonNum ? Math.abs(s.seasonNum - season) : Infinity;
-            return diff < (best.diff || Infinity) ? { ...s, diff } : best;
-        }, { diff: Infinity });
-        if (bestMatchSeason.href && bestMatchSeason.diff !== Infinity) {
-            targetSeason = bestMatchSeason;
-        }
-    }
-
-    if (!targetSeason) return [];
-
-    const seasonPageUrl = targetSeason.href.startsWith('http')
-        ? targetSeason.href
-        : `${BASE_URL}${targetSeason.href.startsWith('/') ? '' : '/'}${targetSeason.href}`;
-
-    const seasonHtml = await fetchWithRetry(seasonPageUrl, { timeout: TIMEOUT });
+    // Collect ALL season parts matching the target season number (e.g. saison-4-partie-1,2,3,4)
+    const targetSeasons = seasons.filter(s => s.seasonNum === season);
+    const fallbackSeasons = targetSeasons.length === 0
+        ? seasons.sort((a, b) => {
+            const diffA = a.seasonNum ? Math.abs(a.seasonNum - season) : Infinity;
+            const diffB = b.seasonNum ? Math.abs(b.seasonNum - season) : Infinity;
+            return diffA - diffB;
+        }).slice(0, 1)
+        : targetSeasons;
 
     const langs = ['vostfr', 'vf'];
-    const $s = cheerio.load(seasonHtml);
-    const episodeLinks = {};
+    const checkedEpisodeUrls = new Set();
+    let cumulOffset = 0;
 
-    for (const lang of langs) {
-        episodeLinks[lang] = [];
-        $s(`a.episode-card[href*="/${lang}/episode-"]`).each((i, el) => {
-            const href = $(el).attr('href');
-            const epMatch = href.match(/episode-(\d+)\/?$/);
-            if (href && epMatch) {
-                episodeLinks[lang].push({
-                    num: parseInt(epMatch[1]),
-                    href: href.startsWith('http') ? href : `${BASE_URL}${href}`
-                });
-            }
-        });
-    }
+    for (const targetSeason of fallbackSeasons) {
+        const seasonPageUrl = targetSeason.href.startsWith('http')
+            ? targetSeason.href
+            : `${BASE_URL}${targetSeason.href.startsWith('/') ? '' : '/'}${targetSeason.href}`;
 
-    for (const lang of langs) {
-        const episodes = episodeLinks[lang] || [];
-        if (episodes.length === 0) continue;
+        const seasonHtml = await fetchWithRetry(seasonPageUrl, { timeout: TIMEOUT });
+        const $s = cheerio.load(seasonHtml);
+        const episodeLinks = {};
 
-        for (const targetEp of targetEpisodes) {
-            const episode = episodes.find(e => e.num === targetEp);
-            if (!episode) continue;
+        for (const lang of langs) {
+            episodeLinks[lang] = [];
+            $s(`a.episode-card[href*="/${lang}/episode-"]`).each((i, el) => {
+                const href = $(el).attr('href');
+                const epMatch = href.match(/episode-(\d+)\/?$/);
+                if (href && epMatch) {
+                    episodeLinks[lang].push({
+                        num: parseInt(epMatch[1]),
+                        cumulative: parseInt(epMatch[1]) + cumulOffset,
+                        href: href.startsWith('http') ? href : `${BASE_URL}${href}`
+                    });
+                }
+            });
+        }
 
-            const langLabel = lang === 'vf' ? 'VF' : 'VOSTFR';
-            try {
-                const epStreams = await extractEpisodeStreams(episode.href, langLabel, slug);
-                streams.push(...epStreams);
-            } catch (e) {
-                console.warn(`[AnimoFlix] Failed to extract ${lang} ep ${targetEp}: ${e.message}`);
+        for (const lang of langs) {
+            const episodes = episodeLinks[lang] || [];
+            if (episodes.length === 0) continue;
+
+            for (const targetEp of targetEpisodes) {
+                // Match by either relative episode number or cumulative (cross-part) episode number
+                const episode = episodes.find(e => e.num === targetEp || e.cumulative === targetEp);
+                if (!episode) continue;
+                if (checkedEpisodeUrls.has(episode.href)) continue;
+                checkedEpisodeUrls.add(episode.href);
+
+                const langLabel = lang === 'vf' ? 'VF' : 'VOSTFR';
+                try {
+                    const epStreams = await extractEpisodeStreams(episode.href, langLabel, slug);
+                    streams.push(...epStreams);
+                } catch (e) {
+                    console.warn(`[AnimoFlix] Failed to extract ${lang} ep ${targetEp}: ${e.message}`);
+                }
             }
         }
+
+        // Update cumulative offset for next part
+        const maxRelEp = Math.max(
+            ...langs.flatMap(l => (episodeLinks[l] || []).map(e => e.num)),
+            0
+        );
+        cumulOffset += maxRelEp;
+
+        // If we found streams, stop searching more parts
+        if (streams.filter(s => s && s.isDirect).length > 0) break;
     }
 
     const validStreams = streams.filter(s => s && s.isDirect);
@@ -270,18 +311,27 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     return validStreams;
 }
 
-async function extractMovieStreams(slug) {
+async function extractMovieStreams(slug, seasonHref) {
     const streams = [];
     const langs = ['vf', 'vostfr'];
 
-    const tryUrls = [
+    // Build URL patterns: use season href if available, else fallback patterns
+    const tryUrlBuilders = [];
+    if (seasonHref) {
+        for (const lang of langs) {
+            const base = seasonHref.startsWith('http') ? seasonHref : `${BASE_URL}${seasonHref.startsWith('/') ? '' : '/'}${seasonHref}`;
+            tryUrlBuilders.push((l) => `${base.replace(/\/+$/, '')}/${l}/episode-1/`);
+            tryUrlBuilders.push((l) => `${base.replace(/\/+$/, '')}/${l}/`);
+        }
+    }
+    tryUrlBuilders.push(
         (lang) => `${BASE_URL}/anime/${slug}/film/${lang}/episode-1/`,
         (lang) => `${BASE_URL}/anime/${slug}/film/${lang}/`,
         (lang) => `${BASE_URL}/anime/${slug}/movie/${lang}/episode-1/`,
-    ];
+    );
 
     for (const lang of langs) {
-        for (const buildUrl of tryUrls) {
+        for (const buildUrl of tryUrlBuilders) {
             const url = buildUrl(lang);
             try {
                 const html = await fetchWithRetry(url, { timeout: TIMEOUT });

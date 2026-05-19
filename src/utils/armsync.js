@@ -2,6 +2,7 @@
  * ArmSync - Advanced Anime Metadata Synchronization
  * Resolves TMDB/IMDb to MyAnimeList/Anilist for pinpoint episode matching.
  */
+import { Temporal } from '@js-temporal/polyfill';
 
 const ARM_API = "https://arm.haglund.dev/api/v2";
 const JIKAN_API = "https://api.jikan.moe/v4";
@@ -124,7 +125,7 @@ export async function resolveMalMetadata(imdbId, releaseDate) {
     const candidates = await armRes.json();
     if (!Array.isArray(candidates)) return null;
 
-    const targetDate = new Date(releaseDate);
+    const targetDate = Temporal.PlainDate.from(releaseDate);
 
     for (const entry of candidates) {
         const malId = entry.myanimelist;
@@ -136,14 +137,14 @@ export async function resolveMalMetadata(imdbId, releaseDate) {
         const anime = (await jikanRes.json())?.data;
         if (!anime) continue;
 
-        const airedFrom = anime.aired?.from ? new Date(anime.aired.from) : null;
+        const airedFrom = anime.aired?.from ? Temporal.PlainDate.from(anime.aired.from) : null;
         if (airedFrom) {
-            const start = new Date(airedFrom);
-            start.setDate(start.getDate() - 2);
-            const end = anime.aired?.to ? new Date(anime.aired.to) : new Date();
-            end.setDate(end.getDate() + 2);
+            const start = airedFrom.subtract({ days: 2 });
+            const end = anime.aired?.to
+                ? Temporal.PlainDate.from(anime.aired.to).add({ days: 2 })
+                : Temporal.Now.plainDateISO().add({ days: 2 });
 
-            if (targetDate >= start && targetDate <= end) {
+            if (Temporal.PlainDate.compare(targetDate, start) >= 0 && Temporal.PlainDate.compare(targetDate, end) <= 0) {
                 if (anime.type === "Movie" || anime.episodes === 1) {
                     return { malId, absoluteEpisode: 1, type: anime.type };
                 }
@@ -151,7 +152,7 @@ export async function resolveMalMetadata(imdbId, releaseDate) {
                 if (epsRes) {
                     const episodes = (await epsRes.json())?.data;
                     if (Array.isArray(episodes)) {
-                        const match = episodes.find(ep => ep.aired && Math.abs(targetDate - new Date(ep.aired)) / 864e5 <= 2);
+                        const match = episodes.find(ep => ep.aired && Math.abs(targetDate.since(Temporal.PlainDate.from(ep.aired), { largestUnit: 'day' }).days) <= 2);
                         if (match) return { malId, absoluteEpisode: match.mal_id, title: anime.title };
                     }
                 }

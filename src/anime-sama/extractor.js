@@ -5,7 +5,6 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream } from '../utils/resolvers.js';
-import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://anime-sama.to";
@@ -13,9 +12,9 @@ const MAX_FALLBACK_TITLES = 3;
 const MAX_FALLBACK_SLUGS = 3;
 
 /**
- * Search for a slug on Anime-Sama
+ * Search for slugs on Anime-Sama, scored by relevance to the query
  */
-async function searchSlugs(title) {
+async function searchSlugsScored(query) {
     try {
         const html = await fetchText(`${BASE_URL}/template-php/defaut/fetch.php`, {
             method: 'POST',
@@ -23,19 +22,47 @@ async function searchSlugs(title) {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Referer': BASE_URL
             },
-            body: `query=${encodeURIComponent(title)}`
+            body: `query=${encodeURIComponent(query)}`
         });
         const $ = cheerio.load(html);
-        const slugs = [];
+        const results = [];
         $('a[href*="/catalogue/"]').each((i, el) => {
             const h = $(el).attr('href');
             const match = h.match(/\/catalogue\/([^/]+)\/?/);
-            if (match && !slugs.includes(match[1])) {
-                slugs.push(match[1]);
-            }
+            if (!match) return;
+            const slug = match[1];
+            if (results.some(r => r.slug === slug)) return;
+            const title = $(el).find('.asn-search-result-title').text().trim();
+            const subtitle = $(el).find('.asn-search-result-subtitle').text().trim();
+            const score = scoreSearchResult(title, subtitle, query);
+            results.push({ slug, title, subtitle, score });
         });
-        return slugs;
+        results.sort((a, b) => b.score - a.score);
+        return results.map(r => r.slug);
     } catch (e) { return []; }
+}
+
+function scoreSearchResult(resultTitle, resultSubtitle, query) {
+    const q = query.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const t = resultTitle.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const s = resultSubtitle.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    let score = 0;
+    if (t === q) return 100;
+    if (t.includes(q)) score += 60;
+    else if (q.includes(t)) score += 50;
+
+    const qWords = q.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+    const tWords = t.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+
+    for (const w of qWords) {
+        if (tWords.includes(w)) score += 15;
+    }
+    for (const w of qWords) {
+        if (s.includes(w) && !t.includes(w)) score += 3;
+    }
+
+    return score;
 }
 
 function toSlug(title) {
@@ -53,82 +80,124 @@ function getPlayerName(varName, url) {
     return 'Player';
 }
 
+function parseUrls(jsContent) {
+    const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[([\s\S]*?)\s*\];/gm;
+    const results = [];
+    let match;
+    while ((match = varRegex.exec(jsContent)) !== null) {
+        const urls = match[2].match(/['"]([^'"]+)['"]/g)?.map(u => u.slice(1, -1)) || [];
+        results.push({ varName: match[1], urls });
+    }
+    return results;
+}
+
+async function fetchJs(slug, seasonPath, lang) {
+    const url = `${BASE_URL}/catalogue/${slug}${seasonPath ? '/' + seasonPath : ''}/${lang}/episodes.js`;
+    try {
+        const content = await fetchText(url);
+        return content || null;
+    } catch (e) { return null; }
+}
+
+function buildStreams(parsed, lang, episode, idx) {
+    const promises = [];
+    for (const { varName, urls } of parsed) {
+        const playerUrl = urls[idx];
+        if (playerUrl && playerUrl.startsWith('http')) {
+            const epLabel = episode ? `Ep ${episode} - ` : '';
+            const promise = resolveStream({
+                name: `Anime-Sama (${lang.toUpperCase()})`,
+                title: `${getPlayerName(varName, playerUrl)} - ${epLabel}${lang.toUpperCase()}`,
+                url: playerUrl,
+                quality: "HD",
+                headers: { "Referer": BASE_URL }
+            });
+            promises.push(promise);
+        }
+    }
+    return Promise.all(promises).then(r => r.filter(s => s != null));
+}
+
+async function fetchAndGetUrl(slug, lang, season, episode, mediaType) {
+    if (mediaType === 'movie') {
+        const jsContent = await fetchJs(slug, 'film', lang);
+        if (!jsContent) return [];
+        const parsed = parseUrls(jsContent);
+        if (parsed.length === 0) return [];
+        return buildStreams(parsed, lang, null, 0);
+    }
+
+    // Try main season
+    const mainJs = await fetchJs(slug, `saison${season}`, lang);
+    if (mainJs) {
+        const parsed = parseUrls(mainJs);
+        if (parsed.length > 0) {
+            const totalEps = parsed[0].urls.length;
+            if (episode >= 1 && episode <= totalEps) {
+                return buildStreams(parsed, lang, episode, episode - 1);
+            }
+            // Episode out of bounds → try sub-parts
+            let cumulativeEps = totalEps;
+            for (let i = 2; i <= 5; i++) {
+                const subJs = await fetchJs(slug, `saison${season}-${i}`, lang);
+                if (!subJs) break;
+                const subParsed = parseUrls(subJs);
+                if (subParsed.length === 0) break;
+                const subTotal = subParsed[0].urls.length;
+                const localEp = episode - cumulativeEps;
+                if (localEp >= 1 && localEp <= subTotal) {
+                    return buildStreams(subParsed, lang, episode, localEp - 1);
+                }
+                cumulativeEps += subTotal;
+            }
+        }
+    }
+
+    // Try root path (no season prefix)
+    const rootJs = await fetchJs(slug, '', lang);
+    if (rootJs) {
+        const parsed = parseUrls(rootJs);
+        if (parsed.length > 0) {
+            const idx = episode - 1;
+            if (idx >= 0 && idx < parsed[0].urls.length) {
+                return buildStreams(parsed, lang, episode, idx);
+            }
+        }
+    }
+
+    return [];
+}
+
 export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (titles.length === 0) return [];
+
     const title = titles[0];
-
-    let absoluteEpisode = episode;
-    try {
-        const imdbId = await getImdbId(tmdbId, mediaType);
-        if (imdbId) {
-            const resolved = await getAbsoluteEpisode(imdbId, season, episode);
-            if (resolved) absoluteEpisode = resolved;
-        }
-    } catch (e) {}
-
     const slug = toSlug(title);
     const languages = ['vostfr', 'vf'];
     const streams = [];
-    const promises = [];
 
+    // Primary: try the generated slug for each language
+    const primaryPromises = [];
     for (const lang of languages) {
-        const paths = [
-            `${BASE_URL}/catalogue/${slug}/saison${season}/${lang}/episodes.js`,
-            `${BASE_URL}/catalogue/${slug}/${lang}/episodes.js`
-        ];
-        if (season > 1 && absoluteEpisode) paths.push(`${BASE_URL}/catalogue/${slug}/saison1/${lang}/episodes.js`);
-
-        for (const jsUrl of paths) {
-            try {
-                const jsContent = await fetchText(jsUrl);
-                const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[([\s\S]*?)\s*\];/gm;
-                let match;
-                while ((match = varRegex.exec(jsContent)) !== null) {
-                    const varName = match[1];
-                    const urls = match[2].match(/['"]([^'"]+)['"]/g)?.map(u => u.slice(1, -1)) || [];
-                    
-                    let playerUrl = null;
-                    if (jsUrl.includes(`saison${season}`)) {
-                        playerUrl = urls[episode - 1];
-                    } else if (jsUrl.includes('saison1') || !jsUrl.includes('saison')) {
-                        // If we are on season 1 or root, and we want season > 1, we MUST use absolute episode
-                        if (season > 1 && absoluteEpisode !== episode) {
-                            playerUrl = urls[absoluteEpisode - 1];
-                        } else {
-                            playerUrl = urls[episode - 1];
-                        }
-                    }
-                    
-                    if (playerUrl && playerUrl.startsWith('http')) {
-                        const promise = resolveStream({
-                            name: `Anime-Sama (${lang.toUpperCase()})`,
-                            title: `${getPlayerName(varName, playerUrl)} - Ep ${episode} - ${lang.toUpperCase()}`,
-                            url: playerUrl,
-                            quality: "HD",
-                            headers: { "Referer": BASE_URL }
-                        });
-                        promises.push(promise);
-                    }
-                }
-            } catch (e) {}
-        }
+        primaryPromises.push(fetchAndGetUrl(slug, lang, season, episode, mediaType));
     }
-    
-    // Resolve all primary streams concurrently
-    const resolvedFirstBatch = await Promise.all(promises);
-    streams.push(...resolvedFirstBatch.filter(s => s != null));
+    const primaryResults = await Promise.all(primaryPromises);
+    for (const result of primaryResults) {
+        streams.push(...result);
+    }
 
     if (streams.length === 0) {
         const foundSlugs = [];
         for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
-            const slugs = await searchSlugs(t);
+            const slugs = await searchSlugsScored(t);
             for (const s of slugs) {
                 if (!foundSlugs.includes(s)) foundSlugs.push(s);
                 if (foundSlugs.length >= MAX_FALLBACK_SLUGS) break;
             }
             if (foundSlugs.length >= MAX_FALLBACK_SLUGS) break;
         }
+
         const checkedSlugs = new Set([slug]);
         const fallbackPromises = [];
 
@@ -137,60 +206,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             checkedSlugs.add(fSlug);
 
             for (const lang of languages) {
-                const retryPaths = [
-                    `${BASE_URL}/catalogue/${fSlug}/saison${season}/${lang}/episodes.js`,
-                    `${BASE_URL}/catalogue/${fSlug}/${lang}/episodes.js`
-                ];
-                if (season > 1 && absoluteEpisode) retryPaths.push(`${BASE_URL}/catalogue/${fSlug}/saison1/${lang}/episodes.js`);
-
-                for (const jsUrl of retryPaths) {
-                    try {
-                        const jsContent = await fetchText(jsUrl);
-                        const varRegex = /var\s+([a-z0-9]+)\s*=\s*\[([\s\S]*?)\s*\];/gm;
-                        let match;
-                        while ((match = varRegex.exec(jsContent)) !== null) {
-                            const varName = match[1];
-                            const urls = match[2].match(/['"]([^'"]+)['"]/g)?.map(u => u.slice(1, -1)) || [];
-                            
-                            let playerUrl = null;
-                            if (jsUrl.includes(`saison${season}`)) {
-                                playerUrl = urls[episode - 1];
-                            } else if (jsUrl.includes('saison1') || !jsUrl.includes('saison')) {
-                                if (season > 1 && absoluteEpisode !== episode) {
-                                    playerUrl = urls[absoluteEpisode - 1];
-                                } else {
-                                    playerUrl = urls[episode - 1];
-                                }
-                            }
-                            
-                            if (playerUrl && playerUrl.startsWith('http')) {
-                                const promise = resolveStream({
-                                    name: `Anime-Sama (${lang.toUpperCase()})`,
-                                    title: `${getPlayerName(varName, playerUrl)} - Ep ${episode} - ${lang.toUpperCase()}`,
-                                    url: playerUrl,
-                                    quality: "HD",
-                                    headers: { "Referer": BASE_URL }
-                                });
-                                fallbackPromises.push(promise);
-                            }
-                        }
-                    } catch (e) {}
-                }
+                fallbackPromises.push(fetchAndGetUrl(fSlug, lang, season, episode, mediaType));
             }
         }
-        const resolvedFallbacks = await Promise.all(fallbackPromises);
-        streams.push(...resolvedFallbacks.filter(s => s != null));
+
+        const fallbackResults = await Promise.all(fallbackPromises);
+        for (const result of fallbackResults) {
+            streams.push(...result);
+        }
     }
-    
+
     const validStreams = streams.filter(s => s && s.isDirect);
     console.log(`[Anime-Sama] Total streams found: ${validStreams.length}`);
-    
-    // Sort streams to prioritize VF (French) over VOSTFR
+
     validStreams.sort((a, b) => {
         const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
         const aIsVf = isVf(a.name) || isVf(a.title);
         const bIsVf = isVf(b.name) || isVf(b.title);
-        
+
         if (aIsVf && !bIsVf) return -1;
         if (!aIsVf && bIsVf) return 1;
         return 0;

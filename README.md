@@ -23,7 +23,7 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 13 pillars of the French streaming scene:
+This bundle integrates 14 pillars of the French streaming scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
@@ -40,6 +40,7 @@ This bundle integrates 13 pillars of the French streaming scene:
 | **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |
 | **AnimoFlix** | Modern PHP-based streaming site with clean embed URLs, no Cloudflare on core pages. | VF / VOSTFR | ✅ |
 | **AnimeSite** | Anime streaming in French and Japanese with French subtitles for free. Complete catalog, ad-free, in HD | VF / VOSTFR | ✅ |
+| **DuLourd** | Movies, Cartoon, TV series streaming site with clean embed URLs. | VF / VOSTFR | ✅ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
@@ -57,7 +58,6 @@ This bundle integrates 13 pillars of the French streaming scene:
 - **HLS Quality Extraction**: Master HLS manifests are expanded into multiple selectable resolutions when available, with normalized labels such as `2160p`, `1080p`, `720p`, `480p`, and `360p`.
 - **Direct-Only Playback Safety**: Stream output keeps strict direct-link filtering (`.m3u8`, `.mp4`, etc.) to reduce ExoPlayer HTTP/playback errors.
 - **Mobile Optimized**: "Embed" (HTML) links are transformed into direct video links (`.mp4`, `.m3u8`) for native compatibility with Android/iOS players.
-- **ESM -> CJS Transpilation & Minification**: Modern source code (ES6+) automatically converted, optimized and minified for the **Hermes** JavaScript engine.
 - **Security Check**: Regular dependency audits to ensure vulnerability-free code.
 
 ---

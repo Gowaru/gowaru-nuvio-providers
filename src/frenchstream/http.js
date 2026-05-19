@@ -4,8 +4,9 @@
 
 import { safeFetch } from '../utils/resolvers.js';
 
-export const BASE_URLS = ['https://french-stream.one', 'https://fs03.lol'];
+export const BASE_URLS = ['https://french-stream.one', 'https://fs09.lol'];
 export const BASE_URL = BASE_URLS[0];
+export const GLOBAL_TIMEOUT_MS = 20000;
 
 export const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
@@ -24,6 +25,13 @@ function originFromUrl(url) {
     }
 }
 
+function fetchWithTimeout(url, options = {}) {
+    const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    return safeFetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 export async function fetchText(url, options = {}) {
     console.log(`[Frenchstream] Fetching: ${url}`);
     const base = options.baseUrl || originFromUrl(url);
@@ -35,7 +43,7 @@ export async function fetchText(url, options = {}) {
     };
 
     const { baseUrl, headers, ...restOptions } = options;
-    const res = await safeFetch(url, { headers: mergedHeaders, ...restOptions });
+    const res = await fetchWithTimeout(url, { headers: mergedHeaders, ...restOptions });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

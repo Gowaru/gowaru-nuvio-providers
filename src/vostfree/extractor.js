@@ -16,6 +16,20 @@ function normalize(s) {
     return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, '').replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function getSeasonNumber(text) {
+    const combined = text.toLowerCase().replace(/-/g, ' ');
+    // Pattern 1: explicit "saison N"
+    let m = combined.match(/\bsaison\s*(\d+)\b/);
+    if (m) return parseInt(m[1], 10);
+    // Pattern 2: URL-style "s N" or title "N VOSTFR/VF/FRENCH"
+    m = combined.match(/\bs\s*(\d+)\b/);
+    if (m) return parseInt(m[1], 10);
+    // Pattern 3: bare number before language/type keywords (in title)
+    m = combined.match(/\b(\d+)\s*(?:vostfr|vf|french|ddl|streaming)\b/);
+    if (m) return parseInt(m[1], 10);
+    return null;
+}
+
 function titleMatches(resultTitle, searchTitle) {
     const nResult = normalize(resultTitle);
     const nSearch = normalize(searchTitle);
@@ -135,18 +149,39 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
     
+    // Fallback: if no match for the target season was found, try appending "Saison N"
+    if (mediaType === 'tv' && season !== undefined && season !== null) {
+        const hasSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === season);
+        if (!hasSeasonMatch) {
+            for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
+                if (title.length > 60) continue;
+                const seasonQuery = `${title} Saison ${season}`;
+                const n = normalize(seasonQuery);
+                if (!n || searchedNormalized.has(n)) continue;
+                searchedNormalized.add(n);
+                const batch = await searchAnime(seasonQuery);
+                if (batch && batch.length > 0) {
+                    for (const m of batch) {
+                        if (!seenUrls.has(m.url)) {
+                            seenUrls.add(m.url);
+                            allMatches.push(m);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
     if (allMatches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned
     if (mediaType === 'tv' && season !== undefined && season !== null) {
         allMatches = allMatches.sort((a, b) => {
-            const aT = a.title.toLowerCase();
-            const bT = b.title.toLowerCase();
-            const aUrl = a.url.toLowerCase().replace(/-/g, ' ');
-            const bUrl = b.url.toLowerCase().replace(/-/g, ' ');
-            const sMatch = `saison ${season}`;
-            const hasA = aT.includes(sMatch) || aUrl.includes(sMatch);
-            const hasB = bT.includes(sMatch) || bUrl.includes(sMatch);
+            const aSn = getSeasonNumber(a.title + ' ' + a.url);
+            const bSn = getSeasonNumber(b.title + ' ' + b.url);
+            const hasA = aSn === season;
+            const hasB = bSn === season;
             if (hasA && !hasB) return -1;
             if (!hasA && hasB) return 1;
             return 0;
@@ -177,13 +212,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             }
         }
 
-        // Optimization: if the result is explicitly for a different season, 
-        // skip it unless targetEpisodes contains a unique absolute episode
+        // Skip results explicitly for a different season, unless no match has the target season
         if (mediaType === 'tv' && season !== undefined && season !== null) {
-            const combined = matchLower + ' ' + matchUrlLower.replace(/-/g, ' ');
-            const seasonMatch = combined.match(/saison\s*(\d+)/);
-            const uniqueEpisodes = [...new Set(targetEpisodes.filter(e => e !== undefined && e !== null))];
-            if (seasonMatch && parseInt(seasonMatch[1]) !== season && uniqueEpisodes.length <= 1) {
+            const matchSn = getSeasonNumber(match.title + ' ' + match.url);
+            const hasAnyCorrectSeason = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === season);
+            if (matchSn !== null && matchSn !== season && hasAnyCorrectSeason) {
                 continue;
             }
         }

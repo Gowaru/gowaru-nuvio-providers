@@ -1,8 +1,6 @@
 import { fetchText } from './http.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-// Import btoa/atob from global if needed, Hermes should have them or we can implement a fallback.
-// In Nuvio, atob/btoa might not be present globally depending on env, but let's assume it is or use polyfill.
 
 const BASE_URL = "https://sekai.one";
 
@@ -12,9 +10,17 @@ function normalizeTitle(s) {
     return s.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
         .replace(/[':!.,?]/g, '')
-        .replace(/\b(the|season|part|cour|cour)\b/ig, '')
+        .replace(/\b(the|season|part|cour)\b/ig, '')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function scoreMatch(searchTerm, candidate) {
+    if (!searchTerm || !candidate) return 0;
+    if (searchTerm === candidate) return 100;
+    if (candidate.includes(searchTerm) && searchTerm.length >= 4) return 80;
+    if (searchTerm.includes(candidate) && candidate.length >= 4) return 70;
+    return 0;
 }
 
 
@@ -186,57 +192,51 @@ function extractArcsUrls(html, baseUrl) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
-    // 0. Movies are supported but we need absolute episode
-    // Only fetch for TVs for now, or consider movies.
-    if (mediaType === 'movie') {
-         // TODO: We could add movie support eventually.
-         console.log(`[Sekai] movie is not yet perfectly mapped`);
-         // We might return [] for now, or map it using getAbsoluteEpisode
-    }
-
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
     
-    let absEp = episodeNum;
-    try {
-        const imdbId = await getImdbId(tmdbId, mediaType);
-        if (imdbId) {
-            const resolved = await getAbsoluteEpisode(imdbId, season, episodeNum);
-            if (resolved) absEp = resolved;
-        }
-    } catch (e) {}
+    let absEp = mediaType === 'movie' ? 1 : episodeNum;
+    if (mediaType === 'tv') {
+        try {
+            const imdbId = await getImdbId(tmdbId, mediaType);
+            if (imdbId) {
+                const resolved = await getAbsoluteEpisode(imdbId, season, episodeNum);
+                if (resolved) absEp = resolved;
+            }
+        } catch (e) {}
+    }
 
-    console.log(`[Sekai] Checking S${season} E${episodeNum} -> Absolute: ${absEp}`);
+    console.log(`[Sekai] Checking ${mediaType} S${season} E${episodeNum} -> Absolute: ${absEp}`);
     
     // 1. Get Series Data
     const allSeries = await getSeriesData();
     if(allSeries.length === 0) return [];
 
     let targetSeries = null;
-    let targetScore = -1;
+    let targetScore = 0;
 
-    for(const t of titles) {
-         if(!t) continue;
-         const nt = normalizeTitle(t);
-         for(const s of allSeries) {
-              const ns = normalizeTitle(s.title);
-              // Direct match
-              if(nt === ns || ns.includes(nt) || nt.includes(ns)) {
-                   targetSeries = s;
-                   targetScore = 100;
-                   break;
-              }
-              // Alias match
-              for(const a of s.aliases) {
-                   const na = normalizeTitle(a);
-                   if(nt === na || na.includes(nt) || nt.includes(na)) {
-                         targetSeries = s;
-                         targetScore = 90;
-                         break;
-                   }
-              }
-         }
-         if(targetSeries) break;
+    for (const t of titles) {
+        if (!t) continue;
+        const nt = normalizeTitle(t);
+        if (!nt || nt.length < 2) continue;
+
+        for (const s of allSeries) {
+            // Score against main title
+            let score = scoreMatch(nt, normalizeTitle(s.title));
+            if (score > targetScore) {
+                targetScore = score;
+                targetSeries = s;
+            }
+            // Score against aliases (slightly penalized vs title)
+            for (const a of s.aliases) {
+                const na = normalizeTitle(a);
+                score = scoreMatch(nt, na);
+                if (score > 0 && score - 5 > targetScore) {
+                    targetScore = score - 5;
+                    targetSeries = s;
+                }
+            }
+        }
     }
 
     if(!targetSeries) {

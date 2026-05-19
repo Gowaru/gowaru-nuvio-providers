@@ -6,6 +6,9 @@ import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://ww.animesultra.org";
 
+const searchCache = {};
+const CACHE_TTL = 60000;
+
 function normalize(s) {
     return s.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -62,6 +65,10 @@ function detectSeason(title, url) {
 }
 
 async function searchAnime(title) {
+    const now = Date.now();
+    const cached = searchCache[title];
+    if (cached && now - cached.time < CACHE_TTL) return cached.results;
+
     try {
         const results = [];
         const seen = new Set();
@@ -100,7 +107,9 @@ async function searchAnime(title) {
             });
         }
 
-        return results.sort((a, b) => b.score - a.score);
+        const sorted = results.sort((a, b) => b.score - a.score);
+        searchCache[title] = { results: sorted, time: now };
+        return sorted;
     } catch (e) {
         console.error(`[AnimesUltra] Search error: ${e.message}`);
         return [];
@@ -134,7 +143,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const seenIds = new Set();
 
     const trySearch = async (title) => {
-        if (title.length > 60) return;
+        if (!title || title.length > 50) return;
+        if (!/^[a-zA-Z0-9\sàâéèêëîïôùûüç'\-:!.,?()ÀÂÉÈÊËÎÏÔÙÛÜÇ]+$/.test(title)) return;
         const results = await searchAnime(title);
         if (results && results.length > 0) {
             for (const r of results) {
@@ -147,26 +157,53 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     };
 
-    const firstTitle = titlesOrdered[0];
+    const queryKey = (t) => t.toLowerCase().replace(/[^a-z0-9àâéèêëîïôùûüç]/g, '').replace(/[.]+$/, '');
+    const dedupQueries = new Set();
+    const searchQueries = titlesOrdered.filter(t => {
+        if (!t || t.length > 50 || t.length < 3) return false;
+        if (!/^[a-zA-Z0-9\sàâéèêëîïôùûüç'\-:!.,?()ÀÂÉÈÊËÎÏÔÙÛÜÇ]+$/.test(t)) return false;
+        const key = queryKey(t);
+        if (dedupQueries.has(key)) return false;
+        dedupQueries.add(key);
+        return true;
+    }).sort((a, b) => {
+        const isName = t => t === titlesOrdered[0];
+        const isFr = t => /[àâéèêëîïôùûüçÀÂÉÈÊËÎÏÔÙÛÜÇ]/.test(t) || t.toLowerCase().startsWith("l'");
+        const sa = isName(a) ? 0 : isFr(a) ? 1 : 2;
+        const sb = isName(b) ? 0 : isFr(b) ? 1 : 2;
+        return sa - sb || a.length - b.length;
+    });
 
-    if (firstTitle) await trySearch(firstTitle);
-
-    // Find French titles (contain French accented characters or start with L')
-    const frenchTitles = titlesOrdered.filter(t => 
-        t !== firstTitle && t.length < 60 && 
-        (/^L['\u2019]/i.test(t.trim()) || /[àâéèêëîïôùûüç]/i.test(t))
-    );
-
-    for (const ft of frenchTitles) {
-        if (matches.length > 8) break;
-        await trySearch(ft);
-    }
-
-    for (const title of titlesOrdered) {
-        if (matches.length > 8) break;
-        if (title === firstTitle || frenchTitles.includes(title)) continue;
-        if (title.length > 50) continue;
-        await trySearch(title);
+    const searchedQueries = new Set();
+    let searchCount = 0;
+    for (const q of searchQueries) {
+        if (matches.length >= 20) break;
+        if (searchCount >= 8) break;
+        searchCount++;
+        const before = matches.length;
+        await trySearch(q);
+        searchedQueries.add(queryKey(q));
+        if (matches.length > before) {
+            const newMatches = matches.slice(before);
+            if (newMatches.every(m => /(?:\s*:\s*|\s+-\s+)(?!\d|saison|partie|part)/i.test(m.title.replace(/ (VF|VOSTFR)$/i, '')))) {
+                const core = (() => {
+                    const sk = q.toLowerCase().replace(/[^a-z0-9àâéèêëîïôùûüç]/g, '');
+                    for (const t of titlesOrdered) {
+                        const k = t.toLowerCase().replace(/[^a-z0-9àâéèêëîïôùûüç]/g, '');
+                        if (k.includes(sk) || sk.includes(k)) continue;
+                        if (k.length < 4) continue;
+                        if (!/^[a-zA-Z0-9\sàâéèêëîïôùûüç'\-:!.,?()ÀÂÉÈÊËÎÏÔÙÛÜÇ]+$/.test(t)) continue;
+                        if (/(?:\s*:\s*|\s+-\s+)/.test(t.replace(/ (VF|VOSTFR)$/i, ''))) continue;
+                        return t;
+                    }
+                    return null;
+                })();
+                if (core && !searchedQueries.has(queryKey(core))) {
+                    searchedQueries.add(queryKey(core));
+                    await trySearch(core);
+                }
+            }
+        }
     }
     
     if (!matches || matches.length === 0) return [];
@@ -189,6 +226,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (fullStoryCache[newsId]) return fullStoryCache[newsId];
         try {
             const sf = await safeFetch(`${BASE_URL}/engine/ajax/full-story.php?newsId=${newsId}`, {
+                timeout: 10000,
                 headers: { "User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest" }
             });
             if (sf) {
@@ -222,7 +260,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     };
 
     const fetchEpisodeServers = async (epHref, $context, lang) => {
-        const epRes = await safeFetch(epHref, { headers: { "User-Agent": "Mozilla/5.0" }});
+        const epRes = await safeFetch(epHref, { timeout: 10000, headers: { "User-Agent": "Mozilla/5.0" }});
         if (!epRes || !epRes.ok) {
             console.log(`[AnimesUltra] Episode page not OK (${epRes?.status}) for ${epHref}`);
             return [];
@@ -254,9 +292,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         return servers;
     };
 
+    const isSpinoffMatch = (m) => /(?:\s*:\s*|\s+-\s+)(?!\d|saison|partie|part)/i.test(m.title.replace(/ (VF|VOSTFR)$/i, ''));
+    const spinoffCandidates = [];
+
     for (const match of matches) {
         if (!match.url) continue;
         if (processedCount >= 6) break;
+
+        if (isSpinoffMatch(match)) {
+            spinoffCandidates.push(match);
+            continue;
+        }
 
         let lang = "VOSTFR";
         if (detectLang(match.title) === 'vf') lang = "VF";
@@ -273,11 +319,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             const newsId = newsIdMatch[1];
             
             const html = await getFullStory(newsId);
-            
-            if (!html) {
-                console.log(`[AnimesUltra DEBUG] getFullStory(${newsId}) returned null`);
-                continue;
-            }
+            if (!html) continue;
             
             const $ = cheerio.load(html);
 
@@ -290,16 +332,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 }
             });
 
-            console.log(`[AnimesUltra DEBUG] match=${newsId} title="${match.title}" epHrefs=${epHrefs.length} targetEps=[${targetEpisodes}]`);
-            if (epHrefs.length === 0) {
-                const avail = [];
-                $('.ep-item').each((i, el) => {
-                    const epNum = $(el).attr('data-number');
-                    if (epNum) avail.push(epNum);
-                });
-                console.log(`[AnimesUltra DEBUG] available data-numbers: [${avail.slice(0,5).join(',')}${avail.length > 5 ? '...' : ''}] (${avail.length} total)`);
-                continue;
-            }
+            if (epHrefs.length === 0) continue;
 
             processedCount++;
 
@@ -314,52 +347,110 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    if (streams.length === 0 && season && matches.length > 1) {
-        const seasonParts = [];
-        for (const m of matches) {
-            const sNum = detectSeason(m.title, m.url);
-            const pNum = parseInt(m.title.match(/(?:partie|part)\s*(\d+)/i)?.[1], 10);
-            if (sNum === season) {
-                const nId = m.url.match(/\/(\d+)-/)?.[1];
-                if (nId) {
-                    const html = await getFullStory(nId);
-                    if (html) {
-                        const $c = cheerio.load(html);
-                        const count = $c('.ep-item').length;
-                        seasonParts.push({ match: m, newsId: nId, partNum: pNum || 1, episodeCount: count, html });
-                    }
-                }
+    // Fallback: if no non-spinoff match produced streams, try spinoffs
+    if (streams.length === 0 && spinoffCandidates.length > 0) {
+        for (const match of spinoffCandidates) {
+            if (processedCount >= 6) break;
+
+            let lang = "VOSTFR";
+            if (detectLang(match.title) === 'vf') lang = "VF";
+
+            const matchSeasonNum = detectSeason(match.title, match.url);
+            if (season && matchSeasonNum != null) {
+                if (matchSeasonNum === 'final' && season < 6) continue;
+                if (typeof matchSeasonNum === 'number' && matchSeasonNum !== season) continue;
             }
-        }
-        seasonParts.sort((a, b) => a.partNum - b.partNum);
-        let cumOffset = 0;
-        for (const sp of seasonParts) {
-            const $c = cheerio.load(sp.html);
-            const epHrefs = [];
-            $c('.ep-item').each((i, el) => {
-                const epDataNum = parseInt($c(el).attr('data-number'), 10);
-                if (epDataNum) {
-                    for (const tgt of targetEpisodes) {
-                        const adjusted = tgt - cumOffset;
-                        if (adjusted === epDataNum) {
-                            const href = $c(el).attr('href');
-                            if (href) epHrefs.push(href);
-                        }
+
+            try {
+                const newsIdMatch = match.url.match(/\/(\d+)-/);
+                if (!newsIdMatch) continue;
+                const newsId = newsIdMatch[1];
+                const html = await getFullStory(newsId);
+                if (!html) continue;
+
+                const $ = cheerio.load(html);
+                const epHrefs = [];
+                $('.ep-item').each((i, el) => {
+                    const epNum = $(el).attr('data-number');
+                    if (epNum && targetEpisodes.map(e => parseInt(e, 10)).includes(parseInt(epNum, 10))) {
+                        const href = $(el).attr('href');
+                        if (href) epHrefs.push(href);
                     }
-                }
-            });
-            if (epHrefs.length > 0) {
-                let lang = "VOSTFR";
-                if (detectLang(sp.match.title) === 'vf') lang = "VF";
+                });
+                if (epHrefs.length === 0) continue;
+
+                processedCount++;
+
                 for (const epHref of epHrefs) {
-                    const servers = await fetchEpisodeServers(epHref, $c, lang);
+                    const servers = await fetchEpisodeServers(epHref, $, lang);
                     for (const { url, sname } of servers) {
                         pushStream(url, lang, sname);
                     }
                 }
+            } catch (e) {
+                console.error(`[AnimesUltra] Extract error: ${e.message}`);
+            }
+        }
+    }
+
+    if (streams.length === 0 && season && matches.length > 1) {
+        const byPart = {};
+        for (const m of matches) {
+            const sNum = detectSeason(m.title, m.url);
+            const pNum = parseInt(m.title.match(/(?:partie|part)\s*(\d+)/i)?.[1], 10) || 1;
+            if (sNum !== season) continue;
+            const nId = m.url.match(/\/(\d+)-/)?.[1];
+            if (!nId) continue;
+            const mLang = detectLang(m.title) || 'vostfr';
+            const key = `${pNum}-${mLang}`;
+            if (!byPart[key]) {
+                const html = await getFullStory(nId);
+                if (html) {
+                    byPart[key] = { match: m, newsId: nId, partNum: pNum, lang: mLang, html };
+                }
+            }
+        }
+
+        const uniqueParts = [];
+        const seenPartNums = new Set();
+        const langGroups = {};
+        for (const [key, val] of Object.entries(byPart)) {
+            if (!langGroups[val.partNum]) langGroups[val.partNum] = [];
+            langGroups[val.partNum].push(val);
+            if (!seenPartNums.has(val.partNum)) {
+                seenPartNums.add(val.partNum);
+                uniqueParts.push({ partNum: val.partNum, ref: val });
+            }
+        }
+        uniqueParts.sort((a, b) => a.partNum - b.partNum);
+
+        let cumOffset = 0;
+        for (const up of uniqueParts) {
+            const allLang = langGroups[up.partNum];
+            const $ref = cheerio.load(allLang[0].html);
+            const epCount = $ref('.ep-item').length;
+            const targetLocal = targetEpisodes.map(t => t - cumOffset).filter(t => t >= 1 && t <= epCount);
+            if (targetLocal.length > 0) {
+                for (const lv of allLang) {
+                    const $c = cheerio.load(lv.html);
+                    const epHrefs = [];
+                    $c('.ep-item').each((i, el) => {
+                        const epDataNum = parseInt($c(el).attr('data-number'), 10);
+                        if (epDataNum && targetLocal.includes(epDataNum)) {
+                            const href = $c(el).attr('href');
+                            if (href) epHrefs.push(href);
+                        }
+                    });
+                    for (const epHref of epHrefs) {
+                        const servers = await fetchEpisodeServers(epHref, $c, lv.lang === 'vf' ? 'VF' : 'VOSTFR');
+                        for (const { url, sname } of servers) {
+                            pushStream(url, lv.lang === 'vf' ? 'VF' : 'VOSTFR', sname);
+                        }
+                    }
+                }
                 break;
             }
-            cumOffset += sp.episodeCount;
+            cumOffset += epCount;
         }
     }
 

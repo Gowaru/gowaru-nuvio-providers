@@ -1,17 +1,55 @@
-/**
- * Extractor Logic for Frenchstream
- */
-
 import cheerio from 'cheerio-without-node-native';
-import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
-import { resolveStream } from '../utils/resolvers.js';
+import { safeFetch, resolveStream } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
 
-const SEARCH_STOPWORDS = new Set([
-    'the', 'and', 'for', 'with', 'from', 'des', 'les', 'une', 'dans', 'sur', 'via', 'de', 'du', 'la', 'le'
-]);
-const MIN_MATCH_SCORE = 40;
-const FSTREAM_API_BASE = 'https://api.movix.cash';
+const MIN_MATCH_SCORE = 60;
+const MOVIE_MATCH_SCORE = 55;
+const MAX_SEARCH_QUERIES = 3;
+const MAX_CANDIDATES = 4;
+const RESOLVE_TIMEOUT_MS = 20000;
+const CACHE_TTL_MS = 300000;
+const CATEGORY_FETCH_TIMEOUT = 8000;
+const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
+const TMDB_API_BASE = "https://api.themoviedb.org/3";
+
+const GENRE_TO_CATEGORY = {
+    28: '/films/actions/', 12: '/films/aventures/', 16: '/films/animations/',
+    35: '/films/comedies/', 80: '/films/policiers/', 99: '/films/documentaires/',
+    18: '/films/drames/', 10751: '/films/familles/', 14: '/films/fantastiques/',
+    36: '/films/historiques/', 27: '/films/epouvante-horreurs/', 10752: '/films/guerres/',
+    9648: '/films/thrillers/', 10749: '/films/romances/', 878: '/films/science-fictions/',
+    53: '/films/thrillers/', 37: '/films/westerns/', 10759: '/films/actions/',
+    10402: '/films/biopics/', 10770: '/films/vf/'
+};
+
+const ALL_CATEGORIES = [
+    '/films/actions/', '/films/aventures/', '/films/animations/', '/films/biopics/',
+    '/films/comedies/', '/films/drames/', '/films/documentaires/', '/films/epouvante-horreurs/',
+    '/films/historiques/', '/films/espionnages/', '/films/familles/', '/films/fantastiques/',
+    '/films/guerres/', '/films/policiers/', '/films/romances/', '/films/science-fictions/',
+    '/films/thrillers/', '/films/westerns/', '/films/vf/', '/films/cultes/'
+];
+
+const cache = new Map();
+
+function cached(key, fn) {
+    const now = Date.now();
+    if (cache.has(key) && now - cache.get(key).ts < CACHE_TTL_MS) return cache.get(key).data;
+    return fn().then(data => { cache.set(key, { data, ts: now }); return data; });
+}
+
+async function fetchTmdbJson(url) {
+    const res = await safeFetch(url);
+    if (!res || !res.ok) return null;
+    return res.json();
+}
+
+const ANIME_KEYWORDS = /\b(?:anime|japon|shonen|shoujo|seinen|manga)\b/i;
+
+function isJapaneseOrChinese(text) {
+    return /[\u3000-\u9FFF\uF900-\uFAFF]/.test(text || '');
+}
 
 function normalize(text) {
     return (text || '')
@@ -24,11 +62,8 @@ function normalize(text) {
 }
 
 function getOrigin(url) {
-    try {
-        return new URL(url).origin;
-    } catch (e) {
-        return BASE_URL;
-    }
+    try { return new URL(url).origin; }
+    catch (e) { return BASE_URL; }
 }
 
 function pickNewsId(onclick, href) {
@@ -39,337 +74,452 @@ function pickNewsId(onclick, href) {
 
 function isSeriesCard($card, href, title) {
     if ($card.find('.mli-eps').length > 0) return true;
-    const text = `${href || ''} ${title || ''}`.toLowerCase();
-    return text.includes('saison') || text.includes('series') || text.includes('/s-tv/');
+    const text = (href || '') + ' ' + (title || '');
+    return /saison|series|\/s-tv\//i.test(text);
 }
 
 function normalizeHref(href, baseUrl) {
     if (!href || typeof href !== 'string') return null;
     const trimmed = href.trim();
     if (!trimmed) return null;
-
     if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    if (trimmed.startsWith('//')) return `https:${trimmed}`;
-    if (trimmed.startsWith('/')) return `${baseUrl}${trimmed}`;
-    return `${baseUrl}/${trimmed.replace(/^\/+/, '')}`;
+    if (trimmed.startsWith('//')) return 'https:' + trimmed;
+    if (trimmed.startsWith('/')) return baseUrl + trimmed;
+    return baseUrl + '/' + trimmed.replace(/^\/+/, '');
 }
 
 function parseSearchCards(html, baseUrl) {
     const $ = cheerio.load(html);
     const cards = [];
-
     $('.short .short-in').each((_, element) => {
         const $card = $(element);
-        const hrefRaw =
-            $card.find('a.short-poster').first().attr('href') ||
+        const hrefRaw = $card.find('a.short-poster').first().attr('href') ||
             $card.find('a.img-box').first().attr('href') ||
-            $card.find('a[href]').first().attr('href') ||
-            '';
+            $card.find('a[href]').first().attr('href') || '';
         const href = normalizeHref(hrefRaw, baseUrl);
         if (!href) return;
-
         const title = ($card.find('.short-title').first().text() || '').trim();
         if (!title) return;
-
         const onclick = $card.find('.info-button').attr('onclick') || '';
         const newsId = pickNewsId(onclick, hrefRaw);
         if (!newsId) return;
-
-        cards.push({
-            newsId,
-            href: `${baseUrl}${href}`,
-            title,
-            isSeries: isSeriesCard($card, href, title),
-            baseUrl
-        });
+        cards.push({ newsId, href, title, isSeries: isSeriesCard($card, href, title), baseUrl });
     });
-
     return cards;
 }
 
 function buildTitleQueries(titles) {
     const queries = [];
-    const push = (value) => {
-        if (typeof value !== 'string') return;
-        const v = value.trim();
-        if (!v) return;
-        if (!queries.some((q) => q.toLowerCase() === v.toLowerCase())) queries.push(v);
-    };
-
+    const push = (v) => { if (typeof v === 'string' && v.trim() && !queries.some(q => q.toLowerCase() === v.trim().toLowerCase())) queries.push(v.trim()); };
     for (const title of (titles || []).slice(0, 2)) {
         push(title);
-        push(title.replace(/['’]/g, ' '));
-        push(title.replace(/\s*\([^)]*\)\s*/g, ' '));
-
-        const beforeColon = title.split(':')[0];
-        if (beforeColon && beforeColon.length >= 3) push(beforeColon);
+        const bc = title.split(':')[0];
+        if (bc && bc.length >= 3) push(bc);
     }
-
-    return queries.slice(0, 10);
+    return queries.slice(0, MAX_SEARCH_QUERIES);
 }
 
 function scoreCard(card, queryTitle, mediaType, season) {
     const q = normalize(queryTitle);
     const t = normalize(card.title);
     const hrefN = normalize(card.href || '');
-    const hay = `${t} ${hrefN}`.trim();
+    const hay = (t + ' ' + hrefN).trim();
     if (!q || !t) return 0;
-
     let score = 0;
     if (t === q) score += 120;
     if (hay.includes(q)) score += 70;
     if (q.includes(t)) score += 40;
-
-    const qWords = new Set(q.split(' ').filter((w) => w && w.length > 2 && !SEARCH_STOPWORDS.has(w)));
+    const qWords = new Set(q.split(' ').filter(w => w && w.length > 2 && !['the','and','for','with','from','des','les','une','dans','sur','via','de','du','la','le'].includes(w)));
     const tWords = new Set(hay.split(' ').filter(Boolean));
     let common = 0;
-    for (const w of qWords) {
-        if (tWords.has(w)) common += 1;
-    }
+    for (const w of qWords) { if (tWords.has(w)) common += 1; }
     score += common * 8;
-
     if (mediaType === 'movie' && card.isSeries) score -= 50;
     if (mediaType === 'tv' && !card.isSeries) score -= 30;
-
-    const seasonNum = Number(season) || 1;
-    const text = `${card.title} ${card.href}`.toLowerCase();
-    const hasSeasonMention = /saison\s*\d+|s-tv\//i.test(text);
-
+    const sn = Number(season) || 1;
+    const text = (card.title + ' ' + card.href).toLowerCase();
+    const hasSeason = /saison\s*\d+|s-tv\//i.test(text);
     if (mediaType === 'tv') {
-        if (seasonNum > 1) {
-            const seasonRegex = new RegExp(`saison\\s*${seasonNum}|[-_/]${seasonNum}(?:[^0-9]|$)`, 'i');
-            if (seasonRegex.test(text)) score += 20;
-            if (hasSeasonMention && !seasonRegex.test(text)) score -= 25;
-        } else if (seasonNum === 1 && /saison\s*[2-9]/i.test(text)) {
-            score -= 25;
-        }
+        if (sn > 1) {
+            const sr = new RegExp('saison\\s*' + sn + '|[-_/]' + sn + '(?:[^0-9]|$)', 'i');
+            if (sr.test(text)) score += 20;
+            if (hasSeason && !sr.test(text)) score -= 25;
+        } else if (sn === 1 && /saison\s*[2-9]/i.test(text)) score -= 25;
     }
-
     return score;
 }
 
 async function searchByTitle(title, mediaType, season) {
     const allCards = [];
-
     for (const baseUrl of BASE_URLS) {
         try {
-            const url = `${baseUrl}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
+            const url = baseUrl + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(title);
             const html = await fetchText(url, { baseUrl });
-            const cards = parseSearchCards(html, baseUrl);
-            allCards.push(...cards);
+            allCards.push(...parseSearchCards(html, baseUrl));
         } catch (e) {
-            console.warn(`[Frenchstream] Search failed on ${baseUrl} for "${title}": ${e.message}`);
+            console.warn('[Frenchstream] Search failed on ' + baseUrl + ': ' + e.message);
         }
     }
-
-    const filtered = allCards.filter((card) => (mediaType === 'tv' ? card.isSeries : !card.isSeries));
+    const filtered = allCards.filter(c => mediaType === 'tv' ? c.isSeries : !c.isSeries);
     if (filtered.length === 0) return [];
-
-    return filtered
-        .map((card) => ({
-            ...card,
-            _score: scoreCard(card, title, mediaType, season),
-            _matchedTitle: title
-        }))
-        .sort((a, b) => b._score - a._score)
-        .slice(0, 8);
+    return filtered.map(c => ({ ...c, _score: scoreCard(c, title, mediaType, season), _matchedTitle: title }))
+        .sort((a, b) => b._score - a._score).slice(0, 8);
 }
 
-function hostLabel(hostKey) {
-    const k = (hostKey || '').toLowerCase();
-    if (k === 'premium') return 'FSVID';
-    if (k === 'vidzy') return 'VIDZY';
-    if (k === 'uqload') return 'UQLOAD';
-    if (k === 'dood') return 'DOOD';
-    if (k === 'voe') return 'VOE';
-    if (k === 'filmoon') return 'FILEMOON';
-    if (k === 'netu') return 'NETU';
-    return hostKey ? hostKey.toUpperCase() : 'PLAYER';
+async function getTmdbDetails(tmdbId, mediaType) {
+    const type = mediaType === 'movie' ? 'movie' : 'tv';
+    const url = TMDB_API_BASE + '/' + type + '/' + tmdbId + '?api_key=' + TMDB_API_KEY + '&language=en-US';
+    return cached('tmdb_det_' + tmdbId + '_' + type, () => fetchTmdbJson(url));
 }
 
-function languageLabel(languageKey) {
-    const k = (languageKey || '').toLowerCase();
-    if (k === 'vf' || k === 'default' || k === 'vfq') return 'VF';
-    if (k === 'vostfr') return 'VOSTFR';
-    if (k === 'vo') return 'VO';
-    return languageKey ? languageKey.toUpperCase() : 'VF';
+async function detectSubType(tmdbId, mediaType, titles) {
+    try {
+        const d = await getTmdbDetails(tmdbId, mediaType);
+        if (!d) return null;
+        const genres = (d.genres || []).map(g => g.id);
+        const isAnim = genres.includes(16);
+        const orig = mediaType === 'movie' ? d.original_title : d.original_name;
+        const jap = isJapaneseOrChinese(orig);
+        const tm = titles.some(t => ANIME_KEYWORDS.test(t));
+        if (isAnim && (jap || tm)) return 'anime';
+        if (isAnim && mediaType === 'tv') return 'cartoon';
+    } catch (e) {}
+    return null;
 }
 
-function toStream(name, host, language, url) {
+function hostLabel(k) {
+    const h = (k || '').toLowerCase();
+    if (h === 'premium') return 'FSVID';
+    if (h === 'vidzy') return 'VIDZY';
+    if (h === 'uqload') return 'UQLOAD';
+    if (h === 'dood') return 'DOOD';
+    if (h === 'voe') return 'VOE';
+    if (h === 'filmoon') return 'FILEMOON';
+    if (h === 'netu') return 'NETU';
+    return k ? k.toUpperCase() : 'PLAYER';
+}
+
+function languageLabel(k) {
+    const l = (k || '').toLowerCase();
+    if (l === 'vf' || l === 'default' || l === 'vfq') return 'VF';
+    if (l === 'vostfr') return 'VOSTFR';
+    if (l === 'vo') return 'VO';
+    return l ? l.toUpperCase() : 'VF';
+}
+
+function toStream(name, host, language, url, quality, subType) {
     const origin = getOrigin(url);
-    return {
-        name,
-        title: `[${languageLabel(language)}] ${hostLabel(host)}`,
-        url,
-        quality: 'HD',
-        headers: {
-            Referer: `${origin}/`,
-            Origin: origin,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
-        }
+    const s = {
+        name, url, quality: quality || 'HD',
+        title: '[' + languageLabel(language) + '] ' + hostLabel(host) + (quality && quality !== 'HD' ? ' [' + quality + ']' : ''),
+        headers: { Referer: origin + '/', Origin: origin, 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36' }
     };
-}
-
-function collectMovieCandidates(apiData) {
-    const players = apiData?.players;
-    if (!players || typeof players !== 'object') return [];
-
-    const streams = [];
-    for (const [host, versions] of Object.entries(players)) {
-        if (!versions || typeof versions !== 'object') continue;
-        for (const [language, value] of Object.entries(versions)) {
-            if (typeof value !== 'string' || !value.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', host, language, value));
-        }
-    }
-
-    return streams;
-}
-
-function collectEpisodeCandidates(apiData, episode) {
-    const episodeNum = Number(episode) || 1;
-    const streams = [];
-
-    for (const language of ['vf', 'vostfr', 'vo']) {
-        const byEpisode = apiData?.[language];
-        if (!byEpisode || typeof byEpisode !== 'object') continue;
-
-        const episodeKey = Object.keys(byEpisode).find((k) => Number(k) === episodeNum) || String(episodeNum);
-        const hosts = byEpisode?.[episodeKey];
-        if (!hosts || typeof hosts !== 'object') continue;
-
-        for (const [host, value] of Object.entries(hosts)) {
-            if (typeof value !== 'string' || !value.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', host, language, value));
-        }
-    }
-
-    return streams;
+    if (subType) s.subType = subType;
+    return s;
 }
 
 function dedupeByUrl(streams) {
-    const seen = new Set();
-    const out = [];
-    for (const stream of streams) {
-        if (!stream?.url || seen.has(stream.url)) continue;
-        seen.add(stream.url);
-        out.push(stream);
-    }
+    const seen = new Set(), out = [];
+    for (const s of streams) { if (s && s.url && !seen.has(s.url)) { seen.add(s.url); out.push(s); } }
     return out;
 }
 
-function collectFstreamApiMovieCandidates(apiData) {
-    const players = apiData?.players;
-    if (!players || typeof players !== 'object') return [];
+/* ---------- SITE API METHODS ---------- */
 
-    const streams = [];
-    for (const [lang, list] of Object.entries(players)) {
-        if (!Array.isArray(list)) continue;
-        for (const item of list) {
-            if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url));
-        }
-    }
-    return streams;
+async function fetchSeasons(tmdbId) {
+    const tag = 's-' + tmdbId;
+    const url = BASE_URL + '/engine/ajax/get_seasons.php?serie_tag=' + tag + '&news_id=0';
+    return cached('seasons_' + tmdbId, async () => {
+        const data = await fetchJson(url, { baseUrl: BASE_URL });
+        if (!Array.isArray(data)) return [];
+        return data;
+    });
 }
 
-function collectFstreamApiTvCandidates(apiData, episode) {
-    const episodeNum = Number(episode) || 1;
-    const ep = apiData?.episodes?.[String(episodeNum)] || apiData?.episodes?.[episodeNum];
-    const langs = ep?.languages;
-    if (!langs || typeof langs !== 'object') return [];
-
-    const streams = [];
-    for (const [lang, list] of Object.entries(langs)) {
-        if (!Array.isArray(list)) continue;
-        for (const item of list) {
-            if (typeof item?.url !== 'string' || !item.url.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', item?.player || 'player', lang, item.url));
-        }
-    }
-    return streams;
+async function fetchEpisodeData(seasonNewsId) {
+    const url = BASE_URL + '/data/eps_' + seasonNewsId + '.txt?v=' + Math.floor(Date.now() / 30000);
+    return cached('eps_' + seasonNewsId, async () => {
+        const data = await fetchJson(url, { baseUrl: BASE_URL });
+        return data;
+    });
 }
 
-async function fetchFstreamApiFallback(tmdbId, mediaType, season, episode) {
-    try {
-        const url = mediaType === 'movie'
-            ? `${FSTREAM_API_BASE}/api/fstream/movie/${tmdbId}`
-            : `${FSTREAM_API_BASE}/api/fstream/tv/${tmdbId}/season/${Number(season) || 1}`;
-
-        const data = await fetchJson(url, {
-            headers: {
-                Accept: 'application/json, text/plain, */*',
-                Referer: 'https://movix.cash/',
-                Origin: 'https://movix.cash'
+function collectTvSiteCandidates(epData, episode, subType) {
+    const epNum = Number(episode) || 1;
+    const streams = [];
+    for (const lang of ['vf', 'vostfr', 'vo']) {
+        const byEp = epData && epData[lang];
+        if (!byEp || typeof byEp !== 'object') continue;
+        const players = byEp[String(epNum)] || byEp[epNum];
+        if (!players || typeof players !== 'object') continue;
+        for (const host of Object.keys(players)) {
+            const url = players[host];
+            if (typeof url === 'string' && url.startsWith('http')) {
+                streams.push(toStream('Frenchstream', host, lang, url, null, subType));
             }
-        });
+        }
+    }
+    return streams;
+}
 
+async function fetchMovieSite(newsId, subType) {
+    const url = BASE_URL + '/engine/ajax/film_api.php?id=' + newsId;
+    const data = await fetchJson(url, { baseUrl: BASE_URL });
+    const players = data && data.players;
+    if (!players || typeof players !== 'object') return [];
+    const streams = [];
+    for (const host of Object.keys(players)) {
+        const versions = players[host];
+        if (!versions || typeof versions !== 'object') continue;
+        for (const lang of Object.keys(versions)) {
+            const url = versions[lang];
+            if (typeof url === 'string' && url.startsWith('http')) {
+                streams.push(toStream('Frenchstream', host, lang, url, null, subType));
+            }
+        }
+    }
+    return streams;
+}
+
+/* ---------- FSTREAM API FALLBACK (for movies only) ---------- */
+
+const FSTREAM_API_BASE = 'https://api.movix.cash';
+
+function collectFstreamApiMovieCandidates(apiData, subType) {
+    const players = apiData && apiData.players;
+    if (!players || typeof players !== 'object') return [];
+    const streams = [];
+    for (const lang of Object.keys(players)) {
+        const list = players[lang];
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+            if (typeof item.url !== 'string' || !item.url.startsWith('http')) continue;
+            streams.push(toStream('Frenchstream', item.player || 'player', lang, item.url, item.quality, subType));
+        }
+    }
+    return streams;
+}
+
+async function fetchMovixMovieFallback(tmdbId, subType) {
+    const ck = 'movix_m_' + tmdbId;
+    const cv = cache.get(ck);
+    if (cv && Date.now() - cv.ts < CACHE_TTL_MS) return cv.data;
+    try {
+        const url = FSTREAM_API_BASE + '/api/fstream/movie/' + tmdbId;
+        const data = await fetchJson(url, {
+            headers: { Accept: 'application/json, text/plain, */*', Referer: 'https://movix.cash/', Origin: 'https://movix.cash' }
+        });
         if (!data || data.success === false) return [];
-        return mediaType === 'movie'
-            ? collectFstreamApiMovieCandidates(data)
-            : collectFstreamApiTvCandidates(data, episode);
+        const streams = collectFstreamApiMovieCandidates(data, subType);
+        cache.set(ck, { data: streams, ts: Date.now() });
+        return streams;
     } catch (e) {
-        console.warn(`[Frenchstream] FStream API fallback failed: ${e.message}`);
+        console.warn('[Frenchstream] Movix fallback failed: ' + e.message);
         return [];
     }
 }
 
+/* ---------- STREAM RESOLUTION ---------- */
+
+function resolveSingle(stream) {
+    return resolveStream(stream, { timeout: RESOLVE_TIMEOUT_MS });
+}
+
 async function resolveCandidates(candidates) {
-    const limited = candidates.slice(0, 4);
-    const resolved = await Promise.allSettled(limited.map((stream) => resolveStream(stream)));
+    const limited = candidates.slice(0, MAX_CANDIDATES);
+    const resolved = await Promise.allSettled(limited.map(resolveSingle));
     const direct = [];
-    for (const result of resolved) {
-        if (result.status !== 'fulfilled') continue;
-        const stream = result.value;
-        if (!stream?.url) continue;
-        if (stream.isDirect) direct.push(stream);
+    for (const r of resolved) {
+        if (r.status !== 'fulfilled') continue;
+        const s = r.value;
+        if (s && s.url && s.isDirect) direct.push(s);
+    }
+    return dedupeByUrl(direct);
+}
+
+/* ---------- MOVIE CATEGORY BROWSING ---------- */
+
+function parseCategoryMovies(html) {
+    const $ = cheerio.load(html);
+    const movies = [];
+    $('.short').each((_, el) => {
+        const $card = $(el);
+        const newsId = $card.find('[data-id]').first().attr('data-id') ||
+            ($card.find('.info-button').attr('onclick') || '').match(/openModal\('(\d+)'\)/)?.[1];
+        const title = ($card.find('.short-title').first().text() || '').trim();
+        const poster = $card.find('img').first().attr('src') || '';
+        if (newsId && title) movies.push({ newsId, title, poster });
+    });
+    return movies;
+}
+
+async function fetchCategoryMovies(catPath) {
+    const url = BASE_URL + catPath;
+    return cached('cat_' + catPath.replace(/[\/\s]/g, '_'), async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), CATEGORY_FETCH_TIMEOUT);
+        try {
+            const html = await fetchText(url, { signal: controller.signal, baseUrl: BASE_URL });
+            return parseCategoryMovies(html);
+        } finally {
+            clearTimeout(timer);
+        }
+    });
+}
+
+async function verifyAndExtractMovieStreams(newsId, tmdbId, subType) {
+    const url = BASE_URL + '/engine/ajax/film_api.php?id=' + newsId;
+    try {
+        const data = await fetchJson(url, { baseUrl: BASE_URL });
+        const tagz = data?.meta?.tagz || '';
+        const expectedTag = 'f-' + tmdbId;
+        if (tagz !== expectedTag) {
+            console.log('[Frenchstream] Tagz mismatch: got ' + tagz + ', expected ' + expectedTag);
+            return null;
+        }
+        const players = data?.players;
+        if (!players || typeof players !== 'object') return [];
+        const streams = [];
+        for (const host of Object.keys(players)) {
+            const versions = players[host];
+            if (!versions || typeof versions !== 'object') continue;
+            for (const lang of Object.keys(versions)) {
+                const url = versions[lang];
+                if (typeof url === 'string' && url.startsWith('http')) {
+                    streams.push(toStream('Frenchstream', host, lang, url, null, subType));
+                }
+            }
+        }
+        return streams;
+    } catch (e) {
+        console.warn('[Frenchstream] film_api verify failed for ' + newsId + ': ' + e.message);
+        return null;
+    }
+}
+
+function scoreMovieCategory(cardTitle, queryTitles) {
+    const t = normalize(cardTitle);
+    if (!t) return 0;
+    let bestScore = 0;
+    for (const qt of queryTitles) {
+        const q = normalize(qt);
+        if (!q) continue;
+        let score = 0;
+        if (t === q) score += 120;
+        else if (t.includes(q) || q.includes(t)) score += 70;
+        else {
+            const qWords = q.split(' ').filter(w => w.length > 2 && !['the','and','for','with','from','des','les','une','dans','sur','via','de','du','la','le','das','der','die'].includes(w));
+            const tWords = new Set(t.split(' '));
+            let common = 0;
+            for (const w of qWords) { if (tWords.has(w)) common++; }
+            score += common * 10;
+        }
+        if (score > bestScore) bestScore = score;
+    }
+    return bestScore;
+}
+
+async function searchMovieOnSite(tmdbId, titles, subType) {
+    // Step 1: check DLE search results (fast, sometimes works)
+    const queries = buildTitleQueries(titles);
+    for (const title of queries) {
+        try {
+            const ranked = await searchByTitle(title, 'movie');
+            if (ranked.length > 0 && ranked[0]._score >= MIN_MATCH_SCORE) {
+                const streams = await verifyAndExtractMovieStreams(ranked[0].newsId, tmdbId, subType);
+                if (streams && streams.length > 0) {
+                    const resolved = await resolveCandidates(streams);
+                    console.log('[Frenchstream] Movie found via DLE search: ' + resolved.length + ' streams');
+                    return resolved;
+                }
+            }
+        } catch (e) {}
     }
 
-    const uniqueDirect = dedupeByUrl(direct);
-    // ExoPlayer crashes on unresolved embed URLs; keep only direct links.
-    return uniqueDirect;
+    // Step 2: fetch category pages, ordered by TMDB genre relevance
+    const details = await getTmdbDetails(tmdbId, 'movie');
+    const genreIds = (details?.genres || []).map(g => g.id);
+    const priorityCats = [...new Set(genreIds.map(id => GENRE_TO_CATEGORY[id]).filter(Boolean))];
+    const catsToCheck = [...priorityCats];
+    for (const cat of ALL_CATEGORIES) {
+        if (!catsToCheck.includes(cat)) catsToCheck.push(cat);
+    }
+
+    const seenNewsIds = new Set();
+    let bestMatch = null;
+    let bestScore = 0;
+
+    const catResults = await Promise.allSettled(catsToCheck.map(cat => fetchCategoryMovies(cat)));
+    for (const r of catResults) {
+        if (r.status !== 'fulfilled') continue;
+        for (const movie of r.value) {
+            if (seenNewsIds.has(movie.newsId)) continue;
+            seenNewsIds.add(movie.newsId);
+            const score = scoreMovieCategory(movie.title, titles);
+            if (score > bestScore) {
+                bestScore = score;
+                bestMatch = movie;
+            }
+        }
+    }
+
+    // Step 3: verify best match via film_api tagz
+    if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
+        const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
+        if (streams && streams.length > 0) {
+            const resolved = await resolveCandidates(streams);
+            console.log('[Frenchstream] Movie found via category browsing: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
+            return resolved;
+        }
+    }
+
+    return [];
 }
+
+/* ---------- MAIN EXPORT ---------- */
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType);
     if (!titles || titles.length === 0) return [];
 
-    const queries = buildTitleQueries(titles);
+    const subType = await detectSubType(tmdbId, mediaType, titles);
+    if (subType) console.log('[Frenchstream] subType: ' + subType);
 
-    let match = null;
-    let bestScore = -Infinity;
-    for (const title of queries) {
-        try {
-            const ranked = await searchByTitle(title, mediaType, season);
-            if (ranked.length > 0 && ranked[0]._score > bestScore) {
-                bestScore = ranked[0]._score;
-                match = ranked[0];
-                if (bestScore >= MIN_MATCH_SCORE) break;
+    if (mediaType === 'tv') {
+        const seasons = await fetchSeasons(tmdbId);
+        if (seasons.length > 0) {
+            const sn = Number(season) || 1;
+            const sIdx = seasons.findIndex(s => /saison\s*(\d+)/i.test(s.title) && parseInt(s.title.match(/saison\s*(\d+)/i)[1]) === sn);
+            const target = sIdx !== -1 ? seasons[sIdx] : seasons[0];
+            if (target) {
+                const epData = await fetchEpisodeData(target.id);
+                const candidates = collectTvSiteCandidates(epData, episode, subType);
+                if (candidates.length > 0) {
+                    const streams = await resolveCandidates(candidates);
+                    console.log('[Frenchstream] Site eps ' + target.id + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams');
+                    return streams;
+                }
             }
-        } catch (e) {
-            console.warn(`[Frenchstream] Search failed for "${title}": ${e.message}`);
         }
+        console.warn('[Frenchstream] No season data from site, trying Movix fallback');
+        const movix = await fetchMovixMovieFallback(tmdbId, subType);
+        if (movix.length > 0) {
+            const streams = await resolveCandidates(movix);
+            console.log('[Frenchstream] Movix TV fallback: ' + movix.length + ' candidates, ' + streams.length + ' streams');
+            return streams;
+        }
+        return [];
     }
 
-    if (!match || bestScore < MIN_MATCH_SCORE) {
-        console.warn(`[Frenchstream] No confident web match for tmdb=${tmdbId} (bestScore=${bestScore}), trying API fallback`);
-        const fallbackCandidates = await fetchFstreamApiFallback(tmdbId, mediaType, season, episode);
-        if (fallbackCandidates.length === 0) return [];
+    // Movies: site-native category browsing → film_api verification → Movix fallback
+    const movieStreams = await searchMovieOnSite(tmdbId, titles, subType);
+    if (movieStreams.length > 0) return movieStreams;
 
-        const fallbackStreams = await resolveCandidates(fallbackCandidates);
-        console.log(`[Frenchstream] API fallback candidates: ${fallbackCandidates.length}, returned: ${fallbackStreams.length}`);
-        return fallbackStreams;
+    const movix = await fetchMovixMovieFallback(tmdbId, subType);
+    if (movix.length > 0) {
+        const streams = await resolveCandidates(movix);
+        console.log('[Frenchstream] Movix movie fallback: ' + movix.length + ' candidates, ' + streams.length + ' streams');
+        return streams;
     }
-    console.log(`[Frenchstream] Match: ${match.title} (${match.newsId}) score=${bestScore} via="${match._matchedTitle}"`);
-
-    const sourceBase = match.baseUrl || BASE_URL;
-    const candidates = mediaType === 'movie'
-        ? collectMovieCandidates(await fetchJson(`${sourceBase}/engine/ajax/film_api.php?id=${match.newsId}`, { baseUrl: sourceBase }))
-        : collectEpisodeCandidates(await fetchJson(`${sourceBase}/ep-data.php?id=${match.newsId}`, { baseUrl: sourceBase }), episode);
-
-    if (candidates.length === 0) return [];
-
-    const streams = await resolveCandidates(candidates);
-    console.log(`[Frenchstream] Candidates: ${candidates.length}, Returned: ${streams.length}`);
-    return streams;
+    return [];
 }

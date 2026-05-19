@@ -8,6 +8,8 @@ const tmdbTitleCache = new Map();
 
 const MAX_TITLE_SEARCHES = 5;
 const SEARCH_SCORE_THRESHOLD = 40;
+const SEARCH_TIMEOUT = 8000;
+const SEARCH_RETRIES = 0;
 
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
@@ -141,7 +143,7 @@ function extractSlugFromPage($) {
 
 async function trySearchUrl(url, title) {
     try {
-        const html = await fetchWithRetry(url);
+        const html = await fetchWithRetry(url, { timeout: SEARCH_TIMEOUT }, SEARCH_RETRIES);
         const $ = cheerio.load(html);
 
         const pageMatch = extractSlugFromPage($);
@@ -185,10 +187,11 @@ async function trySearchUrl(url, title) {
     return null;
 }
 
-async function searchAnime(title, isMovie, doDeepSearch) {
+async function searchAnime(title, isMovie, doDeepSearch, tmdbId) {
     const slug = slugifyTitle(title);
     if (!slug) return null;
 
+    // Try homepage-based search first — finds canonical slugs with full season data
     const parallelHits = await Promise.allSettled([
         trySearchUrl(`${BASE_URL}/anime/${slug}/`, title),
         trySearchUrl(`${BASE_URL}/${slug}/`, title),
@@ -209,6 +212,17 @@ async function searchAnime(title, isMovie, doDeepSearch) {
                 if (h.status === 'fulfilled' && h.value) return h.value;
             }
         }
+    }
+
+    // Fallback for movies: TMDB ID-based direct URL (TV series use homepage search)
+    if (isMovie && tmdbId) {
+        const directResult = await trySearchUrl(`${BASE_URL}/${tmdbId}-${slug}/`, title);
+        if (directResult) return directResult;
+
+        // Last resort: construct slug from TMDB ID + slugified title
+        const fallbackSlug = `${tmdbId}-${slug}`;
+        console.log(`[AnimeSite] Movie fallback slug: ${fallbackSlug}`);
+        return { slug: fallbackSlug, title };
     }
 
     return null;
@@ -240,7 +254,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     let bestMatch = null;
 
     for (let i = 0; i < Math.min(titles.length, MAX_TITLE_SEARCHES); i++) {
-        const match = await searchAnime(titles[i], isMovie, i === 0);
+        const match = await searchAnime(titles[i], isMovie, i === 0, tmdbId);
         if (match) {
             bestMatch = match;
             break;
@@ -290,27 +304,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     const seasons = jsonLd.containsSeason || [];
-    let targetSeason = null;
-    for (const s of seasons) {
-        if (String(s.seasonNumber) === String(season)) {
-            targetSeason = s;
-            break;
-        }
-    }
 
-    if (!targetSeason && seasons.length > 0) {
-        const sorted = [...seasons].sort((a, b) =>
-            Math.abs(parseInt(a.seasonNumber) - season) - Math.abs(parseInt(b.seasonNumber) - season)
-        );
-        targetSeason = sorted[0];
-    }
-
-    if (!targetSeason) {
-        console.warn(`[AnimeSite] Season ${season} not found`);
-        return [];
-    }
-
-    const totalEpisodes = parseInt(targetSeason.numberOfEpisodes) || 0;
     const targetEpisodes = [episode || 1];
 
     const imdbId = await getImdbId(tmdbId, mediaType);
@@ -321,15 +315,38 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const episodeCount = totalEpisodes > 0 ? totalEpisodes : 12;
+    // Collect ALL sub-seasons matching the target season (e.g. "4" and "4.5" for season=4)
+    const seasonStr = String(season);
+    const matchingSeasons = seasons
+        .filter(s => {
+            const snum = String(s.seasonNumber);
+            return snum === seasonStr || snum.startsWith(seasonStr + '.');
+        })
+        .sort((a, b) => parseFloat(a.seasonNumber) - parseFloat(b.seasonNumber));
 
-    for (const ep of targetEpisodes) {
-        if (ep > episodeCount && episodeCount > 0) continue;
+    if (matchingSeasons.length === 0) {
+        console.warn(`[AnimeSite] Season ${season} not found`);
+        return [];
+    }
 
-        for (const lang of languages) {
-            const langStreams = await extractEpisodeStreams(slug, season, ep, lang);
-            streams.push(...langStreams);
+    // Iterate episodes across sub-seasons with cumulative counting
+    let cumulativeOffset = 0;
+    for (const subSeason of matchingSeasons) {
+        const subNum = subSeason.seasonNumber;
+        const subCount = parseInt(subSeason.numberOfEpisodes) || 0;
+        if (subCount === 0) continue;
+
+        for (let ep = 1; ep <= subCount; ep++) {
+            const cumulative = ep + cumulativeOffset;
+            const isTarget = targetEpisodes.some(t => t === cumulative);
+            if (!isTarget) continue;
+
+            for (const lang of languages) {
+                const langStreams = await extractEpisodeStreams(slug, subNum, ep, lang);
+                streams.push(...langStreams);
+            }
         }
+        cumulativeOffset += subCount;
     }
 
     const validStreams = streams.filter(s => s && s.url);

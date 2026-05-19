@@ -9,26 +9,52 @@ import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-const BASE_URL = "https://animevostfr.org";
-const MAX_SEARCH_TITLES = 5;
+const BASE_URL = "https://v2.animevostfr.org";
+const MAX_SEARCH_TITLES = 8;
+const SEARCH_TIMEOUT = 10000;
 
 /**
  * Search for anime on AnimeVOSTFR
  */
 async function searchAnime(title) {
     try {
-        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`);
+        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: SEARCH_TIMEOUT });
         const $ = cheerio.load(html);
         const results = [];
 
-        // ToroPlay search results use .TPost or .Result links
-        $('a').each((i, el) => {
+        // Only extract links from search result items, not from sidebar/menus/footer
+        $('.post-title a, .TPost a, .TPostMv a, article a[href*="/animes/"]').each((i, el) => {
             const h = $(el).attr('href') || '';
             const t = $(el).text().trim();
-            if (h.includes('/animes/') && t.length > 2) {
-                results.push({ title: t, url: h });
+            if (h.includes('/animes/')) {
+                // Use image alt as title if available (more accurate than link text)
+                const imgAlt = $(el).closest('.TPost, .TPostMv, article').find('img').first().attr('alt');
+                results.push({ title: imgAlt || t || h.split('/').pop().replace(/-/g, ' '), url: h, rawText: t });
             }
         });
+
+        // Fallback: if no structured results, look for any /animes/ link in likely content areas
+        if (results.length === 0) {
+            $('.content, #main, main, .result-item, li > a[href*="/animes/"]').each((i, el) => {
+                const h = $(el).attr('href') || '';
+                const t = $(el).text().trim();
+                if (h.includes('/animes/') && t.length > 2) {
+                    const imgAlt = $(el).closest('li, div').find('img').first().attr('alt');
+                    results.push({ title: imgAlt || t, url: h, rawText: t });
+                }
+            });
+        }
+
+        // Last resort: grab /animes/ links from the whole page
+        if (results.length === 0) {
+            $('a[href*="/animes/"]').each((i, el) => {
+                const h = $(el).attr('href') || '';
+                const t = $(el).text().trim();
+                if (h.includes('/animes/') && t.length > 2) {
+                    results.push({ title: t, url: h, rawText: t });
+                }
+            });
+        }
 
         // Deduplicate
         const seen = new Set();
@@ -38,27 +64,50 @@ async function searchAnime(title) {
             return true;
         });
 
-        console.log(`[AnimeVOSTFR] Search results: ${unique.length}`);
+        console.log(`[AnimeVOSTFR] Search results for "${title}": ${unique.length}`);
 
         const normalize = (s) => s.toLowerCase()
             .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-            .replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
+            .replace(/['\u2018\u2019:!.,?"]/g, '').replace(/\b(?:the|an?)\s+/g, '').replace(/\s+/g, ' ').trim();
         const simplifiedTitle = normalize(title);
+        const titleWords = simplifiedTitle.split(/\s+/).filter(w => w.length > 2);
 
-        // Find all matches that contain the title
-        let matches = unique.filter(r => normalize(r.title).includes(simplifiedTitle));
+        // Score each result by how many title words it matches
+        const scored = unique.map(r => {
+            const n = normalize(r.title);
+            let score = 0;
+            // Only use full includes match if simplifiedTitle is at least 5 chars (avoid false positives like "boys")
+            if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
+                score = 100;
+            } else if (n === simplifiedTitle) {
+                score = 200;
+            } else {
+                for (const w of titleWords) {
+                    if (n.includes(w)) score += 20;
+                }
+                // Penalize length difference
+                const lenRatio = Math.min(n.length, simplifiedTitle.length) / Math.max(n.length, simplifiedTitle.length);
+                score = Math.round(score * lenRatio);
+            }
+            return { ...r, score };
+        });
 
-        // If no exact match but we have search results, trust the search engine
-        // This helps with English/French title differences (e.g. "Attack on Titan" -> "L'Attaque des Titans")
-        if (matches.length === 0 && unique.length > 0) {
-            console.log(`[AnimeVOSTFR] No exact match for "${title}", falling back to ${unique.length} search results`);
-            matches = unique;
+        scored.sort((a, b) => b.score - a.score);
+        const best = scored[0];
+        const bestScore = best ? best.score : 0;
+
+        let matches;
+        if (best && bestScore >= 40) {
+            // Keep only results with score at least 50% of best score
+            const threshold = Math.max(20, bestScore * 0.5);
+            matches = scored.filter(r => r.score >= threshold);
+        } else {
+            // No good match - return empty rather than garbage
+            matches = [];
         }
 
-        if (matches.length > 0) {
-            console.log(`[AnimeVOSTFR] Found ${matches.length} matches for ${title}`);
-        }
-        return matches;
+        console.log(`[AnimeVOSTFR] Best match: "${best?.title}" (score ${bestScore}) -> ${matches.length} results kept`);
+        return matches.map(r => ({ title: r.title, url: r.url }));
     } catch (e) {
         console.error(`[AnimeVOSTFR] Search error: ${e.message}`);
         return [];
@@ -70,7 +119,7 @@ async function searchAnime(title) {
  */
 async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
     try {
-        const html = await fetchText(seriesUrl);
+        const html = await fetchText(seriesUrl, { timeout: SEARCH_TIMEOUT });
         const $ = cheerio.load(html);
         const episodeLinks = [];
 
@@ -83,20 +132,30 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
 
         console.log(`[AnimeVOSTFR] Found ${episodeLinks.length} episode links`);
 
-        // Create strict regex patterns for the episode number
+        // If this is a movie (no season/episode), use the first episode URL found
+        if (season == null || episode == null) {
+            if (episodeLinks.length > 0) {
+                console.log(`[AnimeVOSTFR] Movie mode: using episode URL ${episodeLinks[0].url}`);
+                return episodeLinks[0].url;
+            }
+            // Maybe it's a direct page with embedded player, try the series URL itself
+            return seriesUrl;
+        }
+
         const epStr = String(episode);
         const epPadded = epStr.padStart(2, '0');
         
         // 1. Try to find match in URL first (more reliable)
         // AnimeVOSTFR URL format: {slug}-{season_num}-episode-{ep_num}  (no "saison" word)
         // Also support legacy pattern with "saison" word
+        const seasonPattern = season ? String(season) : '';
         const sortedUrlPatterns = [
             // Primary: no "saison" word (real URL format: -1-episode-1)
-            new RegExp(`-${season}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
-            new RegExp(`-${season}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-${seasonPattern}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-${seasonPattern}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
             // Legacy: with "saison" word
-            new RegExp(`-saison-${season}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
-            new RegExp(`-saison-${season}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-saison-${seasonPattern}-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
+            new RegExp(`-saison-${seasonPattern}-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
             // No season number in URL (single-season animes)
             new RegExp(`-episode-${epStr}(?:-vostfr|-vf|/|$)`, 'i'),
             new RegExp(`-episode-${epPadded}(?:-vostfr|-vf|/|$)`, 'i'),
@@ -109,9 +168,9 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
                 if (!pattern.test(l.url)) return false;
                 
                 // If we are looking for a relative episode, reject URLs that explicitly mention a different season
-                if (!isAbsolute) {
+                if (!isAbsolute && season != null) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
-                    if (seasonMatch && parseInt(seasonMatch[1]) !== season) {
+                    if (seasonMatch && parseInt(seasonMatch[1]) !== Number(season)) {
                         return false;
                     }
                 }
@@ -136,9 +195,9 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
                 if (!pattern.test(l.text)) return false;
                 
                 // If we are looking for a relative episode, reject URLs that explicitly mention a different season
-                if (!isAbsolute) {
+                if (!isAbsolute && season != null) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
-                    if (seasonMatch && parseInt(seasonMatch[1]) !== season) {
+                    if (seasonMatch && parseInt(seasonMatch[1]) !== Number(season)) {
                         return false;
                     }
                 }
@@ -164,7 +223,7 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
 async function extractPlayersFromEpisode(episodeUrl) {
     const streams = [];
     try {
-        const html = await fetchText(episodeUrl);
+        const html = await fetchText(episodeUrl, { timeout: SEARCH_TIMEOUT });
         const $ = cheerio.load(html);
 
         // Get server names and their tab IDs from TPlayerNv
@@ -210,10 +269,10 @@ async function extractPlayersFromEpisode(episodeUrl) {
             try {
                 let trembedUrl = entry.src;
                 if (trembedUrl.startsWith('/')) trembedUrl = BASE_URL + trembedUrl;
-                else if (trembedUrl.startsWith('?')) trembedUrl = BASE_URL + '/' + trembedUrl;
+                else if (trembedUrl.startsWith('?')) trembedUrl = BASE_URL + trembedUrl;
                 if (!trembedUrl.startsWith('http')) return null;
 
-                const embedHtml = await fetchText(trembedUrl, { headers: { 'Referer': episodeUrl } });
+                const embedHtml = await fetchText(trembedUrl, { timeout: SEARCH_TIMEOUT, headers: { 'Referer': episodeUrl } });
                 const $embed = cheerio.load(embedHtml);
 
                 // Find the real player iframe src
@@ -298,18 +357,45 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     // ------------------------------------
 
+    // For movies, use season=1, episode=1 to search episode pages
+    const searchSeason = (mediaType === 'movie' && season == null) ? 1 : season;
+    const searchEpisode = (mediaType === 'movie' && episode == null) ? 1 : episode;
+
+    const baseTitles = titlesOrdered.slice(0, MAX_SEARCH_TITLES);
+    // Also generate shorter title forms for search
+    const shortTitles = [];
+    for (const t of baseTitles) {
+        shortTitles.push(t);
+        // Try shorter forms: split on ":", "-", "–"
+        const parts = t.split(/[:\–\-]+/).map(s => s.trim()).filter(s => s.length > 5);
+        for (const p of parts) {
+            if (p !== t) shortTitles.push(p);
+        }
+        // Try first 3-4 significant words
+        const words = t.split(/\s+/).filter(w => w.length > 2);
+        if (words.length > 3) {
+            shortTitles.push(words.slice(0, 3).join(' '));
+            shortTitles.push(words.slice(0, 4).join(' '));
+        }
+    }
+
     let matches = [];
-    for (const t of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
+    const triedTitles = new Set();
+    for (const t of shortTitles) {
+        const key = t.toLowerCase().trim();
+        if (triedTitles.has(key)) continue;
+        triedTitles.add(key);
         matches = await searchAnime(t);
         if (matches && matches.length > 0) break;
     }
     if (!matches || matches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned
+    const seasonStr = searchSeason ? String(searchSeason) : '';
     matches = matches.sort((a, b) => {
         const aT = a.title.toLowerCase();
         const bT = b.title.toLowerCase();
-        const sMatch = `saison ${season}`;
+        const sMatch = `saison ${seasonStr}`;
         const hasA = aT.includes(sMatch);
         const hasB = bT.includes(sMatch);
         if (hasA && !hasB) return -1;
@@ -320,6 +406,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const streams = [];
     const checkedEpisodeUrls = new Set();
     const checkedSeriesUrls = new Set();
+    const mainTitle = titlesOrdered[0]?.toLowerCase() || '';
+    const mainWords = mainTitle.split(/\s+/).filter(w => w.length > 3);
 
     for (const match of matches) {
         if (checkedSeriesUrls.has(match.url)) continue;
@@ -329,23 +417,33 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         const isVf = matchLower.includes(' vf') || match.url.includes('vf');
         const langSuffix = isVf ? 'VF' : 'VOSTFR';
 
+        // Detect spinoff/prelude: if match title contains spinoff keywords not in the main title
+        const spinoffKeywords = ['vigilantes', 'prelude', 'special', 'ova', 'ona'];
+        const isSpinoff = spinoffKeywords.some(k => matchLower.includes(k))
+            && !mainWords.some(w => matchLower.includes(w));
+        // If it looks like a spinoff and we have other matches, skip it
+        if (isSpinoff && matches.length > 1) {
+            console.log(`[AnimeVOSTFR] Skipping spinoff match: ${match.title}`);
+            continue;
+        }
+
         // Optimization: if the result is explicitly for a different season, 
         // skip it unless targetEpisodes contains an absolute episode (which might be in any season page)
-        const seasonMatch = matchLower.match(/saison\s*(\d+)/);
-        if (seasonMatch && parseInt(seasonMatch[1]) !== season && targetEpisodes.length === 1) {
+        const seasonMatchText = matchLower.match(/saison\s*(\d+)/);
+        if (seasonMatchText && parseInt(seasonMatchText[1]) !== Number(searchSeason) && targetEpisodes.length === 1) {
             continue;
         }
 
         for (const ep of targetEpisodes) {
             // Find the episode URL from the series page
-            const isAbsolute = ep !== episode;
-            const episodeUrl = await findEpisodeUrl(match.url, season, ep, isAbsolute);
+            const isAbsolute = ep !== searchEpisode;
+            const episodeUrl = await findEpisodeUrl(match.url, searchSeason, ep, isAbsolute);
             if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
                 checkedEpisodeUrls.add(episodeUrl);
                 const playerStreams = await extractPlayersFromEpisode(episodeUrl);
                 
                 // Add language/episode context to names
-                const epType = ep === episode ? "" : ` (Abs ${ep})`;
+                const epType = ep === searchEpisode ? "" : ` (Abs ${ep})`;
                 playerStreams.forEach(s => {
                     if (!s.name.includes('(')) {
                         s.name = `AnimeVOSTFR (${langSuffix})`;
@@ -360,13 +458,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 streams.push(...playerStreams);
             }
         }
-        
-        // If we found streams for the primary season, we can stop searching other entries 
-        // unless we want to be exhaustive. Let's be exhaustive for VF/VOSTFR balance.
     }
 
     if (streams.length === 0) {
-        console.warn(`[AnimeVOSTFR] Episode S${season}E${episode} not found (targets: ${targetEpisodes.join(', ')})`);
+        console.warn(`[AnimeVOSTFR] Episode S${searchSeason}E${searchEpisode} not found (targets: ${targetEpisodes.join(', ')})`);
     }
 
     const validStreams = streams.filter(s => s && s.isDirect);

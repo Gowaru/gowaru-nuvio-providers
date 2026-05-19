@@ -17,7 +17,7 @@ export const HEADERS = {
  */
 export async function fetchText(url, options = {}) {
     console.log(`[AnimesUltra] Fetching: ${url}`);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    const res = await safeFetch(url, { timeout: 10000, headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);
