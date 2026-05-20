@@ -79,7 +79,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -127,7 +127,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.39",
+      "version": "1.1.40",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

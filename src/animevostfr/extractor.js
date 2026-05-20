@@ -14,47 +14,42 @@ const MAX_SEARCH_TITLES = 8;
 const SEARCH_TIMEOUT = 10000;
 
 /**
+ * Parse anime search results from HTML using regex (avoids cheerio corruption in QuickJS)
+ */
+function parseSearchResults(html) {
+    const results = [];
+    const seenUrls = new Set();
+
+    // Match links containing /animes/ with their text and image alt
+    const linkRegex = /<a\s+[^>]*href="([^"]*\/animes\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+    while ((match = linkRegex.exec(html)) !== null) {
+        const url = match[1];
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        const inner = match[2];
+        const text = inner.replace(/<[^>]+>/g, '').trim();
+        if (text.length <= 2) continue;
+
+        // Look for an image alt near this link
+        const imgAltMatch = html.slice(Math.max(0, match.index - 500), match.index + match[0].length + 500)
+            .match(/<img[^>]+alt="([^"]*)"/i);
+        const title = (imgAltMatch && imgAltMatch[1].trim()) || text || url.split('/').pop().replace(/-/g, ' ');
+
+        results.push({ title, url, rawText: text });
+    }
+
+    return results;
+}
+
+/**
  * Search for anime on AnimeVOSTFR
  */
 async function searchAnime(title) {
     try {
         const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: SEARCH_TIMEOUT });
-        const $ = cheerio.load(html);
-        const results = [];
-
-        // Only extract links from search result items, not from sidebar/menus/footer
-        $('.post-title a, .TPost a, .TPostMv a, article a[href*="/animes/"]').each((i, el) => {
-            const h = $(el).attr('href') || '';
-            const t = $(el).text().trim();
-            if (h.includes('/animes/')) {
-                // Use image alt as title if available (more accurate than link text)
-                const imgAlt = $(el).closest('.TPost, .TPostMv, article').find('img').first().attr('alt');
-                results.push({ title: imgAlt || t || h.split('/').pop().replace(/-/g, ' '), url: h, rawText: t });
-            }
-        });
-
-        // Fallback: if no structured results, look for any /animes/ link in likely content areas
-        if (results.length === 0) {
-            $('.content, #main, main, .result-item, li > a[href*="/animes/"]').each((i, el) => {
-                const h = $(el).attr('href') || '';
-                const t = $(el).text().trim();
-                if (h.includes('/animes/') && t.length > 2) {
-                    const imgAlt = $(el).closest('li, div').find('img').first().attr('alt');
-                    results.push({ title: imgAlt || t, url: h, rawText: t });
-                }
-            });
-        }
-
-        // Last resort: grab /animes/ links from the whole page
-        if (results.length === 0) {
-            $('a[href*="/animes/"]').each((i, el) => {
-                const h = $(el).attr('href') || '';
-                const t = $(el).text().trim();
-                if (h.includes('/animes/') && t.length > 2) {
-                    results.push({ title: t, url: h, rawText: t });
-                }
-            });
-        }
+        let results = parseSearchResults(html);
 
         // Deduplicate
         const seen = new Set();
@@ -76,7 +71,6 @@ async function searchAnime(title) {
         const scored = unique.map(r => {
             const n = normalize(r.title);
             let score = 0;
-            // Only use full includes match if simplifiedTitle is at least 5 chars (avoid false positives like "boys")
             if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
                 score = 100;
             } else if (n === simplifiedTitle) {
@@ -85,7 +79,6 @@ async function searchAnime(title) {
                 for (const w of titleWords) {
                     if (n.includes(w)) score += 20;
                 }
-                // Penalize length difference
                 const lenRatio = Math.min(n.length, simplifiedTitle.length) / Math.max(n.length, simplifiedTitle.length);
                 score = Math.round(score * lenRatio);
             }
@@ -98,11 +91,9 @@ async function searchAnime(title) {
 
         let matches;
         if (best && bestScore >= 25) {
-            // Keep only results with score at least 50% of best score
             const threshold = Math.max(20, bestScore * 0.5);
             matches = scored.filter(r => r.score >= threshold);
         } else {
-            // No good match - return empty rather than garbage
             matches = [];
         }
 

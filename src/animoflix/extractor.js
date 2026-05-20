@@ -1,5 +1,4 @@
 import { fetchText, fetchJson } from './http.js';
-import cheerio from 'cheerio-without-node-native';
 import { resolveStream } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
@@ -28,23 +27,22 @@ async function searchAnime(title) {
     // Fallback: scrape HTML search page
     try {
         const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
-        const $ = cheerio.load(html);
         const results = [];
-        $('.post-title a, .TPost a[href*="/anime/"], a[href*="/anime/"]').each((i, el) => {
-            const href = $(el).attr('href');
-            const rawText = $(el).text().trim();
+        const linkRe = /<a[^>]*href="([^"]*\/anime\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+        let m;
+        while ((m = linkRe.exec(html)) !== null) {
+            const href = m[1];
+            const rawText = m[2].replace(/<[^>]*>/g, '').trim();
             const text = rawText.replace(/\s+/g, ' ').trim();
-            if (href && href.includes('/anime/') && text.length > 2) {
-                const imgAlt = $(el).closest('.TPost, .TPostMv, article, li').find('img').first().attr('alt');
-                const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
+            if (href.includes('/anime/') && text.length > 2) {
                 results.push({
-                    title: cleanTitle,
-                    title2: cleanTitle,
+                    title: text,
+                    title2: text,
                     slug: href.replace(/.*\/anime\//, '').replace(/\/$/, ''),
                     url: href
                 });
             }
-        });
+        }
         if (results.length > 0) return results;
     } catch (e) {
         console.warn(`[AnimoFlix] Search HTML fallback also failed: ${e.message}`);
@@ -173,9 +171,9 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     console.log(`[AnimoFlix] Matched: "${bestMatch.title}" (slug: ${slug})`);
 
     const animeDetailHtml = await fetchWithRetry(`${BASE_URL}/anime/${slug}/`, { timeout: TIMEOUT });
-    const $ = cheerio.load(animeDetailHtml);
 
-    const pageTitle = $('h1.anime-title-pro').first().text().trim();
+    const pageTitleMatch = animeDetailHtml.match(/<h1[^>]*class="[^"]*anime-title-pro[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
+    const pageTitle = pageTitleMatch ? pageTitleMatch[1].replace(/<[^>]*>/g, '').trim() : '';
     if (pageTitle) {
         const nPage = normalize(pageTitle);
         const nSearch = normalize(bestMatch.title);
@@ -186,19 +184,21 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
 
     const seasons = [];
     let filmSeasonHref = null;
-    $('.season-card').each((i, el) => {
-        const href = $(el).attr('href');
-        const title = $(el).find('.season-title').text().trim();
+    const seasonRe = /<a[^>]+class="[^"]*season-card[^"]*"[^>]*href="([^"]*)"[^>]*>[\s\S]*?<[^>]+class="[^"]*season-title[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>[\s\S]*?<\/a>/gi;
+    let sm;
+    while ((sm = seasonRe.exec(animeDetailHtml)) !== null) {
+        const href = sm[1];
+        const title = sm[2].replace(/<[^>]*>/g, '').trim();
         if (href && title) {
             if (/film|movie/i.test(title)) {
                 filmSeasonHref = href;
-                return;
+                continue;
             }
-            if (/oav|ona/i.test(title)) return;
+            if (/oav|ona/i.test(title)) continue;
             const seasonNum = parseSeasonNumber(href);
             seasons.push({ href, title, seasonNum });
         }
-    });
+    }
 
     if (isMovie) {
         // Try season-based URL first (movies listed under Saison 1), then fall back to film URL
@@ -236,22 +236,21 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
             : `${BASE_URL}${targetSeason.href.startsWith('/') ? '' : '/'}${targetSeason.href}`;
 
         const seasonHtml = await fetchWithRetry(seasonPageUrl, { timeout: TIMEOUT });
-        const $s = cheerio.load(seasonHtml);
         const episodeLinks = {};
 
         for (const lang of langs) {
             episodeLinks[lang] = [];
-            $s(`a.episode-card[href*="/${lang}/episode-"]`).each((i, el) => {
-                const href = $(el).attr('href');
-                const epMatch = href.match(/episode-(\d+)\/?$/);
-                if (href && epMatch) {
-                    episodeLinks[lang].push({
-                        num: parseInt(epMatch[1]),
-                        cumulative: parseInt(epMatch[1]) + cumulOffset,
-                        href: href.startsWith('http') ? href : `${BASE_URL}${href}`
-                    });
-                }
-            });
+            const epRe = new RegExp(`<a[^>]+href="([^"]*/${lang}/episode-(\\d+)[^"]*)"[^>]*>`, 'gi');
+            let em;
+            while ((em = epRe.exec(seasonHtml)) !== null) {
+                const href = em[1];
+                const epNum = parseInt(em[2]);
+                episodeLinks[lang].push({
+                    num: epNum,
+                    cumulative: epNum + cumulOffset,
+                    href: href.startsWith('http') ? href : `${BASE_URL}${href}`
+                });
+            }
         }
 
         for (const lang of langs) {
@@ -325,9 +324,8 @@ async function extractMovieStreams(slug, seasonHref) {
             const url = buildUrl(lang);
             try {
                 const html = await fetchWithRetry(url, { timeout: TIMEOUT });
-                const $ = cheerio.load(html);
 
-                if ($('#lecteurSelect option').length > 0 || html.includes('lecteurSelect')) {
+                if (/<select[^>]*id="lecteurSelect"[^>]*>[\s\S]*?<option/i.test(html) || html.includes('lecteurSelect')) {
                     const epStreams = await extractEpisodeStreams(url, lang === 'vf' ? 'VF' : 'VOSTFR', slug);
                     streams.push(...epStreams);
                     break;
@@ -343,15 +341,17 @@ async function extractMovieStreams(slug, seasonHref) {
 
 async function extractEpisodeStreams(episodeUrl, langLabel, slug) {
     const html = await fetchWithRetry(episodeUrl, { timeout: TIMEOUT });
-    const $ = cheerio.load(html);
 
     const embedUrls = [];
-    $('#lecteurSelect option').each((i, el) => {
-        const val = $(el).val();
-        if (val && val.startsWith('http')) {
-            embedUrls.push(val);
+    const selectRe = /<select[^>]*id="lecteurSelect"[^>]*>([\s\S]*?)<\/select>/i;
+    const selectMatch = html.match(selectRe);
+    if (selectMatch) {
+        const optionRe = /<option[^>]*value="(https?:\/\/[^"]*)"[^>]*>/g;
+        let om;
+        while ((om = optionRe.exec(selectMatch[1])) !== null) {
+            embedUrls.push(om[1]);
         }
-    });
+    }
 
     if (embedUrls.length === 0) {
         const jsonLdEmbed = html.match(/"embedUrl"\s*:\s*"(https?:\/\/[^"]+)"/);
