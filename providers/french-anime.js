@@ -1,6 +1,6 @@
 /**
  * french-anime - Built from src/french-anime/
- * Generated: 2026-05-20T18:33:10.606990594Z
+ * Generated: 2026-05-20T18:53:25.896205888Z
  */
 var __provider = (() => {
   var __create = Object.create;

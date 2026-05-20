@@ -1,6 +1,6 @@
 /**
  * mugiwarastream - Built from src/mugiwarastream/
- * Generated: 2026-05-20T18:33:10.680990671Z
+ * Generated: 2026-05-20T18:53:25.963205955Z
  */
 var __provider = (() => {
   var __getOwnPropNames = Object.getOwnPropertyNames;

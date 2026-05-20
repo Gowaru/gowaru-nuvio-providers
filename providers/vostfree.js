@@ -1,6 +1,6 @@
 /**
  * vostfree - Built from src/vostfree/
- * Generated: 2026-05-20T18:33:10.766990725Z
+ * Generated: 2026-05-20T18:53:26.031206003Z
  */
 var __provider = (() => {
   var __create = Object.create;
