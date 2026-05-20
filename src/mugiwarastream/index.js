@@ -1,5 +1,5 @@
 import { extractStreams } from './extractor.js';
-import { expandStreamQualities } from '../utils/resolvers.js';
+import { expandStreamQualities, configureStreamConfig } from '../utils/resolvers.js';
 
 async function getStreams(tmdbId, mediaType, season, episode) {
     const se = mediaType === 'movie' ? '' : ` S${season}E${episode}`;
@@ -14,4 +14,4 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     }
 }
 
-module.exports = { getStreams };
+module.exports = { getStreams, configureStreamConfig };
