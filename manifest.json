@@ -223,7 +223,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "1.0.25",
+      "version": "1.0.26",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
