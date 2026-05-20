@@ -5,7 +5,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
   console.log(`[DuLourd] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
   try {
     const streams = await extractStreams(tmdbId, mediaType, season, episode);
-    return streams;
+    const result = await expandStreamQualities(streams);
+    return result;
   } catch (error) {
     console.error(`[DuLourd] Error:`, error);
     return [];

@@ -1,6 +1,6 @@
 /**
  * movix - Built from src/movix/
- * Generated: 2026-05-20T17:12:11.95513194Z
+ * Generated: 2026-05-20T18:33:10.671990655Z
  */
 var __provider = (() => {
   var __getOwnPropNames = Object.getOwnPropertyNames;
