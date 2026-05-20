@@ -17,7 +17,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        return streams;
+        const result = await expandStreamQualities(streams);
+        return result;
     } catch (error) {
         console.error(`[VoirAnime] Error:`, error);
         return [];
