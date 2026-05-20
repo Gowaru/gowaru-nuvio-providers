@@ -10,7 +10,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        return await expandStreamQualities(streams);
+        return streams;
     } catch (error) {
         console.error(`[AnimoFlix] Error:`, error);
         return [];

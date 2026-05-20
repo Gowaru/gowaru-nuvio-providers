@@ -19,7 +19,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
         // Call extraction logic
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        return await expandStreamQualities(streams);
+        return streams;
     } catch (error) {
         console.error(`[Anime-Sama] Error: ${error.message}`);
         return [];
