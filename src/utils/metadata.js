@@ -17,66 +17,65 @@ import { safeFetch } from './resolvers.js';
  * @param {'tv'|'movie'} mediaType
  * @returns {Promise<string[]>}
  */
+async function tryFetchTitle(url, processor) {
+    try {
+        const res = await safeFetch(url);
+        if (res) {
+            const data = await res.json();
+            return processor(data);
+        }
+    } catch (e) {
+        console.log(`[Metadata] Skipping endpoint: ${e.message}`);
+    }
+    return null;
+}
+
 export async function getTmdbTitles(tmdbId, mediaType) {
     const type = mediaType === 'movie' ? 'movie' : 'tv';
     const titles = [];
 
-    try {
-        // 1. Main API call — English title + original title
-        const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
-        const mainRes = await safeFetch(mainUrl);
-        if (mainRes) {
-            const data = await mainRes.json();
-            const titleEn = (type === 'movie' ? data.title : data.name)?.trim();
-            const titleOriginal = (type === 'movie' ? data.original_title : data.original_name)?.trim();
+    // 1. Main API call — English title + original title
+    const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
+    await tryFetchTitle(mainUrl, (data) => {
+        const titleEn = (type === 'movie' ? data.title : data.name)?.trim();
+        const titleOriginal = (type === 'movie' ? data.original_title : data.original_name)?.trim();
 
-            if (titleEn) titles.push(titleEn);
-            // Only add original if it differs and uses latin chars (romaji)
-            if (titleOriginal && titleOriginal !== titleEn && /^[\x00-\x7F\u00C0-\u024F\s]+$/.test(titleOriginal)) {
-                titles.push(titleOriginal);
-            }
+        if (titleEn) titles.push(titleEn);
+        if (titleOriginal && titleOriginal !== titleEn && /^[\x00-\x7F\u00C0-\u024F\s]+$/.test(titleOriginal)) {
+            titles.push(titleOriginal);
         }
+    });
 
-        // 2. French title via translations
-        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
-        const transRes = await safeFetch(transUrl);
-        if (transRes) {
-            const transData = await transRes.json();
-            const frTrans = (transData.translations || []).find(t => t.iso_639_1 === 'fr');
-            const titleFr = frTrans?.data?.name?.trim() || frTrans?.data?.title?.trim();
-            if (titleFr && !titles.includes(titleFr)) {
-                titles.push(titleFr);
-            }
+    // 2. French title via translations
+    const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
+    await tryFetchTitle(transUrl, (transData) => {
+        const frTrans = (transData.translations || []).find(t => t.iso_639_1 === 'fr');
+        const titleFr = frTrans?.data?.name?.trim() || frTrans?.data?.title?.trim();
+        if (titleFr && !titles.includes(titleFr)) {
+            titles.push(titleFr);
         }
+    });
 
-        // 3. Alternative titles (covers Romaji, English aliases, etc.)
-        const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
-        const altRes = await safeFetch(altUrl);
-        if (altRes) {
-            const altData = await altRes.json();
-            const altList = type === 'movie' ? altData.titles : altData.results;
-            if (altList && Array.isArray(altList)) {
-                // Priority: Romaji or English, then everything else in latin alphabet
-                const isLatin = (str) => /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()]+$/.test(str);
-                
-                altList.forEach(alt => {
-                    const t = alt.title?.trim();
-                    if (t && !titles.some(existing => existing.toLowerCase() === t.toLowerCase()) && isLatin(t)) {
-                        if (alt.type === 'Romaji' || alt.iso_3166_1 === 'US' || alt.iso_3166_1 === 'FR') {
-                            // Insert near the top, after the primary names
-                            titles.splice(1, 0, t);
-                        } else {
-                            titles.push(t);
-                        }
+    // 3. Alternative titles (covers Romaji, English aliases, etc.)
+    const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+    await tryFetchTitle(altUrl, (altData) => {
+        const altList = type === 'movie' ? altData.titles : altData.results;
+        if (altList && Array.isArray(altList)) {
+            const isLatin = (str) => /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()]+$/.test(str);
+
+            altList.forEach(alt => {
+                const t = alt.title?.trim();
+                if (t && !titles.some(existing => existing.toLowerCase() === t.toLowerCase()) && isLatin(t)) {
+                    if (alt.type === 'Romaji' || alt.iso_3166_1 === 'US' || alt.iso_3166_1 === 'FR') {
+                        titles.splice(1, 0, t);
+                    } else {
+                        titles.push(t);
                     }
-                });
-            }
+                }
+            });
         }
-    } catch (e) {
-        console.error(`[Metadata] TMDB API error: ${e.message}`);
-    }
+    });
 
-    // Deduplicate array completely
     const uniqueTitles = [...new Set(titles)];
     console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(' | ')}`);
     return uniqueTitles;

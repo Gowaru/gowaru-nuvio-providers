@@ -268,12 +268,14 @@ export async function safeFetch(url, options = {}) {
         const response = await fetch(url, fetchOpts);
         if (!response) return null;
 
-        const status = response.status;
         let bodyText = '';
         try {
             bodyText = await response.text();
         } catch (e) {
-            bodyText = '';
+            return null;
+        }
+        if (bodyText.length === 0 && response.ok) {
+            return null;
         }
 
         return {
