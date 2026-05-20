@@ -322,8 +322,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             for (const stream of results) {
                 if (stream) streams.push(stream);
             }
-            if (streams.length > 0) {
-                console.log(`[Vostfree] Found ${streams.length} streams from ${animeUrl}, stopping early`);
+            const directStreams = streams.filter(s => s && s.isDirect);
+            if (directStreams.length > 0) {
+                console.log(`[Vostfree] Found ${directStreams.length} direct streams from ${animeUrl}, stopping early`);
                 break;
             }
         } catch (e) {

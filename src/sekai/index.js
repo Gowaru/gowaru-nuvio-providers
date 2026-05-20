@@ -1,7 +1,7 @@
 import { extractStreams } from './extractor.js';
-import { expandStreamQualities, withTimeout } from '../utils/resolvers.js';
+import { expandStreamQualities, withTimeout, safeConfig } from '../utils/resolvers.js';
 
-const PROVIDER_TIMEOUT = parseInt(process.env.NUVIO_TIMEOUT_SEKAI, 10) || 30000;
+const PROVIDER_TIMEOUT = safeConfig('NUVIO_TIMEOUT_SEKAI', 30000);
 
 async function getStreams(tmdbId, mediaType, season, episode) {
     const label = `Sekai ${mediaType} ${tmdbId} S${season}E${episode}`;

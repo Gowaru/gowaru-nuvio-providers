@@ -223,7 +223,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     return _extractStreams(tmdbId, mediaType, season, episode);
 }
 
-async function getTitlesCached(tmdbId, mediaType) {
+async function getTitlesCached(tmdbId, mediaType, season) {
     const key = `${tmdbId}_${mediaType}`;
     if (tmdbTitleCache.has(key)) return tmdbTitleCache.get(key);
 
@@ -238,7 +238,7 @@ async function getTitlesCached(tmdbId, mediaType) {
 }
 
 async function _extractStreams(tmdbId, mediaType, season, episode) {
-    const titles = await getTitlesCached(tmdbId, mediaType);
+    const titles = await getTitlesCached(tmdbId, mediaType, season);
     if (titles.length === 0) return [];
 
     const isMovie = mediaType === 'movie';

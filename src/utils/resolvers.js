@@ -16,18 +16,32 @@ const _atob = (str) => {
 const CODEC_PREFERENCE = ['AV1', 'H.265', 'H.264', 'VP9'];
 
 /**
- * Wraps a promise with a hard timeout.
- * If the timeout fires, the promise rejects.
+ * Safely reads a numeric config value from process.env (Node.js)
+ * or returns the default (QuickJS where process is undefined).
+ */
+export function safeConfig(key, defaultVal) {
+    try {
+        if (typeof process !== 'undefined' && process.env && process.env[key]) {
+            const val = parseInt(process.env[key], 10);
+            return isNaN(val) ? defaultVal : val;
+        }
+    } catch (_) {}
+    return defaultVal;
+}
+
+/**
+ * Wraps a promise with a hard timeout (Node.js only).
+ * In QuickJS (no setTimeout), simply returns the promise — the app's own 60s
+ * context timeout handles it.
  */
 export async function withTimeout(promise, ms, label = 'Operation') {
-    if (!ms || ms <= 0) return promise;
+    if (!ms || ms <= 0 || typeof setTimeout === 'undefined') return promise;
     let timer;
     const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error(`[Timeout] ${label} exceeded ${ms}ms`)), ms);
     });
     try {
-        const result = await Promise.race([promise, timeout]);
-        return result;
+        return await Promise.race([promise, timeout]);
     } finally {
         clearTimeout(timer);
     }
@@ -310,7 +324,7 @@ export async function safeFetch(url, options = {}) {
             headers: { ...HEADERS, ...rest.headers },
             redirect: 'follow'
         };
-        if (timeout > 0 && typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+        if (timeout > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'undefined') {
             fetchOpts.signal = AbortSignal.timeout(timeout);
         }
         const response = await fetch(url, fetchOpts);
