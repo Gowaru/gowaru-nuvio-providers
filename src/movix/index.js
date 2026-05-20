@@ -3,17 +3,20 @@
  * Main entry point for Nuvio.
  */
 
-function configureStreamConfig() {}
+import { extractStreams } from './extractor.js';
+import { expandStreamQualities, configureStreamConfig } from '../utils/resolvers.js';
 
 async function getStreams(tmdbId, mediaType, season, episode) {
-    console.log(`[Movix] Test: ${mediaType} ${tmdbId} S${season}E${episode}`);
-    return [{
-        name: 'Test',
-        title: `[TEST] ${mediaType === 'movie' ? 'Movie' : 'TV'} - ${tmdbId} S${season}E${episode}`,
-        url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-        quality: '1080p',
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-    }];
+    try {
+        console.log(`[Movix] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
+        const streams = await extractStreams(tmdbId, mediaType, season, episode);
+        const result = await expandStreamQualities(streams);
+        console.log(`[Movix] Found ${result.length} streams`);
+        return result;
+    } catch (error) {
+        console.error(`[Movix] Error: ${error.message}`);
+        return [];
+    }
 }
 
 module.exports = { getStreams, configureStreamConfig };

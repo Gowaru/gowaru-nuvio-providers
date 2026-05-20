@@ -284,7 +284,7 @@ export async function safeFetch(url, options = {}) {
                 try { return JSON.parse(bodyText); } catch (e) { throw e; }
             },
             ok: response.ok,
-            status,
+            status: response.status,
             url: response.url,
             headers: response.headers
         };
@@ -751,6 +751,8 @@ export async function resolvePackedPlayer(url) {
     return { url };
 }
 
+const BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";
+
 export async function resolveStream(stream, depth = 0) {
     if (depth > 3) return { ...stream, isDirect: false }; // Prevent infinite loops
 
@@ -869,7 +871,5 @@ export async function resolveStream(stream, depth = 0) {
     
     return { ...stream, isDirect: false };
 }
-
-const BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";
 
 export { configureStreamConfig, resetConfig };

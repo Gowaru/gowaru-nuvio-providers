@@ -1,6 +1,6 @@
 /**
  * sekai - Built from src/sekai/
- * Generated: 2026-05-20T16:56:15.793175787Z
+ * Generated: 2026-05-20T17:12:11.988131975Z
  */
 var __provider = (() => {
   var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -17,9 +17,6 @@ var __provider = (() => {
       if (options[key] !== void 0) config[key] = options[key];
     }
   }
-  function getConfig() {
-    return { ...config };
-  }
   var DEFAULTS, config;
   var init_streamConfig = __esm({
     "src/utils/streamConfig.js"() {
@@ -35,191 +32,6 @@ var __provider = (() => {
   });
 
   // src/utils/resolvers.js
-  function isKnownFakeDirectUrl(url) {
-    if (!url || typeof url !== "string") return true;
-    const u = url.toLowerCase();
-    return u.includes("test-videos.co.uk") || u.includes("big_buck_bunny") || u.includes("bigbuckbunny") || u.includes("sample-videos.com") || u.includes("example.com") || u.includes("localhost");
-  }
-  function deriveFormat(url) {
-    const u = (url || "").toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls2/") || u.includes("/master.m3u8")) return "m3u8";
-    if (u.includes(".mp4")) return "mp4";
-    if (u.includes(".mkv")) return "mkv";
-    if (u.includes(".webm")) return "webm";
-    if (u.includes(".ts")) return "ts";
-    return "unknown";
-  }
-  function deriveLanguage(name, title) {
-    const text = ((name || "") + " " + (title || "")).toUpperCase();
-    if (/\b(?:VOSTFR|VOST)\b/.test(text)) return "VOSTFR";
-    if (/\b(?:VF(?!O)|FRENCH|FRANÇAIS|FRANCAIS)\b/.test(text)) return "VF";
-    if (/\b(?:MULTI|MULTILANGUE)\b/.test(text)) return "MULTI";
-    if (/\bVO\b/.test(text)) return "VO";
-    return "unknown";
-  }
-  function nearestQualityTier(height) {
-    if (!Number.isFinite(height) || height <= 0) return DEFAULT_QUALITY_TIER;
-    let nearest = STRICT_QUALITY_TIERS[0];
-    let minDiff = Math.abs(height - nearest);
-    for (const tier of STRICT_QUALITY_TIERS) {
-      const diff = Math.abs(height - tier);
-      if (diff < minDiff) {
-        minDiff = diff;
-        nearest = tier;
-      }
-    }
-    return nearest;
-  }
-  function normalizeQualityLabel(value) {
-    const raw = String(value || "").trim().toLowerCase();
-    if (!raw) return `${DEFAULT_QUALITY_TIER}p`;
-    if (raw === "4k" || raw === "uhd" || raw.includes("2160")) return "2160p";
-    if (raw.includes("fhd") || raw.includes("fullhd") || raw.includes("1080")) return "1080p";
-    if (raw.includes("hd") || raw.includes("720")) return "720p";
-    const numericMatch = raw.match(/(\d{3,4})\s*p?/i);
-    if (numericMatch) {
-      const tier = nearestQualityTier(Number(numericMatch[1]));
-      return `${tier}p`;
-    }
-    return `${DEFAULT_QUALITY_TIER}p`;
-  }
-  function qualityRank(value) {
-    const q = normalizeQualityLabel(value).toLowerCase();
-    const match = q.match(/(\d{3,4})p/);
-    const height = match ? Number(match[1]) : DEFAULT_QUALITY_TIER;
-    const tier = nearestQualityTier(height);
-    return STRICT_QUALITY_TIERS.length - 1 - STRICT_QUALITY_TIERS.indexOf(tier);
-  }
-  function appendQualityToTitle(title, quality) {
-    const q = normalizeQualityLabel(quality);
-    if (!q) return title;
-    if ((title || "").includes(q)) return title;
-    return `${title} [${q}]`;
-  }
-  async function expandSingleStreamQualities(stream) {
-    if (!stream || !stream.url || typeof stream.url !== "string") return [];
-    const url = stream.url;
-    const lower = url.toLowerCase();
-    if (!lower.includes(".m3u8") && !lower.includes("/hls/")) {
-      return [{ ...stream, quality: normalizeQualityLabel(stream.quality || "HD") }];
-    }
-    const res = await safeFetch(url, { headers: stream.headers || {} });
-    if (!res) {
-      return [{ ...stream, quality: normalizeQualityLabel(stream.quality || "HD") }];
-    }
-    const manifest = await res.text();
-    if (!/#EXT-X-STREAM-INF/i.test(manifest)) {
-      return [{ ...stream, quality: normalizeQualityLabel(stream.quality || "HD") }];
-    }
-    const lines = manifest.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const variants = [];
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index];
-      if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
-      const nextLine = lines[index + 1];
-      if (!nextLine || nextLine.startsWith("#")) continue;
-      const resolution = line.match(/RESOLUTION=\d+x(\d+)/i)?.[1];
-      const frameRate = line.match(/FRAME-RATE=([0-9.]+)/i)?.[1];
-      const bandwidth = line.match(/BANDWIDTH=(\d+)/i)?.[1];
-      let quality = resolution ? `${resolution}p` : null;
-      if (!quality && bandwidth) {
-        const bw = Number(bandwidth);
-        if (bw >= 8e6) quality = "2160p";
-        else if (bw >= 4e6) quality = "1080p";
-        else if (bw >= 2e6) quality = "720p";
-        else if (bw >= 1e6) quality = "480p";
-        else quality = "360p";
-      }
-      if (!quality && frameRate) quality = `${normalizeQualityLabel(stream.quality || "HD")}`;
-      let variantUrl = nextLine;
-      try {
-        variantUrl = new URL(nextLine, url).toString();
-      } catch (e) {
-      }
-      variants.push({
-        ...stream,
-        url: variantUrl,
-        quality: normalizeQualityLabel(quality || stream.quality || "HD"),
-        title: appendQualityToTitle(stream.title || stream.name || "Stream", quality || stream.quality || "HD")
-      });
-    }
-    if (variants.length === 0) {
-      return [{ ...stream, quality: normalizeQualityLabel(stream.quality || "HD") }];
-    }
-    const unique = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const variant of variants) {
-      if (seen.has(variant.url)) continue;
-      seen.add(variant.url);
-      unique.push(variant);
-    }
-    unique.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
-    return unique;
-  }
-  async function expandStreamQualities(streams) {
-    const input = Array.isArray(streams) ? streams : [];
-    const expanded = [];
-    for (const stream of input) {
-      try {
-        const variants = await expandSingleStreamQualities(stream);
-        for (const variant of variants) {
-          expanded.push(variant);
-        }
-      } catch (e) {
-        if (stream) expanded.push({ ...stream, quality: normalizeQualityLabel(stream.quality || "HD") });
-      }
-    }
-    const enriched = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const stream of expanded) {
-      if (!stream?.url) continue;
-      if (isKnownFakeDirectUrl(stream.url)) continue;
-      if (seen.has(stream.url)) continue;
-      seen.add(stream.url);
-      enriched.push({
-        ...stream,
-        format: stream.format || deriveFormat(stream.url),
-        language: stream.language || deriveLanguage(stream.name, stream.title)
-      });
-    }
-    const cfg = getConfig();
-    let filtered = enriched;
-    if (cfg.preferredLanguage) {
-      const lang = cfg.preferredLanguage.toUpperCase();
-      filtered = filtered.filter((s) => {
-        if (s.language === "unknown") return true;
-        if (s.language === lang) return true;
-        return false;
-      });
-    }
-    if (cfg.strictMode && cfg.preferredFormats) {
-      const formats = cfg.preferredFormats.map((f) => f.toLowerCase());
-      filtered = filtered.filter((s) => formats.includes(s.format));
-    }
-    const formatOrder = (cfg.preferredFormats || ["m3u8", "mp4", "mkv"]).map((f) => f.toLowerCase());
-    const qualityMatch = cfg.preferredQuality ? cfg.preferredQuality.toLowerCase() : null;
-    filtered.sort((a, b) => {
-      const aQual = a.quality?.toLowerCase() || "";
-      const bQual = b.quality?.toLowerCase() || "";
-      if (qualityMatch) {
-        const aMatch = aQual.includes(qualityMatch) || qualityMatch.includes(aQual);
-        const bMatch = bQual.includes(qualityMatch) || qualityMatch.includes(bQual);
-        if (aMatch && !bMatch) return -1;
-        if (!aMatch && bMatch) return 1;
-      }
-      const aRank = qualityRank(b.quality) - qualityRank(a.quality);
-      if (aRank !== 0) return aRank;
-      const aFmt = formatOrder.indexOf(a.format);
-      const bFmt = formatOrder.indexOf(b.format);
-      const aFmtRank = aFmt >= 0 ? aFmt : 999;
-      const bFmtRank = bFmt >= 0 ? bFmt : 999;
-      return aFmtRank - bFmtRank;
-    });
-    if (cfg.maxStreams > 0 && filtered.length > cfg.maxStreams) {
-      filtered = filtered.slice(0, cfg.maxStreams);
-    }
-    return filtered;
-  }
   async function safeFetch(url, options = {}) {
     try {
       const { timeout, ...rest } = options;
@@ -252,7 +64,7 @@ var __provider = (() => {
           }
         },
         ok: response.ok,
-        status,
+        status: response.status,
         url: response.url,
         headers: response.headers
       };
@@ -260,7 +72,7 @@ var __provider = (() => {
       return null;
     }
   }
-  var HEADERS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER;
+  var HEADERS;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       init_streamConfig();
@@ -268,8 +80,6 @@ var __provider = (() => {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
         "Accept-Encoding": "identity"
       };
-      STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
-      DEFAULT_QUALITY_TIER = 360;
     }
   });
 
@@ -278,8 +88,8 @@ var __provider = (() => {
     console.log(`[Sekai] Fetching: ${url}`);
     const res = await safeFetch(url, { headers: { ...HEADERS2, ...options.headers || {} }, ...options });
     if (!res || !res.ok) {
-      const status2 = res && typeof res.status === "number" ? res.status : "no-response";
-      throw new Error(`HTTP ${status2} for ${url}`);
+      const status = res && typeof res.status === "number" ? res.status : "no-response";
+      throw new Error(`HTTP ${status} for ${url}`);
     }
     return await res.text();
   }
@@ -684,7 +494,7 @@ var __provider = (() => {
         console.log(`[Sekai] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
         try {
           const streams = await extractStreams(tmdbId, mediaType, season, episode);
-          return await expandStreamQualities(streams);
+          return streams;
         } catch (error) {
           console.error(`[Sekai] Extraction error for ${tmdbId}:`, error);
           return [];

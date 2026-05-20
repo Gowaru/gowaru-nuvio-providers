@@ -1,6 +1,6 @@
 /**
  * movix - Built from src/movix/
- * Generated: 2026-05-20T16:56:15.778175772Z
+ * Generated: 2026-05-20T17:12:11.95513194Z
  */
 var __provider = (() => {
   var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -258,7 +258,7 @@ var __provider = (() => {
           }
         },
         ok: response.ok,
-        status,
+        status: response.status,
         url: response.url,
         headers: response.headers
       };
@@ -772,8 +772,8 @@ var __provider = (() => {
     try {
       const res = await safeFetch(url, { headers: { ...HEADERS2, ...options.headers || {} }, ...options });
       if (!res || !res.ok) {
-        const status2 = res && typeof res.status === "number" ? res.status : "no-response";
-        console.log(`[Movix] HTTP ${status2} for ${url}`);
+        const status = res && typeof res.status === "number" ? res.status : "no-response";
+        console.log(`[Movix] HTTP ${status} for ${url}`);
         return null;
       }
       try {
