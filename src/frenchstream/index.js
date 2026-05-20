@@ -17,9 +17,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     try {
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        const expanded = await expandStreamQualities(streams);
-        console.log(`[Frenchstream] Found ${expanded.length} stream(s)`);
-        return expanded;
+        console.log(`[Frenchstream] Found ${streams.length} stream(s)`);
+        return streams;
     } catch (error) {
         console.error(`[Frenchstream] Error:`, error);
         return [];

@@ -10,9 +10,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
     try {
         console.log(`[Movix] Request: ${mediaType} ${tmdbId} S${season}E${episode}`);
         const streams = await extractStreams(tmdbId, mediaType, season, episode);
-        const result = await expandStreamQualities(streams);
-        console.log(`[Movix] Found ${result.length} streams`);
-        return result;
+        console.log(`[Movix] Found ${streams.length} streams`);
+        return streams;
     } catch (error) {
         console.error(`[Movix] Error: ${error.message}`);
         return [];
