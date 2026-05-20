@@ -55,10 +55,12 @@ async function buildProvider(providerName, minify = false) {
             bundle: true,
             outfile: outFile,
             format: 'iife',             // Sandbox-friendly script output
-            platform: 'browser',        // Avoid require/module assumptions in TV runtimes
-            target: 'es2016',           // Transpile async/await to generators for Hermes
+            platform: 'neutral',        // QuickJS runtime, not browser
+            target: 'es2020',           // QuickJS supports ES2020 natively
             minify: minify,             // Minify bundle
             sourcemap: false,
+            external: ['cheerio', 'cheerio-without-node-native', 'react-native-cheerio', 'crypto-js'],
+            mainFields: ['main', 'module'],
             globalName: '__provider',
             banner: {
                 js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${Temporal.Now.instant().toString()}\n */`
