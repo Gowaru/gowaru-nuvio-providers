@@ -3,6 +3,8 @@
  * Highly optimized for Nuvio (Hermes/React Native)
  */
 
+import { getConfig, configure as configureStreamConfig, resetConfig } from './streamConfig.js';
+
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
     "Accept-Encoding": "identity",
@@ -31,6 +33,25 @@ function isPlayableMediaUrl(url) {
     const u = url.toLowerCase();
     if (isKnownFakeDirectUrl(u)) return false;
     return /\.(mp4|m3u8|mkv|webm)(\?.*)?$/.test(u) || u.includes('/hls2/') || u.includes('/master.m3u8');
+}
+
+function deriveFormat(url) {
+    const u = (url || '').toLowerCase();
+    if (u.includes('.m3u8') || u.includes('/hls2/') || u.includes('/master.m3u8')) return 'm3u8';
+    if (u.includes('.mp4')) return 'mp4';
+    if (u.includes('.mkv')) return 'mkv';
+    if (u.includes('.webm')) return 'webm';
+    if (u.includes('.ts')) return 'ts';
+    return 'unknown';
+}
+
+function deriveLanguage(name, title) {
+    const text = ((name || '') + ' ' + (title || '')).toUpperCase();
+    if (/\b(?:VOSTFR|VOST)\b/.test(text)) return 'VOSTFR';
+    if (/\b(?:VF(?!O)|FRENCH|FRANÇAIS|FRANCAIS)\b/.test(text)) return 'VF';
+    if (/\b(?:MULTI|MULTILANGUE)\b/.test(text)) return 'MULTI';
+    if (/\bVO\b/.test(text)) return 'VO';
+    return 'unknown';
 }
 
 const STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
@@ -170,18 +191,67 @@ export async function expandStreamQualities(streams) {
         }
     }
 
-    const deduped = [];
+    const enriched = [];
     const seen = new Set();
     for (const stream of expanded) {
         if (!stream?.url) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
         if (seen.has(stream.url)) continue;
         seen.add(stream.url);
-        deduped.push(stream);
+        enriched.push({
+            ...stream,
+            format: stream.format || deriveFormat(stream.url),
+            language: stream.language || deriveLanguage(stream.name, stream.title),
+        });
     }
 
-    deduped.sort((a, b) => qualityRank(b.quality) - qualityRank(a.quality));
-    return deduped;
+    const cfg = getConfig();
+
+    let filtered = enriched;
+
+    if (cfg.preferredLanguage) {
+        const lang = cfg.preferredLanguage.toUpperCase();
+        filtered = filtered.filter(s => {
+            if (s.language === 'unknown') return true;
+            if (s.language === lang) return true;
+            return false;
+        });
+    }
+
+    if (cfg.strictMode && cfg.preferredFormats) {
+        const formats = cfg.preferredFormats.map(f => f.toLowerCase());
+        filtered = filtered.filter(s => formats.includes(s.format));
+    }
+
+    const formatOrder = (cfg.preferredFormats || ['m3u8', 'mp4', 'mkv']).map(f => f.toLowerCase());
+    const qualityMatch = cfg.preferredQuality ? cfg.preferredQuality.toLowerCase() : null;
+
+    filtered.sort((a, b) => {
+        const aQual = a.quality?.toLowerCase() || '';
+        const bQual = b.quality?.toLowerCase() || '';
+
+        if (qualityMatch) {
+            const aMatch = aQual.includes(qualityMatch) || qualityMatch.includes(aQual);
+            const bMatch = bQual.includes(qualityMatch) || qualityMatch.includes(bQual);
+            if (aMatch && !bMatch) return -1;
+            if (!aMatch && bMatch) return 1;
+        }
+
+        const aRank = qualityRank(b.quality) - qualityRank(a.quality);
+        if (aRank !== 0) return aRank;
+
+        const aFmt = formatOrder.indexOf(a.format);
+        const bFmt = formatOrder.indexOf(b.format);
+        const aFmtRank = aFmt >= 0 ? aFmt : 999;
+        const bFmtRank = bFmt >= 0 ? bFmt : 999;
+        return aFmtRank - bFmtRank;
+    });
+
+    if (cfg.maxStreams > 0 && filtered.length > cfg.maxStreams) {
+        filtered = filtered.slice(0, cfg.maxStreams);
+    }
+
+    return filtered;
 }
 
 export async function safeFetch(url, options = {}) {
@@ -799,3 +869,5 @@ export async function resolveStream(stream, depth = 0) {
 }
 
 const BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";
+
+export { configureStreamConfig, resetConfig };
