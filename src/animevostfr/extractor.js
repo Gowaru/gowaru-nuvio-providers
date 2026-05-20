@@ -97,7 +97,7 @@ async function searchAnime(title) {
         const bestScore = best ? best.score : 0;
 
         let matches;
-        if (best && bestScore >= 40) {
+        if (best && bestScore >= 25) {
             // Keep only results with score at least 50% of best score
             const threshold = Math.max(20, bestScore * 0.5);
             matches = scored.filter(r => r.score >= threshold);
@@ -163,11 +163,9 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
             new RegExp(`-ep-${epPadded}(?:-vostfr|-vf|/|$)`, 'i')
         ];
 
-        for (const pattern of sortedUrlPatterns) {
-            const match = episodeLinks.find(l => {
+        const matchEpisode = (links, pattern) => {
+            return links.find(l => {
                 if (!pattern.test(l.url)) return false;
-                
-                // If we are looking for a relative episode, reject URLs that explicitly mention a different season
                 if (!isAbsolute && season != null) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
                     if (seasonMatch && parseInt(seasonMatch[1]) !== Number(season)) {
@@ -176,9 +174,24 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
                 }
                 return true;
             });
-            
+        };
+
+        // Try forward search (newest-first order)
+        for (const pattern of sortedUrlPatterns) {
+            const match = matchEpisode(episodeLinks, pattern);
             if (match) {
                 console.log(`[AnimeVOSTFR] Found episode in URL: ${match.url}`);
+                return match.url;
+            }
+        }
+
+        const reversedLinks = [...episodeLinks].reverse();
+
+        // Fallback: try reverse order (oldest-first)
+        for (const pattern of sortedUrlPatterns) {
+            const match = matchEpisode(reversedLinks, pattern);
+            if (match) {
+                console.log(`[AnimeVOSTFR] Found episode in URL (reversed fallback): ${match.url}`);
                 return match.url;
             }
         }
@@ -189,12 +202,9 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
             new RegExp(`(?:^|[^0-9])${epStr}(?:$|[^0-9])`)
         ];
 
-        // 2. Try to find match in link text
-        for (const pattern of textPatterns) {
-            const match = episodeLinks.find(l => {
+        const matchByText = (links, pattern) => {
+            return links.find(l => {
                 if (!pattern.test(l.text)) return false;
-                
-                // If we are looking for a relative episode, reject URLs that explicitly mention a different season
                 if (!isAbsolute && season != null) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
                     if (seasonMatch && parseInt(seasonMatch[1]) !== Number(season)) {
@@ -203,9 +213,22 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
                 }
                 return true;
             });
-            
+        };
+
+        // 2. Try to find match in link text (forward)
+        for (const pattern of textPatterns) {
+            const match = matchByText(episodeLinks, pattern);
             if (match) {
                 console.log(`[AnimeVOSTFR] Found episode in text: ${match.url}`);
+                return match.url;
+            }
+        }
+
+        // Fallback: try reverse order (oldest-first)
+        for (const pattern of textPatterns) {
+            const match = matchByText(reversedLinks, pattern);
+            if (match) {
+                console.log(`[AnimeVOSTFR] Found episode in text (reversed fallback): ${match.url}`);
                 return match.url;
             }
         }

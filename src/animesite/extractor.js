@@ -7,7 +7,7 @@ import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 const tmdbTitleCache = new Map();
 
 const MAX_TITLE_SEARCHES = 5;
-const SEARCH_SCORE_THRESHOLD = 40;
+const SEARCH_SCORE_THRESHOLD = 25;
 const SEARCH_TIMEOUT = 8000;
 const SEARCH_RETRIES = 0;
 
@@ -47,7 +47,7 @@ function scoreSearchMatch(resultTitle, searchTitle) {
     if (titleWords.length > 0) score += (matched / titleWords.length) * 50;
 
     const extraWords = resultWords.size - titleWords.length;
-    if (extraWords > 0) score -= Math.min(extraWords * 40, 80);
+    if (extraWords > 0) score -= Math.min(extraWords * 15, 60);
 
     return score;
 }

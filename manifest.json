@@ -127,7 +127,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.35",
+      "version": "1.1.36",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -151,7 +151,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.17",
+      "version": "1.0.18",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -222,8 +222,8 @@
     {
       "id": "movix",
       "name": "Movix",
-      "description": "Films et Séries en VF et VOSTFR.",
-      "version": "1.0.22",
+      "description": "Films, Séries et Animes en VF et VOSTFR.",
+      "version": "1.0.23",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -273,7 +273,7 @@
       "id": "animesite",
       "name": "AnimeSite",
       "description": "Animés en streaming VF et VOSTFR sur AnimeSite.",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -322,7 +322,7 @@
       "id": "dulourd",
       "name": "DuLourd",
       "description": "Séries, animes et cartoons en streaming VF et VOSTFR.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "Gowaru",
       "supportedTypes": ["tv"],
       "filename": "providers/dulourd.js",

@@ -323,7 +323,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const toResolve = unique.slice(0, 4);
+    const toResolve = unique.slice(0, 12);
     const resolvedResults = await Promise.allSettled(toResolve.map((s) => resolveForExo(s)));
     const playable = [];
     const seenPlayable = new Set();

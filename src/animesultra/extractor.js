@@ -28,7 +28,7 @@ function scoreSearchMatch(resultTitle, searchTitle) {
     const matched = searchWords.filter(w => resultWords.has(w)).length;
     if (searchWords.length > 0) score += (matched / searchWords.length) * 50;
     const extra = resultWords.size - searchWords.length;
-    if (extra > 0) score -= Math.min(extra * 40, 80);
+    if (extra > 0) score -= Math.min(extra * 15, 60);
     return score;
 }
 
@@ -44,6 +44,8 @@ const SEASON_PATTERNS = [
     /\bfin[ae]l\s+season\b/i,
     /\bS(\d+)\b/i,
     /\b(\d+)\s*(?:vf|vostfr)\s*$/i,
+    /\bCour\s*(\d+)\b/i,
+    /\bPart\s*(\d+)\b/i,
 ];
 
 function detectSeason(title, url) {
@@ -54,7 +56,7 @@ function detectSeason(title, url) {
             return parseInt(m[1], 10);
         }
     }
-    const urlSeason = url.match(/saison[-\s]*(\d+)/i)?.[1];
+    const urlSeason = url.match(/saison[-\s]*(\d+)/i)?.[1] || url.match(/cour[-\s]*(\d+)/i)?.[1];
     if (urlSeason) return parseInt(urlSeason, 10);
     const numEnd = title.match(/(?:^|\s)(\d{1,2})\s*(?:vf|vostfr)?\s*$/i);
     if (numEnd) {
@@ -465,10 +467,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    // Fallback: if resolveStream filtered everything, return original streams
+    // Fallback: if resolveStream filtered everything, keep only streams from resolvable hosts
     if (validStreams.length === 0 && streams.length > 0) {
-        console.log(`[AnimesUltra] resolveStream filtered all ${streams.length} streams, returning originals`);
-        return streams;
+        const resolvable = streams.filter(s => {
+            const u = (s.url || '').toLowerCase();
+            return u.includes('sibnet') || u.includes('sendvid') || u.includes('voe') || u.includes('m3u8') || u.includes('.mp4');
+        });
+        if (resolvable.length > 0) {
+            console.log(`[AnimesUltra] resolveStream filtered all, returning ${resolvable.length} streams from known hosts`);
+            return resolvable;
+        }
+        console.log(`[AnimesUltra] No resolvable streams (all ${streams.length} from unresolvable hosts)`);
+        return [];
     }
 
     console.log(`[AnimesUltra] Total valid streams found: ${validStreams.length}`);

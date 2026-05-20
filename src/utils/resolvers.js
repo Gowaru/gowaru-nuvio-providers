@@ -510,6 +510,11 @@ export async function resolveStreamtape(url) {
 
 export async function resolveSendvid(url) {
     try {
+        // Handle daisukianime.xyz wrapper URLs
+        if (url.includes('daisukianime')) {
+            const idMatch = url.match(/[?&]id=([a-z0-9]+)/i);
+            if (idMatch) url = `https://sendvid.com/embed/${idMatch[1]}`;
+        }
         // Normalize: use embed URL for sendvid
         const embedUrl = url.includes('/embed/') ? url : url.replace(/sendvid\.com\/([a-z0-9]+)/i, 'sendvid.com/embed/$1');
         const res = await safeFetch(embedUrl, { headers: { 'Referer': 'https://sendvid.com/' } });
@@ -608,6 +613,41 @@ export async function resolveMyTV(url) {
     return { url };
 }
 
+export async function resolveYounetu(url) {
+    try {
+        const origin = url.match(/^https?:\/\/[^/]+/)?.[0] || 'https://younetu.org';
+        const res = await safeFetch(url, { headers: { 'Referer': origin + '/' } });
+        if (!res) return { url };
+        let html = await res.text();
+        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
+
+        const match = html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
+                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+        if (match) {
+            return { url: match[1], headers: { 'Referer': origin + '/' } };
+        }
+    } catch (e) {}
+    return { url };
+}
+
+export async function resolveVidoza(url) {
+    try {
+        const res = await safeFetch(url, { headers: { 'Referer': 'https://vidoza.net/' } });
+        if (!res) return { url };
+        const html = await res.text();
+
+        const match = html.match(/src\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i) ||
+                      html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i) ||
+                      html.match(/["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i);
+        if (match) {
+            return { url: match[1], headers: { 'Referer': 'https://vidoza.net/' } };
+        }
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveMoon(url) {
     try {
         const res = await safeFetch(url);
@@ -664,9 +704,11 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
         else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
-        else if (urlLower.includes('sendvid.')) result = await resolveSendvid(originalUrl);
+        else if (urlLower.includes('younetu.') || urlLower.includes('netu.')) result = await resolveYounetu(originalUrl);
+        else if (urlLower.includes('vidoza.')) result = await resolveVidoza(originalUrl);
+        else if (urlLower.includes('sendvid.') || urlLower.includes('daisukianime')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
-        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live')) result = await resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live') || urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulustream.') ||
