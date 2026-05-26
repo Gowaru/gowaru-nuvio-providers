@@ -25,6 +25,7 @@
     "@js-temporal/polyfill": "^0.5.1",
     "cheerio-without-node-native": "^0.20.2",
     "crypto-js": "^4.2.0",
-    "htmlparser2-without-node-native": "^3.9.2"
+    "htmlparser2-without-node-native": "^3.9.2",
+    "playwright": "^1.60.0"
   }
 }

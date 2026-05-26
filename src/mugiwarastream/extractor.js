@@ -274,6 +274,9 @@ async function findSlug(titles) {
     tryQueries.sort((a, b) => a.priority - b.priority);
 
     for (const { title: t } of tryQueries) {
+        const nt = normalizeSearchTitle(t);
+        if (nt.length < 4) continue;
+
         const query = encodeURIComponent(t);
         let searchHtml;
         try {
@@ -285,7 +288,6 @@ async function findSlug(titles) {
         const results = searchAnime(searchHtml);
         if (!results || results.length === 0) continue;
 
-        const nt = normalizeSearchTitle(t);
         let best = null;
         let bestScore = -1;
 

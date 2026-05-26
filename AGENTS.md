@@ -36,7 +36,6 @@ Keep responses concise and to the point in French - unless the user asks otherwi
    - `node build.js --minify <provider-id>` (minified single)
 3. **Test locally**:
    - `node -e "const {getStreams}=require('./providers/myprovider.js'); getStreams('550','movie').then(s=>console.log(JSON.stringify(s,null,2)))"`
-   - Always verify in-app via **Plugin Tester** (Nuvio Settings)
 4. **Dev server**: `npm run serve` (serves manifest/providers at `http://<local-ip>:3000`)
 
 ## Provider API
@@ -68,9 +67,4 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - Use any testing tools, libraries available to the project for testing your changes
 - Never assume your changes simply work, always test!
 - If the project does not have any testing tools, scripts, MCP tools, skills, etc. available for testing, ask the user whether testing should be skipped.
-
-## CI Workflow
-- Runs `npm ci` → `npm run build:minify` on pushes to `main`/`master`
-- Auto-commits updated `providers/` files (skips CI for these commits)
-- Never edit `providers/` directly — changes will be overwritten
 

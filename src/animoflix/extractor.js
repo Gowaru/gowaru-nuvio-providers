@@ -35,12 +35,14 @@ async function searchAnime(title) {
             const rawText = $(el).text().trim();
             const text = rawText.replace(/\s+/g, ' ').trim();
             if (href && href.includes('/anime/') && text.length > 2) {
+                const slugRaw = href.replace(/.*\/anime\//, '').replace(/\/$/, '');
+                if (slugRaw.includes('/')) return;
                 const imgAlt = $(el).closest('.TPost, .TPostMv, article, li').find('img').first().attr('alt');
                 const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
                 results.push({
                     title: cleanTitle,
                     title2: cleanTitle,
-                    slug: href.replace(/.*\/anime\//, '').replace(/\/$/, ''),
+                    slug: slugRaw,
                     url: href
                 });
             }
@@ -70,9 +72,24 @@ function scoreSearchMatch(result, searchTitle) {
     if (nTitle.includes(nt) || nt.includes(nTitle)) fieldScore = Math.max(fieldScore, 100);
     if (nTitle2.includes(nt) || nt.includes(nTitle2)) fieldScore = Math.max(fieldScore, 80);
     if (nSlug.includes(nt) || nt.includes(nSlug)) fieldScore = Math.max(fieldScore, 60);
+
+    // Penalize score from slug-only match if slug is much shorter than search title (franchise page)
+    const slugWords = nSlug.split(/\s+/).filter(Boolean);
+    const titleWords = nt.split(/\s+/).filter(Boolean);
+    if (fieldScore <= 60 && slugWords.length > 0 && titleWords.length > slugWords.length + 1) {
+        const missing = titleWords.filter(w => !nSlug.includes(w)).length;
+        if (missing > titleWords.length / 2) {
+            fieldScore = Math.max(fieldScore - 40, 0);
+        }
+    }
+
+    // Also penalize if result title is shorter than search title (franchise catch-all page)
+    if (fieldScore > 0 && titleWords.length > 3 && nTitle.split(/\s+/).filter(Boolean).length < titleWords.length - 1) {
+        fieldScore = Math.max(fieldScore - 30, 10);
+    }
+
     score += fieldScore;
 
-    const titleWords = nt.split(/\s+/).filter(Boolean);
     const matchWords = new Set([...nTitle.split(/\s+/), ...nTitle2.split(/\s+/), ...nSlug.split(/\s+/)]);
     const matched = titleWords.filter(w => matchWords.has(w)).length;
     if (titleWords.length > 0) score += (matched / titleWords.length) * 50;
@@ -81,6 +98,11 @@ function scoreSearchMatch(result, searchTitle) {
     const extraWords = nTitleWords.length - titleWords.length;
     if (extraWords > 0) {
         score -= Math.min(extraWords * 40, 80);
+    }
+
+    // Penalize if search title has many more words than result title (generic franchise match)
+    if (titleWords.length > nTitleWords.length + 2) {
+        score -= Math.min((titleWords.length - nTitleWords.length) * 40, 80);
     }
 
     return score;
@@ -137,31 +159,68 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     let bestMatch = null;
     let bestScore = 0;
     let searches = 0;
+    const badSlugs = new Set();
 
-    for (const title of titles) {
-        if (searches >= MAX_TITLE_SEARCHES) break;
-        searches++;
+    while (searches < MAX_TITLE_SEARCHES) {
+        const titlesRemaining = titles.slice(searches);
+        let foundNewCandidate = false;
 
-        const results = await searchAnime(title);
-        if (results.length === 0) continue;
+        for (const title of titlesRemaining) {
+            if (searches >= MAX_TITLE_SEARCHES) break;
+            searches++;
 
-        for (const r of results) {
-            if (SPECIAL_SLUG_RE.test(r.slug)) continue;
-            const score = scoreSearchMatch(r, title);
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = r;
-            } else if (score === bestScore && score > 0) {
-                const rLen = normalize(r.title).length;
-                const bLen = normalize(bestMatch.title).length;
-                if (rLen < bLen) {
+            const nt = normalize(title);
+            if (nt.length < 4) continue;
+
+            const results = await searchAnime(title);
+            if (results.length === 0) continue;
+
+            for (const r of results) {
+                if (SPECIAL_SLUG_RE.test(r.slug)) continue;
+                if (badSlugs.has(r.slug)) continue;
+                const score = scoreSearchMatch(r, title);
+                if (score > bestScore) {
                     bestScore = score;
                     bestMatch = r;
+                    foundNewCandidate = true;
+                } else if (score === bestScore && score > 0) {
+                    const rLen = normalize(r.title).length;
+                    const bLen = normalize(bestMatch.title).length;
+                    if (rLen < bLen) {
+                        bestScore = score;
+                        bestMatch = r;
+                        foundNewCandidate = true;
+                    }
                 }
             }
         }
 
-        if (bestMatch && bestScore >= 60) break;
+        if (!bestMatch || !foundNewCandidate) break;
+
+        // Verify with page title before accepting
+        const verifyHtml = await fetchWithRetry(`${BASE_URL}/anime/${bestMatch.slug}/`, { timeout: TIMEOUT });
+        const $v = cheerio.load(verifyHtml);
+        const pageTitle = $v('h1.anime-title-pro').first().text().trim();
+        let matchOk = true;
+        if (!pageTitle) {
+            console.warn(`[AnimoFlix] No page title found for slug ${bestMatch.slug} — rejecting`);
+            badSlugs.add(bestMatch.slug);
+            bestMatch = null;
+            bestScore = 0;
+            matchOk = false;
+        } else {
+            const nPage = normalize(pageTitle);
+            const nTmdbTitles = titles.slice(0, 5).map(t => normalize(t));
+            const matchesTmdb = nTmdbTitles.some(nt => nPage.includes(nt) || nt.includes(nPage));
+            if (!matchesTmdb) {
+                console.warn(`[AnimoFlix] Page title mismatch: "${pageTitle}" doesn't match any TMDB title — rejecting slug ${bestMatch.slug}`);
+                badSlugs.add(bestMatch.slug);
+                bestMatch = null;
+                bestScore = 0;
+                matchOk = false;
+            }
+        }
+        if (matchOk) break;
     }
 
     if (!bestMatch) {
@@ -180,7 +239,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         const nPage = normalize(pageTitle);
         const nSearch = normalize(bestMatch.title);
         if (!nPage.includes(nSearch) && !nSearch.includes(nPage)) {
-            console.warn(`[AnimoFlix] Page title mismatch: "${pageTitle}" vs "${bestMatch.title}" — slug may be wrong`);
+            console.warn(`[AnimoFlix] Page title mismatch post-verify: "${pageTitle}" vs "${bestMatch.title}"`);
         }
     }
 
