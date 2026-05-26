@@ -55,7 +55,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.38",
+      "version": "1.1.39",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -79,7 +79,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -248,7 +248,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -273,7 +273,7 @@
       "id": "animesite",
       "name": "AnimeSite",
       "description": "Animés en streaming VF et VOSTFR sur AnimeSite.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
