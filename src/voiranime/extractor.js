@@ -273,6 +273,8 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   const titles = await getTmdbTitles(tmdbId, mediaType, { season });
   if (titles.length === 0) return [];
 
+  const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
   // --- ARMSYNC Metadata Resolution ---
   let targetEpisodes = [episode || 1];
   try {
@@ -292,12 +294,12 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   let fallbackMatches = [];
   // Try titles in order: EN first, then FR
   for (const title of titles) {
-    const result = await searchAnime(title, season);
+    const result = await searchAnime(title, effectiveSeason);
     if (result && result.length > 0) {
       // Check if any result is explicitly for the requested season or has no season indicator
       const hasExplicitSeason = result.some(m => {
         const s = m.url.match(/saison[_-](\d+)/i);
-        return s && parseInt(s[1]) === season;
+        return s && parseInt(s[1]) === effectiveSeason;
       });
       const hasNoSeason = result.some(m => !m.url.match(/saison[_-]\d+/i));
       if (hasExplicitSeason || hasNoSeason) {
@@ -316,7 +318,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   matches = matches.sort((a, b) => {
     const aT = a.title.toLowerCase();
     const bT = b.title.toLowerCase();
-    const sMatch = `saison ${season}`;
+    const sMatch = `saison ${effectiveSeason}`;
     const hasA = aT.includes(sMatch);
     const hasB = bT.includes(sMatch);
     if (hasA && !hasB) return -1;
@@ -344,7 +346,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   const seasonMatch = matchLower.match(/saison\s*(\d+)/);
   if (
     seasonMatch &&
-    parseInt(seasonMatch[1]) !== season &&
+    parseInt(seasonMatch[1]) !== effectiveSeason &&
     targetEpisodes.length === 1
   ) {
     continue;
@@ -416,7 +418,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
       // Skip check when absolute episode is available (site may number seasons differently than TMDB,
       // e.g., Overlord II is "saison-2" on site but season=1 on TMDB).
       const epSaisonMatch = episodeUrl.match(/saison[_-](\d+)/i);
-      if (epSaisonMatch && parseInt(epSaisonMatch[1]) !== season && targetEpisodes.length === 1) {
+      if (epSaisonMatch && parseInt(epSaisonMatch[1]) !== effectiveSeason && targetEpisodes.length === 1) {
         continue;
       }
 
@@ -495,7 +497,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   // --- FALLBACK: if no direct streams found, retry with season-specific search ---
   if (streams.filter(s => s && s.isDirect).length === 0 && matches.length > 0) {
     console.log(`[VoirAnime] No direct streams from initial matches, retrying with season-aware fallback`);
-    const seasonStr = season ? String(season) : '';
+    const seasonStr = effectiveSeason ? String(effectiveSeason) : '';
     for (const match of matches) {
       if (checkedUrls.has(match.url)) continue;
       checkedUrls.add(match.url);

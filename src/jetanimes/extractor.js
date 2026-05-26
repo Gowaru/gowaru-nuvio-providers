@@ -111,6 +111,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     const seen = new Set();
     const candidates = [];
     // Prioritize French titles
@@ -163,7 +165,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     if (resolved && resolved.isDirect) return [resolved];
                 }
             } else {
-                const targetSeason = Number(season) || 1;
+                const targetSeason = Number(effectiveSeason) || 1;
                 const targetEpisode = Number(episode) || 1;
                 let epLink = null;
 

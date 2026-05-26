@@ -182,6 +182,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     // --- ARMSYNC Metadata Resolution ---
     let altEpisodes = [];
     if (mediaType === 'tv') {
@@ -207,7 +209,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // Primary: try the generated slug for each language
     const primaryPromises = [];
     for (const lang of languages) {
-        primaryPromises.push(fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes));
+        primaryPromises.push(fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes));
     }
     const primaryResults = await Promise.all(primaryPromises);
     for (const result of primaryResults) {
@@ -215,11 +217,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // If primary failed, try slug with season suffix (e.g., "overlord-saison-3")
-    if (streams.length === 0 && season > 1) {
-        const seasonSlug = `${slug}-saison-${season}`;
+    if (streams.length === 0 && effectiveSeason > 1) {
+        const seasonSlug = `${slug}-saison-${effectiveSeason}`;
         const seasonPromises = [];
         for (const lang of languages) {
-            seasonPromises.push(fetchAndGetUrl(seasonSlug, lang, season, episode, mediaType, altEpisodes));
+            seasonPromises.push(fetchAndGetUrl(seasonSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
         }
         const seasonResults = await Promise.all(seasonPromises);
         for (const result of seasonResults) {
@@ -228,11 +230,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // If still empty, try season numeric slug (e.g., "overlord-3")
-    if (streams.length === 0 && season > 1) {
-        const numSlug = `${slug}-${season}`;
+    if (streams.length === 0 && effectiveSeason > 1) {
+        const numSlug = `${slug}-${effectiveSeason}`;
         const numPromises = [];
         for (const lang of languages) {
-            numPromises.push(fetchAndGetUrl(numSlug, lang, season, episode, mediaType, altEpisodes));
+            numPromises.push(fetchAndGetUrl(numSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
         }
         const numResults = await Promise.all(numPromises);
         for (const result of numResults) {
@@ -259,7 +261,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             checkedSlugs.add(fSlug);
 
             for (const lang of languages) {
-                fallbackPromises.push(fetchAndGetUrl(fSlug, lang, season, episode, mediaType, altEpisodes));
+                fallbackPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
             }
         }
 

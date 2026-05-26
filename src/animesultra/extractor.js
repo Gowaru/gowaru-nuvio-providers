@@ -122,6 +122,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     const titlesOrdered = [...titles].sort((a, b) => {
         const score = t => /[àâéèêëîïôùûüç]/i.test(t) ? 0 : (/[\x20-\x7F]/.test(t) ? 1 : 2);
         return score(a) - score(b);
@@ -310,9 +312,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (detectLang(match.title) === 'vf') lang = "VF";
 
         const matchSeasonNum = detectSeason(match.title, match.url);
-        if (season && matchSeasonNum != null) {
-            if (matchSeasonNum === 'final' && season < 6) continue;
-            if (typeof matchSeasonNum === 'number' && matchSeasonNum !== season) continue;
+        if (effectiveSeason && matchSeasonNum != null) {
+            if (matchSeasonNum === 'final' && effectiveSeason < 6) continue;
+            if (typeof matchSeasonNum === 'number' && matchSeasonNum !== effectiveSeason) continue;
         }
 
         try {
@@ -358,9 +360,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             if (detectLang(match.title) === 'vf') lang = "VF";
 
             const matchSeasonNum = detectSeason(match.title, match.url);
-            if (season && matchSeasonNum != null) {
-                if (matchSeasonNum === 'final' && season < 6) continue;
-                if (typeof matchSeasonNum === 'number' && matchSeasonNum !== season) continue;
+            if (effectiveSeason && matchSeasonNum != null) {
+                if (matchSeasonNum === 'final' && effectiveSeason < 6) continue;
+                if (typeof matchSeasonNum === 'number' && matchSeasonNum !== effectiveSeason) continue;
             }
 
             try {
@@ -395,12 +397,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    if (streams.length === 0 && season && matches.length > 1) {
+    if (streams.length === 0 && effectiveSeason && matches.length > 1) {
         const byPart = {};
         for (const m of matches) {
             const sNum = detectSeason(m.title, m.url);
             const pNum = parseInt(m.title.match(/(?:partie|part)\s*(\d+)/i)?.[1], 10) || 1;
-            if (sNum !== season) continue;
+            if (sNum !== effectiveSeason) continue;
             const nId = m.url.match(/\/(\d+)-/)?.[1];
             if (!nId) continue;
             const mLang = detectLang(m.title) || 'vostfr';

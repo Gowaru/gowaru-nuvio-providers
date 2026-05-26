@@ -253,6 +253,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         console.log(`[Movix] Failed to load TMDB titles for ${tmdbId}: ${e.message}`);
     }
 
+    const effectiveSeason = tmdbTitles.effectiveSeason != null ? tmdbTitles.effectiveSeason : season;
+    const urlSeason = Number(effectiveSeason) || 1;
+
     const jobs = isMovie
         ? [
             {
@@ -274,17 +277,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         : [
             {
                 label: 'fstream-tv',
-                url: `${API_BASE}/api/fstream/tv/${tmdbId}/season/${seasonNum}`,
+                url: `${API_BASE}/api/fstream/tv/${tmdbId}/season/${urlSeason}`,
                 collect: (data) => collectFstreamTv(streams, data, episodeNum)
             },
             {
                 label: 'wiflix-tv',
-                url: `${API_BASE}/api/wiflix/tv/${tmdbId}/${seasonNum}`,
+                url: `${API_BASE}/api/wiflix/tv/${tmdbId}/${urlSeason}`,
                 collect: (data) => collectWiflixTv(streams, data, episodeNum)
             },
             {
                 label: 'cpasmal-tv',
-                url: `${API_BASE}/api/cpasmal/tv/${tmdbId}/${seasonNum}/${episodeNum}`,
+                url: `${API_BASE}/api/cpasmal/tv/${tmdbId}/${urlSeason}/${episodeNum}`,
                 collect: (data) => collectCpasmal(streams, data)
             }
         ];

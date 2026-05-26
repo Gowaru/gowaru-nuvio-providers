@@ -128,6 +128,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     const titlesOrdered = [...titles].sort((a, b) => {
         const aFr = /[àâéèêëîïôùûüç']/i.test(a) ? -1 : 1;
         const bFr = /[àâéèêëîïôùûüç']/i.test(b) ? -1 : 1;
@@ -165,7 +167,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         const detectedSeason = detectSeasonFromUrl(m.url) || detectSeasonFromUrl(m.title);
 
         if (mediaType !== 'movie') {
-            if (detectedSeason === season) score += 100;
+            if (detectedSeason === effectiveSeason) score += 100;
             else if (detectedSeason !== null) score -= 50;
         }
 
@@ -191,7 +193,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (pagesChecked.has(match.url)) continue;
         pagesChecked.add(match.url);
 
-        if (match.detectedSeason !== null && match.detectedSeason !== season) {
+            if (match.detectedSeason !== null && match.detectedSeason !== effectiveSeason) {
             continue;
         }
 

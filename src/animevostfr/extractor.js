@@ -358,6 +358,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     // Sort titles: French titles first (AnimeVOSTFR is French-language, search works better with FR)
     const isFrenchTitle = (t) => /[àâéèêëîïôùûüçœæ']/i.test(t);
     const titlesOrdered = [
@@ -381,7 +383,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // ------------------------------------
 
     // For movies, use season=1, episode=1 to search episode pages
-    const searchSeason = (mediaType === 'movie' && season == null) ? 1 : season;
+    const searchSeason = (mediaType === 'movie' && season == null) ? 1 : effectiveSeason;
     const searchEpisode = (mediaType === 'movie' && episode == null) ? 1 : episode;
 
     const baseTitles = titlesOrdered.slice(0, MAX_SEARCH_TITLES);

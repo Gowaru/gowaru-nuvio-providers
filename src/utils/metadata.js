@@ -29,9 +29,32 @@ function parseKitsuId(id) {
 }
 
 /**
+ * Search TMDB by English title to find the TMDB ID.
+ * @param {string} title - The English title to search for
+ * @param {'tv'|'movie'} mediaType
+ * @returns {Promise<number|null>} The TMDB ID, or null if not found
+ */
+async function searchTmdbByTitle(title, mediaType) {
+    const type = mediaType === 'movie' ? 'movie' : 'tv';
+    const encoded = encodeURIComponent(title);
+    const url = `${TMDB_API_BASE}/search/${type}?api_key=${TMDB_API_KEY}&query=${encoded}`;
+    const res = await safeFetch(url);
+    if (!res) return null;
+    let data;
+    try {
+        data = await res.json();
+    } catch {
+        return null;
+    }
+    const results = data?.results;
+    if (!results || !results.length) return null;
+    return results[0].id;
+}
+
+/**
  * Get multiple titles for an anime from Kitsu ID.
- * Uses Kitsu API to get canonical title, English title, Japanese title, and abbreviated titles.
- * Generates season-aware variants if season is provided.
+ * First tries to resolve to TMDB ID via English title search for better title compatibility.
+ * Falls back to Kitsu API titles if TMDB search fails.
  * 
  * @param {string|number} kitsuId
  * @param {'tv'|'movie'} mediaType
@@ -40,7 +63,6 @@ function parseKitsuId(id) {
  * @returns {Promise<string[]>}
  */
 async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
-    // Fetch anime details from Kitsu API
     const url = `https://kitsu.io/api/edge/anime/${kitsuId}`;
     const res = await safeFetch(url);
     if (!res) {
@@ -62,25 +84,32 @@ async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
         return [];
     }
     
-    const titles = [];
-    
-    // Canonical title (often the Romaji title)
-    const canonicalTitle = anime.canonicalTitle?.trim();
-    if (canonicalTitle) titles.push(canonicalTitle);
-    
-    // English title
+    // Try to find TMDB ID via English title search for better provider compatibility
     const enTitle = anime.titles?.en?.trim();
-    if (enTitle && !titles.some(t => t.toLowerCase() === enTitle.toLowerCase())) {
-        titles.push(enTitle);
+    if (enTitle) {
+        const foundTmdbId = await searchTmdbByTitle(enTitle, mediaType);
+        if (foundTmdbId) {
+            console.log(`[Metadata] Kitsu ${kitsuId} -> TMDB ${foundTmdbId} via "${enTitle}"`);
+            return await getTMDBTitlesById(String(foundTmdbId), mediaType, opts);
+        }
     }
     
-    // Japanese title
+    // Fallback: build titles from Kitsu API directly if TMDB search fails
+    const titles = [];
+    
+    const canonicalTitle = anime.canonicalTitle?.trim();
+    
+    // English title first (better for slug generation)
+    if (enTitle) titles.push(enTitle);
+    if (canonicalTitle && !titles.some(t => t.toLowerCase() === canonicalTitle.toLowerCase())) {
+        titles.push(canonicalTitle);
+    }
+    
     const jaTitle = anime.titles?.ja_jp?.trim();
     if (jaTitle && !titles.some(t => t.toLowerCase() === jaTitle.toLowerCase()) && isLatinText(jaTitle)) {
         titles.push(jaTitle);
     }
     
-    // Abbreviated titles
     const abbrTitles = anime.abbreviatedTitles || [];
     for (const t of abbrTitles) {
         const trimmed = t?.trim();
@@ -89,10 +118,9 @@ async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
         }
     }
     
-    // Season-aware variants
     const season = opts.season ? parseInt(opts.season, 10) : null;
     if (season && season > 0) {
-        const baseTitles = [canonicalTitle, enTitle].filter(Boolean);
+        const baseTitles = [enTitle, canonicalTitle].filter(Boolean);
         for (const baseTitle of baseTitles) {
             for (const suffix of SEASON_SUFFIXES) {
                 const variant = `${baseTitle} ${suffix(season)}`;
@@ -103,12 +131,12 @@ async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
         }
     }
     
-    console.log(`[Metadata] Kitsu titles for ${kitsuId}: ${titles.join(' | ')}`);
+    console.log(`[Metadata] Kitsu fallback titles for ${kitsuId}: ${titles.join(' | ')}`);
     return titles;
 }
 
 /**
- * Get multiple titles for an anime from TMDB ID.
+ * Fetch TMDB titles by TMDB ID directly (no Kitsu detection).
  * Returns an array with [English title, French title, Original title (romaji)]
  * All unique values, ordered by priority for searching.
  * Generates season-aware variants (e.g. "Overlord Season 1") for TV.
@@ -119,37 +147,23 @@ async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
  * @param {number} [opts.season] - If provided, generates "Title Season N" variants
  * @returns {Promise<string[]>}
  */
-export async function getTmdbTitles(tmdbId, mediaType, opts = {}) {
-    // Handle Kitsu ID format: kitsu:{id}:{season?}
-    const kitsuMatch = parseKitsuId(tmdbId);
-    if (kitsuMatch) {
-        const kitsuId = kitsuMatch[1];
-        const seasonFromId = kitsuMatch[2] ? parseInt(kitsuMatch[2], 10) : null;
-        // Use season from opts if provided, otherwise from the ID string
-        const finalSeason = opts.season !== undefined ? opts.season : seasonFromId;
-        return await getKitsuTitles(kitsuId, mediaType, { ...opts, season: finalSeason });
-    }
-
+async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
     const type = mediaType === 'movie' ? 'movie' : 'tv';
     const titles = [];
 
     try {
-        // 1. Main API call — English title + original title
         const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
         const mainRes = await safeFetch(mainUrl);
         if (mainRes) {
             const data = await mainRes.json();
             const titleEn = (type === 'movie' ? data.title : data.name)?.trim();
             const titleOriginal = (type === 'movie' ? data.original_title : data.original_name)?.trim();
-            const numberOfSeasons = data.number_of_seasons;
 
             if (titleEn) titles.push(titleEn);
-            // Only add original if it differs and uses latin chars (romaji)
             if (titleOriginal && titleOriginal !== titleEn && isLatinText(titleOriginal)) {
                 titles.push(titleOriginal);
             }
 
-            // Generate season-aware variants
             if (mediaType === 'tv' && opts.season) {
                 const s = parseInt(opts.season, 10);
                 if (s > 0 && titleEn) {
@@ -167,7 +181,6 @@ export async function getTmdbTitles(tmdbId, mediaType, opts = {}) {
             }
         }
 
-        // 2. French title via translations
         const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
         const transRes = await safeFetch(transUrl);
         if (transRes) {
@@ -177,7 +190,6 @@ export async function getTmdbTitles(tmdbId, mediaType, opts = {}) {
             if (titleFr && !titles.includes(titleFr)) {
                 titles.push(titleFr);
             }
-            // Season-aware French variants
             if (mediaType === 'tv' && opts.season && titleFr) {
                 const s = parseInt(opts.season, 10);
                 if (s > 0) {
@@ -187,7 +199,6 @@ export async function getTmdbTitles(tmdbId, mediaType, opts = {}) {
             }
         }
 
-        // 3. Alternative titles (covers Romaji, English aliases, etc.)
         const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
         const altRes = await safeFetch(altUrl);
         if (altRes) {
@@ -207,12 +218,10 @@ export async function getTmdbTitles(tmdbId, mediaType, opts = {}) {
             }
         }
 
-
     } catch (e) {
         console.error(`[Metadata] TMDB API error: ${e.message}`);
     }
 
-    // Deduplicate array completely, preserving order
     const seen = new Set();
     const uniqueTitles = titles.filter(t => {
         const key = t.toLowerCase();
@@ -223,4 +232,31 @@ export async function getTmdbTitles(tmdbId, mediaType, opts = {}) {
 
     console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(' | ')}`);
     return uniqueTitles;
+}
+
+/**
+ * Get multiple titles for a given ID (supports TMDB IDs and Kitsu IDs).
+ * Detects ID format and dispatches to the appropriate handler.
+ *
+ * @param {string|number} id
+ * @param {'tv'|'movie'} mediaType
+ * @param {object} [opts]
+ * @param {number} [opts.season] - If provided, generates "Title Season N" variants
+ * @returns {Promise<string[]>}
+ */
+export async function getTmdbTitles(id, mediaType, opts = {}) {
+    const kitsuMatch = parseKitsuId(id);
+    let effectiveSeason = opts.season != null ? opts.season : null;
+    if (kitsuMatch) {
+        const kitsuId = kitsuMatch[1];
+        const seasonFromId = kitsuMatch[2] ? parseInt(kitsuMatch[2], 10) : null;
+        effectiveSeason = opts.season != null ? opts.season : seasonFromId;
+        const titles = await getKitsuTitles(kitsuId, mediaType, { ...opts, season: effectiveSeason });
+        titles.effectiveSeason = effectiveSeason;
+        return titles;
+    }
+
+    const titles = await getTMDBTitlesById(id, mediaType, opts);
+    titles.effectiveSeason = effectiveSeason;
+    return titles;
 }

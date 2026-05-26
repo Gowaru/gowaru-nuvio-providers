@@ -382,6 +382,8 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     const slug = await findCachedSlug(titles);
     if (!slug) {
         console.log(`[Mugiwara] No anime found for tmdbId ${tmdbId}`);
@@ -413,7 +415,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     const saisons = animeData.options.saisons;
     const langs = ['vostfr', 'vf'];
 
-    const matched = matchSaison(saisons, season, episodeNum);
+    const matched = matchSaison(saisons, effectiveSeason, episodeNum);
     if (!matched) {
         console.log(`[Mugiwara] No matching saison for S${season}E${episodeNum} (available: ${saisons.filter(s => !s.notASeason).map(s => s.id + '(' + getEpisodeCount(s) + 'eps)').join(', ')})`);
         return [];

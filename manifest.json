@@ -6,7 +6,7 @@
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.40",
+      "version": "1.1.41",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -30,7 +30,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -55,7 +55,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.39",
+      "version": "1.1.40",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -79,7 +79,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -103,7 +103,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
-      "version": "1.1.38",
+      "version": "1.1.39",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -127,7 +127,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.38",
+      "version": "1.1.39",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -151,7 +151,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.20",
+      "version": "1.0.21",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -175,7 +175,7 @@
       "id": "jetanimes",
       "name": "JetAnimes",
       "description": "Regarder vos animes en streaming sur JetAnimes.",
-      "version": "1.0.15",
+      "version": "1.0.16",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -199,7 +199,7 @@
       "id": "sekai",
       "name": "Sekai",
       "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.12",
+      "version": "1.0.13",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -223,7 +223,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "1.0.25",
+      "version": "1.0.26",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -248,7 +248,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -273,7 +273,7 @@
       "id": "animesite",
       "name": "AnimeSite",
       "description": "Animés en streaming VF et VOSTFR sur AnimeSite.",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -297,7 +297,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (séries site-native, films par catégories).",
-      "version": "2.0.2",
+      "version": "2.0.3",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -322,7 +322,7 @@
       "id": "dulourd",
       "name": "DuLourd",
       "description": "Séries, animes et cartoons en streaming VF et VOSTFR.",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": ["tv"],
       "filename": "providers/dulourd.js",

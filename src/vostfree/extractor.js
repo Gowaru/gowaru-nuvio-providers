@@ -103,6 +103,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     // Vostfree is French — try romaji/Japanese-derived titles first (Shingeki, not Attack on Titan),
     // then French, then English. Sort: non-ASCII/romaji first, then FR, then EN.
     const titlesOrdered = [...titles].sort((a, b) => {
@@ -150,12 +152,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     
     // Fallback: if no match for the target season was found, try appending "Saison N"
-    if (mediaType === 'tv' && season !== undefined && season !== null) {
-        const hasSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === season);
+    if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
+        const hasSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
         if (!hasSeasonMatch) {
             for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
                 if (title.length > 60) continue;
-                const seasonQuery = `${title} Saison ${season}`;
+                const seasonQuery = `${title} Saison ${effectiveSeason}`;
                 const n = normalize(seasonQuery);
                 if (!n || searchedNormalized.has(n)) continue;
                 searchedNormalized.add(n);
@@ -165,7 +167,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                         if (!seenUrls.has(m.url)) {
                             seenUrls.add(m.url);
                             const mSn = getSeasonNumber(m.title + ' ' + m.url);
-                            if (mSn === null || mSn === season) {
+                            if (mSn === null || mSn === effectiveSeason) {
                                 allMatches.push(m);
                             }
                         }
@@ -179,12 +181,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (allMatches.length === 0) return [];
 
     // Prioritize results that match the season if explicitly mentioned
-    if (mediaType === 'tv' && season !== undefined && season !== null) {
+    if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
         allMatches = allMatches.sort((a, b) => {
             const aSn = getSeasonNumber(a.title + ' ' + a.url);
             const bSn = getSeasonNumber(b.title + ' ' + b.url);
-            const hasA = aSn === season;
-            const hasB = bSn === season;
+            const hasA = aSn === effectiveSeason;
+            const hasB = bSn === effectiveSeason;
             if (hasA && !hasB) return -1;
             if (!hasA && hasB) return 1;
             return 0;
@@ -216,12 +218,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
 
         // Skip results explicitly for a different season, unless no match has the target season
-        if (mediaType === 'tv' && season !== undefined && season !== null) {
+        if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
             const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-            if (matchSn !== null && matchSn !== season) {
+            if (matchSn !== null && matchSn !== effectiveSeason) {
                 const hasCorrectSeason = allMatches.some(m => {
                     const sn = getSeasonNumber(m.title + ' ' + m.url);
-                    return sn !== null && sn === season;
+                    return sn !== null && sn === effectiveSeason;
                 });
                 if (hasCorrectSeason) continue;
             }
@@ -331,12 +333,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             const directStreams = streams.filter(s => s && s.isDirect);
             if (directStreams.length > 0) {
                 const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-                const isExplicitlyWrong = matchSn !== null && matchSn !== season;
+                const isExplicitlyWrong = matchSn !== null && matchSn !== effectiveSeason;
                 if (!isExplicitlyWrong) {
                     console.log(`[Vostfree] Found ${directStreams.length} direct streams from ${animeUrl}, stopping early`);
                     break;
                 } else {
-                    console.log(`[Vostfree] Found ${directStreams.length} direct streams but match season ${matchSn} != target ${season}, continuing search`);
+                    console.log(`[Vostfree] Found ${directStreams.length} direct streams but match season ${matchSn} != target ${effectiveSeason}, continuing search`);
                 }
             }
         } catch (e) {

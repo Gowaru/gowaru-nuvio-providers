@@ -193,10 +193,12 @@ async function getEpisodePageUrl(seriesUrl, season, episode) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
-  const titles = await getTmdbTitles(tmdbId, mediaType, { season });
-  if (!titles || titles.length === 0) return [];
+    const titles = await getTmdbTitles(tmdbId, mediaType, { season });
+    if (!titles || titles.length === 0) return [];
 
-  const info = await findContent(titles, mediaType);
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
+    const info = await findContent(titles, mediaType);
   if (!info) {
     console.warn(`[DuLourd] Content not found for ${tmdbId} (${mediaType})`);
     return [];
@@ -232,7 +234,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
   }
   const subType = detectSubType(seriesHtml, info.genre);
 
-  const episodeUrl = await getEpisodePageUrl(info.url, season, episode);
+    const episodeUrl = await getEpisodePageUrl(info.url, effectiveSeason, episode);
   let epHtml;
   try {
     epHtml = await fetchText(episodeUrl, { timeout: CONFIG.TIMEOUTS.PAGE });
@@ -257,6 +259,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     return 0;
   });
 
-  console.log(`[DuLourd] Found ${streams.length} stream(s) for ${info.slug} S${season}E${episode}`);
+    console.log(`[DuLourd] Found ${streams.length} stream(s) for ${info.slug} S${effectiveSeason}E${episode}`);
   return streams;
 }

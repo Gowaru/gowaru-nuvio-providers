@@ -140,6 +140,8 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     const isMovie = mediaType === 'movie';
     let targetEpisodes = isMovie ? [1] : [episode || 1];
     if (!isMovie) {
@@ -276,11 +278,11 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     const streams = [];
 
     // Collect ALL season parts matching the target season number (e.g. saison-4-partie-1,2,3,4)
-    const targetSeasons = seasons.filter(s => s.seasonNum === season);
+    const targetSeasons = seasons.filter(s => s.seasonNum === effectiveSeason);
     const fallbackSeasons = targetSeasons.length === 0
         ? seasons.sort((a, b) => {
-            const diffA = a.seasonNum ? Math.abs(a.seasonNum - season) : Infinity;
-            const diffB = b.seasonNum ? Math.abs(b.seasonNum - season) : Infinity;
+            const diffA = a.seasonNum ? Math.abs(a.seasonNum - effectiveSeason) : Infinity;
+            const diffB = b.seasonNum ? Math.abs(b.seasonNum - effectiveSeason) : Infinity;
             return diffA - diffB;
         }).slice(0, 1)
         : targetSeasons;

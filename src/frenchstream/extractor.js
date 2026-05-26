@@ -477,6 +477,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     const subType = await detectSubType(tmdbId, mediaType, titles);
     if (subType) console.log('[Frenchstream] subType: ' + subType);
 
@@ -498,7 +500,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
         const seasons = await fetchSeasons(tmdbId);
         if (seasons.length > 0) {
-            const sn = Number(season) || 1;
+            const sn = Number(effectiveSeason) || 1;
             const sIdx = seasons.findIndex(s => /saison\s*(\d+)/i.test(s.title) && parseInt(s.title.match(/saison\s*(\d+)/i)[1]) === sn);
             const target = sIdx !== -1 ? seasons[sIdx] : seasons[0];
             if (target) {

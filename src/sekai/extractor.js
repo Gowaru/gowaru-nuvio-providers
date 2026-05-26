@@ -195,6 +195,8 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
     
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+
     let absEp = mediaType === 'movie' ? 1 : episodeNum;
     if (mediaType === 'tv') {
         try {

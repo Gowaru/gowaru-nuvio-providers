@@ -233,6 +233,7 @@ async function getTitlesCached(tmdbId, mediaType, season) {
         if (!t) return false;
         return /^[\x00-\x7F\u00C0-\u024F\s\-',:!.\?&()]+$/.test(t);
     });
+    filtered.effectiveSeason = titles.effectiveSeason;
     tmdbTitleCache.set(key, filtered);
     return filtered;
 }
@@ -240,6 +241,8 @@ async function getTitlesCached(tmdbId, mediaType, season) {
 async function _extractStreams(tmdbId, mediaType, season, episode) {
     const titles = await getTitlesCached(tmdbId, mediaType, season);
     if (titles.length === 0) return [];
+
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
 
     const isMovie = mediaType === 'movie';
     let bestMatch = null;
@@ -307,7 +310,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // Collect ALL sub-seasons matching the target season (e.g. "4" and "4.5" for season=4)
-    const seasonStr = String(season);
+    const seasonStr = String(effectiveSeason);
     const matchingSeasons = seasons
         .filter(s => {
             const snum = String(s.seasonNumber);
@@ -316,7 +319,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         .sort((a, b) => parseFloat(a.seasonNumber) - parseFloat(b.seasonNumber));
 
     if (matchingSeasons.length === 0) {
-        console.warn(`[AnimeSite] Season ${season} not found`);
+        console.warn(`[AnimeSite] Season ${effectiveSeason} not found`);
         return [];
     }
 
