@@ -23,7 +23,7 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 16 pillars of the French streaming scene:
+This bundle integrates 17 pillars of the French streaming scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
@@ -43,7 +43,7 @@ This bundle integrates 16 pillars of the French streaming scene:
 | **DuLourd** | Movies, Cartoon, TV series streaming site with clean embed URLs. | VF / VOSTFR | ✅ |
 | **Flemmix** | French dubbed/French subtitled movies/series on flemmix.me (custom PHP, SSR). | VF / VOSTFR | ✅ |
 | **Wookafr** | VF/VOSTFR films/series on wookafr.fyi (WordPress + SomosMovies). | VF / VOSTFR | ✅ |
-
+| **Coflix** | Stream movies and series in French/English subtitles on Coflix.wiki (DoodStream, LuluVid). | VF/VOSTFR | ✅ |
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
 **⚠️ Provider Status Legend:**
