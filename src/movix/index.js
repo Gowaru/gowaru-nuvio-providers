@@ -1,5 +1,5 @@
 import { extractStreams } from './extractor.js';
-import { withTimeout, safeConfig } from '../utils/resolvers.js';
+import { withTimeout, safeConfig, expandStreamQualities } from '../utils/resolvers.js';
 
 const PROVIDER_TIMEOUT = safeConfig('NUVIO_TIMEOUT_MOVIX', 30000);
 
@@ -13,8 +13,11 @@ async function getStreams(tmdbId, mediaType, season, episode) {
             PROVIDER_TIMEOUT,
             label
         );
-        console.log(`[Movix] Found ${streams.length} streams`);
-        return streams;
+        const expanded = await expandStreamQualities(streams, {
+            includeCodec: true,
+        });
+        console.log(`[Movix] Found ${expanded.length} streams`);
+        return expanded;
     } catch (error) {
         if (error.message?.includes('[Timeout]')) {
             console.warn(`[Movix] ${error.message}`);

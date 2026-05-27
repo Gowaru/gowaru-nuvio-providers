@@ -282,44 +282,6 @@ async function fetchMovieSite(newsId, subType) {
     return streams;
 }
 
-/* ---------- FSTREAM API FALLBACK (for movies only) ---------- */
-
-const FSTREAM_API_BASE = 'https://api.movix.cash';
-
-function collectFstreamApiMovieCandidates(apiData, subType) {
-    const players = apiData && apiData.players;
-    if (!players || typeof players !== 'object') return [];
-    const streams = [];
-    for (const lang of Object.keys(players)) {
-        const list = players[lang];
-        if (!Array.isArray(list)) continue;
-        for (const item of list) {
-            if (typeof item.url !== 'string' || !item.url.startsWith('http')) continue;
-            streams.push(toStream('Frenchstream', item.player || 'player', lang, item.url, item.quality, subType));
-        }
-    }
-    return streams;
-}
-
-async function fetchMovixMovieFallback(tmdbId, subType) {
-    const ck = 'movix_m_' + tmdbId;
-    const cv = cache.get(ck);
-    if (cv && Date.now() - cv.ts < CACHE_TTL_MS) return cv.data;
-    try {
-        const url = FSTREAM_API_BASE + '/api/fstream/movie/' + tmdbId;
-        const data = await fetchJson(url, {
-            headers: { Accept: 'application/json, text/plain, */*', Referer: 'https://movix.cash/', Origin: 'https://movix.cash' }
-        });
-        if (!data || data.success === false) return [];
-        const streams = collectFstreamApiMovieCandidates(data, subType);
-        cache.set(ck, { data: streams, ts: Date.now() });
-        return streams;
-    } catch (e) {
-        console.warn('[Frenchstream] Movix fallback failed: ' + e.message);
-        return [];
-    }
-}
-
 /* ---------- STREAM RESOLUTION ---------- */
 
 function resolveSingle(stream) {
@@ -498,42 +460,42 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
         // ------------------------------------
 
-        const seasons = await fetchSeasons(tmdbId);
+        let seasons = [];
+        try {
+            seasons = await fetchSeasons(tmdbId);
+        } catch (e) {
+            console.warn(`[Frenchstream] fetchSeasons failed: ${e.message}`);
+        }
         if (seasons.length > 0) {
             const sn = Number(effectiveSeason) || 1;
             const sIdx = seasons.findIndex(s => /saison\s*(\d+)/i.test(s.title) && parseInt(s.title.match(/saison\s*(\d+)/i)[1]) === sn);
             const target = sIdx !== -1 ? seasons[sIdx] : seasons[0];
             if (target) {
-                const epData = await fetchEpisodeData(target.id);
-                for (const ep of targetEpisodes) {
-                    const candidates = collectTvSiteCandidates(epData, ep, subType);
-                    if (candidates.length > 0) {
-                        const streams = await resolveCandidates(candidates);
-                        console.log('[Frenchstream] Site eps ' + target.id + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
-                        return streams;
+                let epData = null;
+                try {
+                    epData = await fetchEpisodeData(target.id);
+                } catch (e) {
+                    console.warn(`[Frenchstream] fetchEpisodeData failed: ${e.message}`);
+                }
+                if (epData) {
+                    for (const ep of targetEpisodes) {
+                        const candidates = collectTvSiteCandidates(epData, ep, subType);
+                        if (candidates.length > 0) {
+                            const streams = await resolveCandidates(candidates);
+                            console.log('[Frenchstream] Site eps ' + target.id + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
+                            return streams;
+                        }
                     }
                 }
             }
         }
-        console.warn('[Frenchstream] No season data from site, trying Movix fallback');
-        const movix = await fetchMovixMovieFallback(tmdbId, subType);
-        if (movix.length > 0) {
-            const streams = await resolveCandidates(movix);
-            console.log('[Frenchstream] Movix TV fallback: ' + movix.length + ' candidates, ' + streams.length + ' streams');
-            return streams;
-        }
+        console.warn('[Frenchstream] No streams found via site API');
         return [];
     }
 
-    // Movies: site-native category browsing → film_api verification → Movix fallback
+    // Movies: site-native category browsing → film_api verification
     const movieStreams = await searchMovieOnSite(tmdbId, titles, subType);
     if (movieStreams.length > 0) return movieStreams;
 
-    const movix = await fetchMovixMovieFallback(tmdbId, subType);
-    if (movix.length > 0) {
-        const streams = await resolveCandidates(movix);
-        console.log('[Frenchstream] Movix movie fallback: ' + movix.length + ' candidates, ' + streams.length + ' streams');
-        return streams;
-    }
     return [];
 }

@@ -181,24 +181,6 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
             }
         }
 
-        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
-        const transRes = await safeFetch(transUrl);
-        if (transRes) {
-            const transData = await transRes.json();
-            const frTrans = (transData.translations || []).find(t => t.iso_639_1 === 'fr');
-            const titleFr = frTrans?.data?.name?.trim() || frTrans?.data?.title?.trim();
-            if (titleFr && !titles.includes(titleFr)) {
-                titles.push(titleFr);
-            }
-            if (mediaType === 'tv' && opts.season && titleFr) {
-                const s = parseInt(opts.season, 10);
-                if (s > 0) {
-                    const frVar = `${titleFr} Saison ${s}`;
-                    if (!titles.includes(frVar)) titles.push(frVar);
-                }
-            }
-        }
-
         const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
         const altRes = await safeFetch(altUrl);
         if (altRes) {
@@ -208,13 +190,34 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
                 altList.forEach(alt => {
                     const t = alt.title?.trim();
                     if (t && !titles.some(existing => existing.toLowerCase() === t.toLowerCase()) && isLatinText(t)) {
-                        if (alt.type === 'Romaji' || alt.iso_3166_1 === 'US' || alt.iso_3166_1 === 'FR' || alt.type === 'Search Tag') {
-                            titles.splice(1, 0, t);
-                        } else {
-                            titles.push(t);
-                        }
+                        titles.push(t);
                     }
                 });
+            }
+        }
+
+        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
+        const transRes = await safeFetch(transUrl);
+        if (transRes) {
+            const transData = await transRes.json();
+            const frTrans = (transData.translations || []).find(t => t.iso_639_1 === 'fr');
+            const titleFr = frTrans?.data?.name?.trim() || frTrans?.data?.title?.trim();
+            if (titleFr && !titles.some(existing => existing.toLowerCase() === titleFr.toLowerCase())) {
+                titles.splice(1, 0, titleFr);
+            }
+            if (mediaType === 'tv' && opts.season && titleFr) {
+                const s = parseInt(opts.season, 10);
+                if (s > 0) {
+                    const frVar = `${titleFr} Saison ${s}`;
+                    if (!titles.some(existing => existing.toLowerCase() === frVar.toLowerCase())) {
+                        const frIndex = titles.indexOf(titleFr);
+                        if (frIndex !== -1) {
+                            titles.splice(frIndex + 1, 0, frVar);
+                        } else {
+                            titles.splice(2, 0, frVar);
+                        }
+                    }
+                }
             }
         }
 

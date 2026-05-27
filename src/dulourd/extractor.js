@@ -1,6 +1,6 @@
 import cheerio from 'cheerio-without-node-native';
 import { fetchText, fetchApi } from './http.js';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, safeFetch } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { CONFIG } from './config.js';
 
@@ -173,6 +173,34 @@ function extractSearchQueries(titles) {
   return [...queries].slice(0, CONFIG.MAX_SEARCH_QUERIES);
 }
 
+async function tryFetchForSlug(url) {
+  try {
+    console.log(`[DuLourd] Slug probe: ${url}`);
+    const res = await safeFetch(url, { timeout: 5000 });
+    if (res && res.ok) {
+      await res.text();
+      return { url };
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function findSlugFallback(titles, mediaType) {
+  const slug = toSlug(titles[0] || '');
+  if (!slug) return null;
+  const baseType = mediaType === 'movie' ? 'films' : 'voir-series';
+  const urls = CONFIG.GENRES.map(g => `${CONFIG.BASE_URL}/${baseType}/${g}/${slug}.html`);
+  const results = await Promise.allSettled(urls.map(tryFetchForSlug));
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) {
+      console.log(`[DuLourd] Slug fallback hit: ${r.value.url}`);
+      const m = r.value.url.match(/\/(\w+)\/[^/]+\.html$/);
+      return { url: r.value.url, genre: m ? m[1] : '', slug, title: titles[0] };
+    }
+  }
+  return null;
+}
+
 async function findContent(titles, mediaType) {
   const queries = extractSearchQueries(titles);
 
@@ -180,8 +208,18 @@ async function findContent(titles, mediaType) {
     const results = await searchDle(query);
     if (results.length > 0) {
       const match = bestMatch(results, titles);
-      if (match && match.url) return match;
+      if (match && match.url) {
+        try {
+          const r = await safeFetch(match.url, { timeout: 5000 });
+          if (r && r.ok) { await r.text(); return match; }
+        } catch (e) { /* unreachable link */ }
+      }
     }
+  }
+
+  const slugMatch = await findSlugFallback(titles, mediaType);
+  if (slugMatch) {
+    return slugMatch;
   }
 
   return null;

@@ -36,6 +36,7 @@ jspm_packages/
 # Optional npm cache directory
 .npm
 .agents/
+.opencode/
 
 # Optional REPL history
 .node_repl_history
@@ -82,32 +83,6 @@ temp/
 test/
 *.test.js
 *.spec.js
-debug_driveleech.js
-debug_instant_download.js
-debug_instant_real.js
-debug_uhdmovies_mov.js
-test_instant_fixed.js
-test_instant_priority.js
-.gitignore
-test_instant_real.js
-test_instant.js
-test_uhdmovies.js
-episodesrefer.html
-test_moviesmod.js
-moviesmodOG.js
-discord-post.md
-test_hdrezka.js
-hdrezkaOG.js
-test_dahmermovies.js
-dahmer-movies-fetcher.js
-xprime-scraper.js
-test_xprime.js
-m3u8-resolver.js
-test_myflixer.js
-4khdhubog.js
-ShowboxOG.js
-test_showboxog.js
-test_vidsrc.js
-vidsrcextractor.js
-
 test_providers.js
+
+providers/*
