@@ -1,6 +1,6 @@
 import { fetchText, postForm } from './http.js'
 import cheerio from 'cheerio-without-node-native'
-import { resolveStream, safeFetch } from '../utils/resolvers.js'
+import { resolveStream, safeFetch, withTimeout } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js'
 import {
@@ -257,7 +257,7 @@ async function probeSlug(slug, type, domain) {
   const path = type === 'series' ? `/streaming/series/${slug}/` : `/streaming/${slug}/`
   const url = `${domain}${path}`
   try {
-    await fetchText(url, { method: 'HEAD', timeout: 8000 })
+    await fetchText(url, { method: 'HEAD', timeout: 3000 })
     return { url, title: slug.replace(/-/g, ' '), isSeries: type === 'series' }
   } catch {
     return null
@@ -266,12 +266,12 @@ async function probeSlug(slug, type, domain) {
 
 async function trySlugFallback(title, type) {
   const slug = toSlug(title)
-  const candidates = [slug, slug.replace(/-season-\d+$/, ''), slug.replace(/-saison-\d+$/, '')]
+  const candidates = [...new Set([slug, slug.replace(/-season-\d+$/, ''), slug.replace(/-saison-\d+$/, '')])]
   const domains = [...new Set([SITE.BASE_URL, ...SITE.DOMAINS])]
   
   for (const domain of domains) {
     const results = await Promise.allSettled(
-      [...new Set(candidates)].map(s => probeSlug(s, type, domain))
+      candidates.map(s => probeSlug(s, type, domain))
     )
     for (const r of results) {
       if (r.status === 'fulfilled' && r.value) return r.value
@@ -337,7 +337,7 @@ async function extractMovie(tmdbId, titles, subType) {
 
       console.log(`[Wookafr] Iframe: ${iframeUrl} [${lang}]`)
       const stream = toStream('Wookafr', iframeUrl, quality, lang, subType)
-      const resolved = await resolveStream(stream)
+      const resolved = await withTimeout(resolveStream(stream), 8000)
       if (resolved && resolved.url) return [{ ...resolved, provider: 'wookafr' }]
   } catch (e) {
     console.warn(`[Wookafr] Movie extraction failed: ${e.message}`)
@@ -379,7 +379,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
         const lang = detectLanguage(match.url, seriesHtml)
         const quality = detectQuality(iframeUrl, match.title)
         const stream = toStream('Wookafr', iframeUrl, quality, lang, subType)
-        const resolved = await resolveStream(stream)
+        const resolved = await withTimeout(resolveStream(stream), 8000)
         if (resolved && resolved.url) return [{ ...resolved, provider: 'wookafr' }]
       }
       return []
@@ -446,7 +446,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
     console.log(`[Wookafr] Iframe: ${iframeUrl} [${lang}]`)
     const stream = toStream('Wookafr', iframeUrl, quality, lang, subType)
-    const resolved = await resolveStream(stream)
+    const resolved = await withTimeout(resolveStream(stream), 8000)
     if (resolved && resolved.url) return [{ ...resolved, provider: 'wookafr' }]
   } catch (e) {
     console.warn(`[Wookafr] Series extraction failed: ${e.message}`)

@@ -153,7 +153,15 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
 
     try {
         const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
-        const mainRes = await safeFetch(mainUrl);
+        const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
+
+        const [mainRes, altRes, transRes] = await Promise.all([
+            safeFetch(mainUrl),
+            safeFetch(altUrl),
+            safeFetch(transUrl)
+        ]);
+
         if (mainRes) {
             const data = await mainRes.json();
             const titleEn = (type === 'movie' ? data.title : data.name)?.trim();
@@ -181,8 +189,6 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
             }
         }
 
-        const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
-        const altRes = await safeFetch(altUrl);
         if (altRes) {
             const altData = await altRes.json();
             const altList = type === 'movie' ? altData.titles : altData.results;
@@ -196,8 +202,6 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
             }
         }
 
-        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
-        const transRes = await safeFetch(transUrl);
         if (transRes) {
             const transData = await transRes.json();
             const frTrans = (transData.translations || []).find(t => t.iso_639_1 === 'fr');

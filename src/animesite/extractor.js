@@ -6,22 +6,15 @@ import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 
 const tmdbTitleCache = new Map();
 
-const MAX_TITLE_SEARCHES = 5;
+const MAX_TITLE_SEARCHES = 2;
 const SEARCH_SCORE_THRESHOLD = 25;
-const SEARCH_TIMEOUT = 8000;
+const SEARCH_TIMEOUT = 5000;
 const SEARCH_RETRIES = 0;
-
-function sleep(ms) {
-    const start = Date.now();
-    return new Promise(resolve => {
-        (function check() { if (Date.now() - start >= ms) resolve(); else check(); })();
-    });
-}
 
 function slugifyTitle(title) {
     return title.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/[':!.,?()[\]]/g, '')
+        .replace(/[':!.,?()\[\]]/g, '')
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
 }
@@ -29,7 +22,7 @@ function slugifyTitle(title) {
 function normalize(s) {
     return s.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/[':!.,?()[\]]/g, '').replace(/\b(the|vostfr|vost|vf|french|streaming|anime)\s+/g, '')
+        .replace(/[':!.,?()\[\]\/-]/g, ' ').replace(/\b(the|vostfr|vost|vf|french|streaming|anime)\s+/g, '')
         .replace(/\s+/g, ' ').trim();
 }
 
@@ -52,10 +45,17 @@ function scoreSearchMatch(resultTitle, searchTitle) {
     return score;
 }
 
+function sleep(ms) {
+    const start = Date.now();
+    return new Promise(resolve => {
+        (function check() { if (Date.now() - start >= ms) resolve(); else check(); })();
+    });
+}
+
 async function fetchWithRetry(url, options = {}, retries = 2) {
     for (let i = 0; i <= retries; i++) {
         try {
-            return await fetchText(url, { ...options, timeout: TIMEOUT });
+            return await fetchText(url, { ...options, timeout: options.timeout || TIMEOUT });
         } catch (err) {
             if (err.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(err.message)) throw err;
             if (i === retries) throw err;
@@ -115,106 +115,95 @@ function extractEmbedUrls(html) {
     return [...new Set(urls)];
 }
 
-function extractSlugFromPage($) {
+function extractSlugFromMeta($) {
+    // Try JSON-LD with TVSeries/Movie first
     const jsonLdScript = $('script[type="application/ld+json"]').filter((i, el) => {
         const text = $(el).html() || '';
         return text.includes('TVSeries') || text.includes('Movie');
     }).first().html();
-    if (!jsonLdScript) return null;
+    if (jsonLdScript) {
+        try {
+            const jsonLd = JSON.parse(jsonLdScript);
+            const pageUrl = jsonLd.url || '';
+            const match = pageUrl.match(/(\d+-[a-z0-9-]+)\/?$/);
+            if (match) return { slug: match[1], title: jsonLd.name || '', hasData: !!jsonLd.containsSeason };
+        } catch (e) {}
+    }
 
-    try {
-        const jsonLd = JSON.parse(jsonLdScript);
-        const pageUrl = jsonLd.url || '';
-        const match = pageUrl.match(/(\d+-[a-z0-9-]+)\/?$/);
-        if (match) return { slug: match[1], title: jsonLd.name || '' };
-    } catch (e) {}
+    // Fallback: extract page title from <title> tag
+    const pageTitle = $('title').first().text().trim();
+    if (pageTitle) {
+        // Extract slug from canonical URL or og:url
+        const canonical = $('link[rel="canonical"]').attr('href') || '';
+        const ogUrl = $('meta[property="og:url"]').attr('content') || '';
+        const urlMatch = (canonical || ogUrl).match(/animesite\.fr\/(\d+-[a-z0-9-]+)\/?$/);
+        if (urlMatch) {
+            return { slug: urlMatch[1], title: pageTitle, hasData: false };
+        }
+        // Last resort: extract any number-slug from the current URL context
+        const urlRef = canonical || ogUrl;
+        const anySlug = urlRef.match(/\/([a-z0-9-]+)\/?$/);
+        if (anySlug) {
+            return { slug: anySlug[1], title: pageTitle, hasData: false };
+        }
+    }
 
     return null;
 }
 
-async function trySearchUrl(url, title) {
+async function trySlugUrl(slug, title) {
     try {
+        const url = `${BASE_URL}/anime/${slug}/`;
         const html = await fetchWithRetry(url, { timeout: SEARCH_TIMEOUT }, SEARCH_RETRIES);
         const $ = cheerio.load(html);
 
-        const pageMatch = extractSlugFromPage($);
+        const pageMatch = extractSlugFromMeta($);
         if (pageMatch) {
             const score = scoreSearchMatch(pageMatch.title, title);
             if (score >= SEARCH_SCORE_THRESHOLD) {
-                console.log(`[AnimeSite] Page self-match via ${url}: "${pageMatch.title}" (${pageMatch.slug})`);
+                console.log(`[AnimeSite] Matched via slug: \"${pageMatch.title}\" (${pageMatch.slug}, hasData:${pageMatch.hasData})`);
                 return pageMatch;
             }
         }
 
+        // Also check if the page has any anime links matching our title
         let bestMatch = null;
         let bestScore = 0;
-
-        $(`a[href^="/"]`).each((i, el) => {
+        $(`a[href^="/anime/"]`).each((i, el) => {
             const href = $(el).attr('href');
             const linkText = $(el).attr('title') || $(el).text().trim();
-            const match = href && (
-                href.match(/^\/(\d+-[a-z0-9-]+)\/?$/) ||
-                href.match(/^\/anime\/(\d+-[a-z0-9-]+)\/?$/)
-            );
-            if (match && linkText) {
+            const m = href && href.match(/^\/anime\/(\d+-[a-z0-9-]+)\/?$/);
+            if (m && linkText) {
                 const score = scoreSearchMatch(linkText, title);
                 if (score > bestScore) {
                     bestScore = score;
-                    bestMatch = { slug: match[1], title: linkText };
+                    bestMatch = { slug: m[1], title: linkText, hasData: false };
                 }
             }
         });
-
         if (bestMatch && bestScore >= SEARCH_SCORE_THRESHOLD) {
-            console.log(`[AnimeSite] Matched via ${url}: "${bestMatch.title}" (${bestMatch.slug})`);
+            console.log(`[AnimeSite] Matched via link: \"${bestMatch.title}\" (${bestMatch.slug})`);
             return bestMatch;
         }
     } catch (e) {
         if (!e.message || !e.message.includes('HTTP error 404')) {
-            console.warn(`[AnimeSite] ${url} not available: ${e.message}`);
+            console.warn(`[AnimeSite] Slug ${slug} unavailable: ${e.message}`);
         }
     }
 
     return null;
 }
 
-async function searchAnime(title, isMovie, doDeepSearch, tmdbId) {
+async function searchAnime(title, isMovie) {
+    // Skip /?s= search (times out on Next.js site — no traditional PHP search)
+    // Skip deep search (useless for Next.js SPA)
+
     const slug = slugifyTitle(title);
     if (!slug) return null;
 
-    // Try homepage-based search first — finds canonical slugs with full season data
-    const parallelHits = await Promise.allSettled([
-        trySearchUrl(`${BASE_URL}/anime/${slug}/`, title),
-        trySearchUrl(`${BASE_URL}/${slug}/`, title),
-        trySearchUrl(`${BASE_URL}/?s=${encodeURIComponent(title)}`, title),
-    ]);
-    for (const h of parallelHits) {
-        if (h.status === 'fulfilled' && h.value) return h.value;
-    }
-
-    if (!isMovie && doDeepSearch) {
-        for (let s = 1; s <= 3; s++) {
-            const deepHits = await Promise.allSettled([
-                trySearchUrl(`${BASE_URL}/anime/${slug}-saison-${s}/`, title),
-                trySearchUrl(`${BASE_URL}/anime/${slug}-s${s}/`, title),
-                trySearchUrl(`${BASE_URL}/anime/${slug}-${s}/`, title),
-            ]);
-            for (const h of deepHits) {
-                if (h.status === 'fulfilled' && h.value) return h.value;
-            }
-        }
-    }
-
-    // Fallback for movies: TMDB ID-based direct URL (TV series use homepage search)
-    if (isMovie && tmdbId) {
-        const directResult = await trySearchUrl(`${BASE_URL}/${tmdbId}-${slug}/`, title);
-        if (directResult) return directResult;
-
-        // Last resort: construct slug from TMDB ID + slugified title
-        const fallbackSlug = `${tmdbId}-${slug}`;
-        console.log(`[AnimeSite] Movie fallback slug: ${fallbackSlug}`);
-        return { slug: fallbackSlug, title };
-    }
+    // Try the main anime slug directly (fast, returns 200 or 404)
+    const direct = await trySlugUrl(slug, title);
+    if (direct) return direct;
 
     return null;
 }
@@ -231,7 +220,7 @@ async function getTitlesCached(tmdbId, mediaType, season) {
 
     const filtered = titles.filter(t => {
         if (!t) return false;
-        return /^[\x00-\x7F\u00C0-\u024F\s\-',:!.\?&()]+$/.test(t);
+        return /^[\x00-\x7F\u00C0-\u024F\s\-',:!.?\&()]+$/.test(t);
     });
     filtered.effectiveSeason = titles.effectiveSeason;
     tmdbTitleCache.set(key, filtered);
@@ -243,12 +232,11 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     if (titles.length === 0) return [];
 
     const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
-
     const isMovie = mediaType === 'movie';
     let bestMatch = null;
 
     for (let i = 0; i < Math.min(titles.length, MAX_TITLE_SEARCHES); i++) {
-        const match = await searchAnime(titles[i], isMovie, i === 0, tmdbId);
+        const match = await searchAnime(titles[i], isMovie);
         if (match) {
             bestMatch = match;
             break;
@@ -256,12 +244,18 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     if (!bestMatch) {
-        console.warn(`[AnimeSite] No match found for "${titles[0]}"`);
+        console.warn(`[AnimeSite] No match found for \"${titles[0]}\"`);
+        return [];
+    }
+
+    // If the page has no embedded data (Next.js SPA without JSON-LD), bail fast
+    if (!bestMatch.hasData) {
+        console.warn(`[AnimeSite] Page \"${bestMatch.title}\" has no extractable data (Next.js SPA)`);
         return [];
     }
 
     const slug = bestMatch.slug;
-    console.log(`[AnimeSite] Matched: "${bestMatch.title}" (slug: ${slug})`);
+    console.log(`[AnimeSite] Matched: \"${bestMatch.title}\" (slug: ${slug})`);
 
     const animeHtml = await fetchWithRetry(`${BASE_URL}/${slug}/`);
     const $ = cheerio.load(animeHtml);
@@ -309,7 +303,6 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    // Collect ALL sub-seasons matching the target season (e.g. "4" and "4.5" for season=4)
     const seasonStr = String(effectiveSeason);
     const matchingSeasons = seasons
         .filter(s => {
@@ -323,7 +316,6 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         return [];
     }
 
-    // Iterate episodes across sub-seasons with cumulative counting
     let cumulativeOffset = 0;
     for (const subSeason of matchingSeasons) {
         const subNum = subSeason.seasonNumber;

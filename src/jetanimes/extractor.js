@@ -26,7 +26,7 @@ function titleScore(cardTitle, queryTitle) {
 
 async function searchAnime(title) {
     try {
-        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: 10000 });
+        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: 6000 });
         const $ = cheerio.load(html);
         const results = [];
         const seen = new Set();
@@ -75,6 +75,7 @@ async function fetchEmbed(postId, nume, type, referer) {
         const sf = await safeFetch(`${BASE_URL}/wp-admin/admin-ajax.php`, {
             method: 'POST',
             body: params.toString(),
+            timeout: 8000,
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -86,7 +87,8 @@ async function fetchEmbed(postId, nume, type, referer) {
         });
         if (!sf) return null;
         const j = await sf.json();
-        return j && j.embed_url ? j.embed_url : null;
+        if (!j || !j.embed_url) return null;
+        return j.embed_url;
     } catch (e) {
         return null;
     }
@@ -130,16 +132,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (!key || key.length < 2 || seen.has(key)) continue;
         seen.add(key);
         candidates.push(t);
-        if (candidates.length >= 5) break;
+            if (candidates.length >= 10) break;
     }
 
-    let matches = [];
-    for (const t of candidates) {
-        matches = await searchAnime(t);
-        if (matches.length > 0 && matches[0].score >= 30) break;
-    }
+    // Only try the best candidate title — searching is very slow on this site
+    const bestCandidate = candidates[0];
+    if (!bestCandidate) return [];
+    const matches = await searchAnime(bestCandidate);
 
-    if (matches.length === 0) return [];
+    if (matches.length === 0 || matches[0].score < 30) return [];
 
     const isMovie = mediaType === 'movie';
 
@@ -176,10 +177,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
                 $('.episodios li').each((_, el) => {
                     const $el = $(el);
-                    const parsed = parseNumerando($('.numerando', $el).text().trim());
-                    if (parsed && parsed.season === targetSeason && parsed.episode === targetEpisode) {
-                        const href = $('.episodiotitle a', $el).attr('href');
-                        if (href) epLink = href.startsWith('http') ? href : BASE_URL + href;
+                    const numerandoText = $('.numerando', $el).text().trim();
+                    const parsed = parseNumerando(numerandoText);
+                    if (!parsed) return;
+                    const href = $('.episodiotitle a', $el).attr('href');
+                    if (!href) return;
+                    if (parsed.season === targetSeason && parsed.episode === targetEpisode) {
+                        epLink = href.startsWith('http') ? href : BASE_URL + href;
+                        return false;
+                    }
+                    if (!epLink && parsed.season === targetSeason) {
+                        const rm = numerandoText.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+                        if (rm) {
+                            const rangeStart = parseInt(rm[1], 10);
+                            const rangeEnd = parseInt(rm[2], 10);
+                            if (targetEpisode >= rangeStart && targetEpisode <= rangeEnd) {
+                                epLink = href.startsWith('http') ? href : BASE_URL + href;
+                            }
+                        }
                     }
                 });
 
@@ -192,7 +207,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 if (!epPostId) continue;
 
                 const tvResults = await Promise.allSettled(
-                    [1, 2, 3, 4, 5].map(n =>
+                    [1, 2].map(n =>
                         fetchEmbed(epPostId, n, 'tv', epLink).then(embedUrl => {
                             if (!embedUrl) return null;
                             return resolveStream({

@@ -549,10 +549,10 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
+        // Reduced from 3 to 2 domains for TV timeout compatibility (30s vs 60s)
         const domains = [
             url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.me'),
-            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.biz'),
-            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.bz')
+            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.biz')
         ];
         const uniqueDomains = [...new Set(domains)];
         const headers = { 'Referer': 'https://vidmoly.me/', 'Origin': 'https://vidmoly.me' };
@@ -591,7 +591,8 @@ export async function resolveVidmoly(url) {
 export async function resolveUqload(url) {
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
     const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || 'uqload.co';
-    const uniqueDomains = [...new Set([originalDomain, 'uqload.co', 'oneupload.to'])];
+    // Reduced from 3 to 2 domains for TV timeout compatibility (30s vs 60s)
+    const uniqueDomains = [...new Set([originalDomain, 'uqload.co'])];
     const baseRef = `https://${originalDomain}/`;
 
     return new Promise((resolve) => {
@@ -853,8 +854,29 @@ export async function resolvePackedPlayer(url) {
     return { url };
 }
 
+export async function resolveDownParadise(url) {
+    // down-paradise.com: Parked domain with multi-level anti-bot redirect chain
+    // (parklogic -> ww1.down-paradise -> tratobid.com). Unresolvable without a browser.
+    // Return same URL immediately — let the knownSlowHost check handle it fast.
+    return { url };
+}
+
+export async function resolveUp4fun(url) {
+    // up4fun.top is notoriously slow (60s+). Single lightweight fetch attempt, then bail.
+    try {
+        const res = await safeFetch(url, { headers: { 'Referer': 'https://up4fun.top/' } });
+        if (!res) return null;
+        const html = await res.text();
+        // Look for direct video URLs or embedded iframes with video
+        const videoMatch = html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                           html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+        if (videoMatch) return { url: videoMatch[1], headers: { 'Referer': 'https://up4fun.top/' } };
+    } catch (e) {}
+    return null; // null = don't retry in generic fallback
+}
+
 export async function resolveStream(stream, depth = 0) {
-    if (depth > 3) return { ...stream, isDirect: false }; // Prevent infinite loops
+    if (depth > 2) return { ...stream, isDirect: false }; // Reduced from 3 to 2 for TV timeouts
 
     const originalUrl = stream.url;
     const urlLower = originalUrl.toLowerCase();
@@ -882,7 +904,7 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('vidoza.')) result = await resolveVidoza(originalUrl);
         else if (urlLower.includes('sendvid.') || urlLower.includes('daisukianime')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
-        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live') || urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.')) result = await resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live') || urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulustream.') ||
@@ -892,6 +914,8 @@ export async function resolveStream(stream, depth = 0) {
         ) result = await resolvePackedPlayer(originalUrl);
         else if (urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
         else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
+        else if (urlLower.includes('down-paradise.') || urlLower.includes('ww1.down-paradise.')) result = await resolveDownParadise(originalUrl);
+        else if (urlLower.includes('up4fun.')) result = await resolveUp4fun(originalUrl);
         
         // If a specific resolver found a different URL, it's the final direct link
         if (result && result.url !== originalUrl && !isKnownFakeDirectUrl(result.url)) {
@@ -905,7 +929,12 @@ export async function resolveStream(stream, depth = 0) {
         }
 
         // 3. Generic Fallback & Recursive Peeling
+        // Skip generic fallback for known slow hosts (already tried in specific resolver)
+        const knownSlowHost = urlLower.includes('up4fun.') || urlLower.includes('down-paradise.');
         if (!result || result.url === originalUrl) {
+            if (knownSlowHost) {
+                return { ...stream, isDirect: false };
+            }
             const res = await safeFetch(originalUrl, { headers: stream.headers });
             if (res) {
                 let html = await res.text();

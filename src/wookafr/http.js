@@ -8,42 +8,17 @@ export const HEADERS = {
   Referer: `${SITE.BASE_URL}/`,
 }
 
-const RETRY_DELAYS = [1000, 2500, 5000]
-
-function sleep(ms) {
-  return new Promise(resolve => {
-    const start = Date.now()
-    function check() { if (Date.now() - start >= ms) resolve(); else Promise.resolve().then(check) }
-    check()
-  })
-}
-
 export async function fetchText(url, options = {}) {
-  const retries = options.retries ?? 2
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      console.log(`[Wookafr] Fetching: ${url}`)
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout })
-      if (!res || !res.ok) {
-        const status = res && typeof res.status === 'number' ? res.status : 'no-response'
-        if (attempt < retries && status >= 500) {
-          console.warn(`[Wookafr] HTTP ${status} for ${url}, retrying (${attempt + 1}/${retries})...`)
-          await sleep(RETRY_DELAYS[attempt] || 3000)
-          continue
-        }
-        throw new Error(`HTTP error ${status} for ${url}`)
-      }
-      return await res.text()
-    } catch (e) {
-      if (attempt >= retries || (e.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(e.message))) throw e
-      console.warn(`[Wookafr] Attempt ${attempt + 1} failed for ${url}: ${e.message}`)
-      await sleep(RETRY_DELAYS[attempt] || 3000)
-    }
+  console.log(`[Wookafr] Fetching: ${url}`)
+  const res = await safeFetch(url, { headers: mergedHeaders, timeout })
+  if (!res || !res.ok) {
+    const status = res && typeof res.status === 'number' ? res.status : 'no-response'
+    throw new Error(`HTTP error ${status} for ${url}`)
   }
-  throw new Error(`Failed to fetch ${url} after ${retries + 1} attempts`)
+  return await res.text()
 }
 
 export async function postForm(url, data, options = {}) {

@@ -35,10 +35,10 @@ export const PATTERNS = {
 }
 
 export const TIMEOUTS = {
-  SEARCH: 10000,
-  PAGE: 12000,
-  AJAX: 8000,
-  RESOLVE: 10000,
+  SEARCH: 3000,
+  PAGE: 6000,
+  AJAX: 3000,
+  RESOLVE: 8000,
   PROVIDER: 60000,
 }
 
@@ -71,4 +71,4 @@ export const ANIME_KEYWORDS = /\b(?:anime|japonais|japon|shonen|shoujo|seinen|ma
 
 export const CACHE_TTL = 5 * 60 * 1000
 export const MAX_CANDIDATES = 8
-export const MAX_SEARCH_TITLES = 3
+export const MAX_SEARCH_TITLES = 2

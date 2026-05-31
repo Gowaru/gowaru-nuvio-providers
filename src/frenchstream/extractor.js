@@ -7,8 +7,8 @@ import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
 const MIN_MATCH_SCORE = 60;
 const MOVIE_MATCH_SCORE = 55;
 const MAX_SEARCH_QUERIES = 3;
-const MAX_CANDIDATES = 4;
-const RESOLVE_TIMEOUT_MS = 20000;
+const MAX_CANDIDATES = 3;
+const RESOLVE_TIMEOUT_MS = 15000;
 const CACHE_TTL_MS = 300000;
 const CATEGORY_FETCH_TIMEOUT = 8000;
 const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
@@ -285,7 +285,13 @@ async function fetchMovieSite(newsId, subType) {
 /* ---------- STREAM RESOLUTION ---------- */
 
 function resolveSingle(stream) {
-    return resolveStream(stream);
+    // Wrap with timeout to avoid slow hosts blocking resolution
+    const promise = resolveStream(stream);
+    if (typeof setTimeout === 'undefined') return promise;
+    return Promise.race([
+        promise,
+        new Promise(resolve => setTimeout(() => resolve({ ...stream, isDirect: false }), RESOLVE_TIMEOUT_MS))
+    ]);
 }
 
 async function resolveCandidates(candidates) {
@@ -379,24 +385,33 @@ function scoreMovieCategory(cardTitle, queryTitles) {
 async function searchMovieOnSite(tmdbId, titles, subType) {
     // Step 1: check DLE search results (fast, sometimes works)
     const queries = buildTitleQueries(titles);
+    let dleFoundCards = false;
     for (const title of queries) {
         try {
             const ranked = await searchByTitle(title, 'movie');
-            if (ranked.length > 0 && ranked[0]._score >= MIN_MATCH_SCORE) {
-                const streams = await verifyAndExtractMovieStreams(ranked[0].newsId, tmdbId, subType);
-                if (streams && streams.length > 0) {
-                    const resolved = await resolveCandidates(streams);
-                    console.log('[Frenchstream] Movie found via DLE search: ' + resolved.length + ' streams');
-                    return resolved;
+            if (ranked.length > 0) {
+                dleFoundCards = true;
+                if (ranked[0]._score >= MIN_MATCH_SCORE) {
+                    const streams = await verifyAndExtractMovieStreams(ranked[0].newsId, tmdbId, subType);
+                    if (streams && streams.length > 0) {
+                        const resolved = await resolveCandidates(streams);
+                        console.log('[Frenchstream] Movie found via DLE search: ' + resolved.length + ' streams');
+                        return resolved;
+                    }
                 }
+            } else if (!dleFoundCards) {
+                // First query returned 0 cards — DLE search is broken for this film, skip remaining
+                break;
             }
         } catch (e) {}
     }
 
-    // Step 2: fetch category pages, ordered by TMDB genre relevance
+    // Step 2: fetch category pages, starting with TMDB genre relevance
     const details = await getTmdbDetails(tmdbId, 'movie');
     const genreIds = (details?.genres || []).map(g => g.id);
     const priorityCats = [...new Set(genreIds.map(id => GENRE_TO_CATEGORY[id]).filter(Boolean))];
+
+    // Build ordered list: priority cats first, then remaining
     const catsToCheck = [...priorityCats];
     for (const cat of ALL_CATEGORIES) {
         if (!catsToCheck.includes(cat)) catsToCheck.push(cat);
@@ -406,26 +421,68 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
     let bestMatch = null;
     let bestScore = 0;
 
-    const catResults = await Promise.allSettled(catsToCheck.map(cat => fetchCategoryMovies(cat)));
-    for (const r of catResults) {
-        if (r.status !== 'fulfilled') continue;
-        for (const movie of r.value) {
-            if (seenNewsIds.has(movie.newsId)) continue;
-            seenNewsIds.add(movie.newsId);
-            const score = scoreMovieCategory(movie.title, titles);
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = movie;
+    // Process category batch results and look for matches
+    function processCatResults(results) {
+        let found = false;
+        for (const r of results) {
+            if (r.status !== 'fulfilled') continue;
+            for (const movie of r.value) {
+                if (seenNewsIds.has(movie.newsId)) continue;
+                seenNewsIds.add(movie.newsId);
+                const score = scoreMovieCategory(movie.title, titles);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = movie;
+                    if (score >= MOVIE_MATCH_SCORE) found = true;
+                }
             }
+        }
+        return found;
+    }
+
+    // Fetch categories in batches: priority first, then remaining
+    const BATCH_SIZE = 5;
+    const priorityBatch = priorityCats.length > 0 ? priorityCats : catsToCheck.slice(0, BATCH_SIZE);
+    let catResults = await Promise.allSettled(priorityBatch.map(cat => fetchCategoryMovies(cat)));
+
+    if (processCatResults(catResults) && bestMatch) {
+        const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
+        if (streams && streams.length > 0) {
+            const resolved = await resolveCandidates(streams);
+            console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
+            return resolved;
+        }
+        bestMatch = null;
+        bestScore = 0;
+    }
+
+    // If best score from priority cats is too low (< 40), bail early — film likely not on site
+    if (bestScore < 40) {
+        return [];
+    }
+
+    // Try remaining categories in batches
+    const remainingCats = catsToCheck.filter(c => !priorityBatch.includes(c));
+    for (let i = 0; i < remainingCats.length; i += BATCH_SIZE) {
+        const batch = remainingCats.slice(i, i + BATCH_SIZE);
+        catResults = await Promise.allSettled(batch.map(cat => fetchCategoryMovies(cat)));
+        if (processCatResults(catResults) && bestMatch) {
+            const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
+            if (streams && streams.length > 0) {
+                const resolved = await resolveCandidates(streams);
+                console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
+                return resolved;
+            }
+            bestMatch = null;
+            bestScore = 0;
         }
     }
 
-    // Step 3: verify best match via film_api tagz
     if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
         const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
         if (streams && streams.length > 0) {
             const resolved = await resolveCandidates(streams);
-            console.log('[Frenchstream] Movie found via category browsing: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
+            console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
             return resolved;
         }
     }

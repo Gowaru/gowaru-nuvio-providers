@@ -1,11 +1,11 @@
 import { fetchJson } from './http.js';
-import { resolveStream, safeFetch } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, withTimeout } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const API_BASE = 'https://api.movix.cash';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-const RETRY_DELAYS_MS = [0, 1400, 2600];
+const RETRY_DELAYS_MS = [0, 800, 1600];
 
 function normalize(text) {
     return (text || '')
@@ -107,10 +107,7 @@ function isExoPlayableUrl(url) {
 }
 
 function sleep(ms) {
-    return new Promise(resolve => {
-        const start = Date.now();
-        (function check() { if (Date.now() - start >= ms) resolve(); else Promise.resolve().then(check); })();
-    });
+    return new Promise(resolve => { const t = Date.now(); function c() { Date.now() - t >= ms ? resolve() : Promise.resolve().then(c); } c(); });
 }
 
 async function fetchWithRetry(job) {
@@ -135,18 +132,13 @@ async function fetchWithRetry(job) {
 
 async function resolveForExo(stream) {
     let resolved = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    if (isExoPlayableUrl(stream.url)) {
+        resolved = { ...stream, isDirect: true };
+    } else {
         try {
-            resolved = await resolveStream(stream);
-            break;
+            resolved = await withTimeout(resolveStream(stream), 6000);
         } catch (e) {
-            if (attempt === 2) {
-                if (isExoPlayableUrl(stream.url)) {
-                    resolved = { ...stream, isDirect: true };
-                } else {
-                    return null;
-                }
-            }
+            // resolveStream failed or timed out
         }
     }
 
@@ -326,7 +318,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const toResolve = unique.slice(0, 12);
+    const toResolve = unique.slice(0, 8);
     const resolvedResults = await Promise.allSettled(toResolve.map((s) => resolveForExo(s)));
     const playable = [];
     const seenPlayable = new Set();

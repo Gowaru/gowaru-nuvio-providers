@@ -4,13 +4,16 @@
 
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, withTimeout } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://vostfree.ws";
-const MAX_SEARCH_TITLES = 20;
+const MAX_SEARCH_TITLES = 8;
 const MIN_QUERY_LENGTH = 5;
+
+const KNOWN_HOSTS = ['sibnet', 'uqload', 'oneupload', 'sendvid', 'voe', 'dood', 'stape', 'streamtape', 'myvi', 'mytv', 'vidmoly', 'fsvid', 'vidzy'];
+const PLAYER_TIMEOUT_MS = 12000;
 
 function normalize(s) {
     if (!s) return '';
@@ -157,6 +160,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
     
     // Fallback: if no match for the target season was found, try appending "Saison N"
+    const searchedNormalized = new Set();
     if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
         const hasSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
         if (!hasSeasonMatch) {
@@ -201,7 +205,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const streams = [];
     const checkedUrls = new Set();
-    const MAX_MATCHES_TO_PROCESS = 5;
+    const MAX_MATCHES_TO_PROCESS = 3;
     let processedCount = 0;
 
     for (const match of allMatches) {
@@ -279,7 +283,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             console.log(`[Vostfree] Using buttons ID: ${buttonsId} for ${lang}`);
             const playerElements = $(`#${buttonsId} div[id^="player_"]`).toArray();
 
-            const playerPromises = playerElements.map(async (el) => {
+            const filteredPlayers = playerElements.filter(el => {
+                const elClass = ($(el).attr('class') || '').toLowerCase();
+                const pName = $(el).text().trim().toLowerCase();
+                const combined = elClass + ' ' + pName;
+                return KNOWN_HOSTS.some(h => combined.includes(h.toLowerCase()));
+            });
+
+            const playerPromises = filteredPlayers.map(async (el) => {
                 const playerId = $(el).attr('id').replace('player_', '');
                 const playerName = $(el).text().trim() || "Player";
                 const elClass = ($(el).attr('class') || '').toLowerCase();
@@ -307,24 +318,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                         } else if (elClass.includes('myvi') || elClass.includes('mytv') || playerName.toLowerCase().includes('myvi') || playerName.toLowerCase().includes('mytv')) {
                             url = `https://www.myvi.ru/embed/${content}`;
                         } else if (elClass.includes('vip')) {
-                            // VIP class can be VOE or Vudeo — content already has full URL or needs passing through
                             if (content.includes('voe.sx') || content.includes('vudeo')) {
                                 url = content;
                             }
                         } else if (elClass.includes('mail') || elClass.includes('ok')) {
-                            // Mail.ru or OK.ru — pass as-is to resolver
                         }
                     }
 
                     if (url.startsWith('http')) {
                         try {
-                            const stream = await resolveStream({
-                                name: `Vostfree (${lang})`,
-                                title: `${playerName} - ${lang}`,
-                                url: url,
-                                quality: "HD",
-                                headers: { "Referer": BASE_URL }
-                            });
+                            const stream = await withTimeout(
+                                resolveStream({
+                                    name: `Vostfree (${lang})`,
+                                    title: `${playerName} - ${lang}`,
+                                    url: url,
+                                    quality: "HD",
+                                    headers: { "Referer": BASE_URL }
+                                }),
+                                PLAYER_TIMEOUT_MS,
+                                `Vostfree player ${playerName}`
+                            );
                             return stream;
                         } catch(e) { return null; }
                     }
@@ -332,9 +345,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                 return null;
             });
 
-            const results = await Promise.all(playerPromises);
-            for (const stream of results) {
-                if (stream) streams.push(stream);
+            const results = await Promise.allSettled(playerPromises);
+            for (const r of results) {
+                if (r.status === 'fulfilled' && r.value) streams.push(r.value);
             }
             const directStreams = streams.filter(s => s && s.isDirect);
             if (directStreams.length > 0) {

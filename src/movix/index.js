@@ -1,7 +1,7 @@
 import { extractStreams } from './extractor.js';
 import { withTimeout, safeConfig, expandStreamQualities } from '../utils/resolvers.js';
 
-const PROVIDER_TIMEOUT = safeConfig('NUVIO_TIMEOUT_MOVIX', 30000);
+const PROVIDER_TIMEOUT = safeConfig('NUVIO_TIMEOUT_MOVIX', 60000);
 
 async function getStreams(tmdbId, mediaType, season, episode) {
     const label = `Movix ${mediaType} ${tmdbId} S${season}E${episode}`;

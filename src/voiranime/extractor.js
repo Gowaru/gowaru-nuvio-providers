@@ -8,11 +8,31 @@ import { resolveStream } from "../utils/resolvers.js";
 import { getImdbId, getAbsoluteEpisode } from "../utils/armsync.js";
 import { getTmdbTitles } from "../utils/metadata.js";
 const BASE_URL = "https://voir-anime.to";
-const HEAD_TIMEOUT = 10000;
-const PAGE_TIMEOUT = 20000;
-const HOST_TIMEOUT = 20000;
+const HEAD_TIMEOUT = 8000;
+const PAGE_TIMEOUT = 15000;
+const HOST_TIMEOUT = 12000;
 const SEARCH_TIMEOUT = 20000;
 const GLOBAL_TIMEOUT = 90000;
+
+// Search result cache: avoids re-probing slugs for every episode
+const SEARCH_CACHE = new Map();
+const SEARCH_CACHE_TTL = 300000; // 5 minutes
+
+// Known working host prefixes on VoirAnime; used to filter out slow/broken hosts
+const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid'];
+
+/**
+ * Simple sleep using micro-task yielding (works in QuickJS where setTimeout is unavailable)
+ */
+function sleep(ms) {
+  const target = Date.now() + ms;
+  return new Promise(resolve => {
+    const check = () => Date.now() >= target ? resolve() : Promise.resolve().then(check);
+    check();
+  });
+}
+
+const RETRY_DELAYS = [500, 1000]; // delay (ms) before retry #1 and #2
 
 async function fetchWithRetry(url, options = {}, retries = 2) {
   for (let i = 0; i <= retries; i++) {
@@ -21,6 +41,7 @@ async function fetchWithRetry(url, options = {}, retries = 2) {
     } catch (err) {
       if (err.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(err.message)) throw err;
       if (i === retries) throw err;
+      if (RETRY_DELAYS[i] > 0) await sleep(RETRY_DELAYS[i]);
     }
   }
 }
@@ -290,27 +311,38 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   }
   // ------------------------------------
 
-  let matches = [];
-  let fallbackMatches = [];
-  // Try all titles in parallel, then check in order (EN first, then FR)
-  const titleResults = await Promise.allSettled(
-    titles.map(title => searchAnime(title, effectiveSeason))
-  );
-  for (const r of titleResults) {
-    if (r.status !== 'fulfilled' || !r.value || r.value.length === 0) continue;
-    const result = r.value;
-    const hasExplicitSeason = result.some(m => {
-      const s = m.url.match(/saison[_-](\d+)/i);
-      return s && parseInt(s[1]) === effectiveSeason;
-    });
-    const hasNoSeason = result.some(m => !m.url.match(/saison[_-]\d+/i));
-    if (hasExplicitSeason || hasNoSeason) {
-      matches = result;
-      break;
+  // Check search cache for this tmdbId + season
+  const cacheKey = `${tmdbId}-${effectiveSeason}`;
+  const cached = SEARCH_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SEARCH_CACHE_TTL) {
+    matches = cached.matches;
+    fallbackMatches = cached.fallback;
+    console.log(`[VoirAnime] Search cache hit for ${cacheKey} — ${matches.length} matches`);
+  } else {
+    // Try all titles in parallel, then check in order (EN first, then FR)
+    const titleResults = await Promise.allSettled(
+      titles.map(title => searchAnime(title, effectiveSeason))
+    );
+    for (const r of titleResults) {
+      if (r.status !== 'fulfilled' || !r.value || r.value.length === 0) continue;
+      const result = r.value;
+      const hasExplicitSeason = result.some(m => {
+        const s = m.url.match(/saison[_-](\d+)/i);
+        return s && parseInt(s[1]) === effectiveSeason;
+      });
+      const hasNoSeason = result.some(m => !m.url.match(/saison[_-]\d+/i));
+      if (hasExplicitSeason || hasNoSeason) {
+        matches = result;
+        break;
+      }
+      if (!fallbackMatches.length) fallbackMatches = result;
     }
-    if (!fallbackMatches.length) fallbackMatches = result;
+    if (!matches.length) matches = fallbackMatches;
+
+    if (matches && matches.length > 0) {
+      SEARCH_CACHE.set(cacheKey, { ts: Date.now(), matches, fallback: fallbackMatches });
+    }
   }
-  if (!matches.length) matches = fallbackMatches;
 
   if (!matches || matches.length === 0) return [];
 
@@ -430,9 +462,12 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         const val = ep$(el).val();
         if (val && val !== "Choisir un lecteur") hosts.push(val);
       });
-      // Filter out hosts known to produce time-limited URLs unreliable in production,
-      // and hosts that always hang or fail (client-side JS players, anti-bot, etc.)
-      const filteredHosts = hosts.filter(h => !/YU|YourUpload|MOON\b|Lecteur\s+SB/i.test(h));
+      // Only keep known working hosts; this avoids wasting time on 60+ hosts that timeout
+      const filteredHosts = hosts.filter(h => {
+        const hl = h.toLowerCase();
+        return KNOWN_HOSTS.some(prefix => hl.includes(prefix.toLowerCase())) &&
+               !/YU|YourUpload|MOON\b|Lecteur\s+SB/i.test(h);
+      });
 
       if (filteredHosts.length === 0) {
         // Catch any external iframe (not voiranime's own domain)
@@ -459,7 +494,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
         const hostPromises = filteredHosts.map(async (host) => {
           try {
             const hostUrl = `${episodeUrl}${episodeUrl.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`;
-            const hostHtml = await fetchText(hostUrl, { timeout: 20000 });
+            const hostHtml = await fetchText(hostUrl, { timeout: HOST_TIMEOUT });
             // Parse iframe src more flexibly (any attribute order)
             const iframeMatch = hostHtml.match(
               /<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i,
@@ -495,6 +530,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
   }
 
   // --- FALLBACK: if no direct streams found, retry with season-specific search ---
+  const checkedEpisodeUrls = new Set();
   if (streams.filter(s => s && s.isDirect).length === 0 && matches.length > 0) {
     console.log(`[VoirAnime] No direct streams from initial matches, retrying with season-aware fallback`);
     const seasonStr = effectiveSeason ? String(effectiveSeason) : '';
@@ -534,7 +570,11 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
               const val = ep$(el).val();
               if (val && val !== "Choisir un lecteur") hosts.push(val);
             });
-            const filteredHosts = hosts.filter(h => !/YU|YourUpload|MOON\b|Lecteur\s+SB/i.test(h));
+            const filteredHosts = hosts.filter(h => {
+              const hl = h.toLowerCase();
+              return KNOWN_HOSTS.some(prefix => hl.includes(prefix.toLowerCase())) &&
+                     !/YU|YourUpload|MOON\b|Lecteur\s+SB/i.test(h);
+            });
 
             if (filteredHosts.length === 0) {
               let iframe = null;
@@ -560,7 +600,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
               const hostPromises = filteredHosts.map(async (host) => {
                 try {
                   const hostUrl = `${episodeUrl}${episodeUrl.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`;
-                  const hostHtml = await fetchText(hostUrl, { timeout: 20000 });
+                  const hostHtml = await fetchText(hostUrl, { timeout: HOST_TIMEOUT });
                   const iframeMatch = hostHtml.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
                   let embedUrl = iframeMatch ? iframeMatch[1] : null;
                   if (!embedUrl) {

@@ -29,9 +29,14 @@ async function syncFetch(url, options = {}) {
  */
 export async function getImdbId(tmdbId, mediaType) {
     if (!tmdbId) return null;
-    
-    // 1. Try ARM API
-    const armRes = await syncFetch(`${ARM_API}/themoviedb?id=${tmdbId}`);
+
+    const tmdbUrl = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}`;
+
+    const [armRes, tmdbRes] = await Promise.all([
+        syncFetch(`${ARM_API}/themoviedb?id=${tmdbId}`),
+        syncFetch(tmdbUrl)
+    ]);
+
     if (armRes) {
         try {
             const data = await armRes.json();
@@ -40,9 +45,6 @@ export async function getImdbId(tmdbId, mediaType) {
         } catch (e) {}
     }
 
-    // 2. Fallback: TMDB Scraping (already often in memory in extractors, but we fetch safe here)
-    const tmdbUrl = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}`;
-    const tmdbRes = await syncFetch(tmdbUrl);
     if (tmdbRes) {
         const html = await tmdbRes.text();
         const imdbMatch = html.match(/imdb\.com\/title\/(tt\d+)/);

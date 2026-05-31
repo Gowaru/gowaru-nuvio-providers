@@ -106,17 +106,21 @@ function buildStreams(parsed, lang, episode, idx) {
         const playerUrl = urls[idx];
         if (playerUrl && playerUrl.startsWith('http')) {
             const epLabel = episode ? `Ep ${episode} - ` : '';
-            const promise = resolveStream({
-                name: `Anime-Sama (${lang.toUpperCase()})`,
-                title: `${getPlayerName(varName, playerUrl)} - ${epLabel}${lang.toUpperCase()}`,
-                url: playerUrl,
-                quality: "HD",
-                headers: { "Referer": BASE_URL }
-            });
+            const promise = withTimeout(
+                resolveStream({
+                    name: `Anime-Sama (${lang.toUpperCase()})`,
+                    title: `${getPlayerName(varName, playerUrl)} - ${epLabel}${lang.toUpperCase()}`,
+                    url: playerUrl,
+                    quality: "HD",
+                    headers: { "Referer": BASE_URL }
+                }),
+                12000,
+                `AnimeSama player ${getPlayerName(varName, playerUrl)}`
+            );
             promises.push(promise);
         }
     }
-    return Promise.all(promises).then(r => r.filter(s => s != null));
+    return Promise.allSettled(promises).then(r => r.filter(s => s.status === 'fulfilled' && s.value != null).map(s => s.value));
 }
 
 async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes = []) {

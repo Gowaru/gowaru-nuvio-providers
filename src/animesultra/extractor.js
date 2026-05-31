@@ -88,6 +88,7 @@ async function searchAnime(title) {
 
         const searchUrl = `${BASE_URL}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
         const html = await fetchText(searchUrl, {
+            timeout: 8000,
             headers: { "User-Agent": "Mozilla/5.0" }
         });
         const $ = cheerio.load(html);
@@ -179,13 +180,25 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     });
 
     const searchedQueries = new Set();
-    const searchPromises = searchQueries.slice(0, 8).map(q =>
+    // Only 2 parallel searches max — the site is slow, and we want to fail fast
+    const searchPromises = searchQueries.slice(0, 2).map(q =>
         trySearch(q).then(() => searchedQueries.add(queryKey(q)))
     );
     await Promise.allSettled(searchPromises);
 
+    // If no matches after initial search, try with season number appended
+    if (matches.length === 0 && effectiveSeason) {
+        const seasonQuery = titlesOrdered.find(t => t.length > 3);
+        if (seasonQuery) {
+            await trySearch(`${seasonQuery} Saison ${effectiveSeason}`);
+            await trySearch(`${seasonQuery} Season ${effectiveSeason}`);
+        }
+    }
+    
+    if (!matches || matches.length === 0) return [];
+
     const spinoffPattern = /(?:\s*:\s*|\s+-\s+)(?!\d|saison|partie|part)/i;
-    if (matches.length > 0 && matches.every(m => spinoffPattern.test(m.title.replace(/ (VF|VOSTFR)$/i, '')))) {
+    if (matches.every(m => spinoffPattern.test(m.title.replace(/ (VF|VOSTFR)$/i, '')))) {
         for (const t of titlesOrdered) {
             const k = t.toLowerCase().replace(/[^a-z0-9àâéèêëîïôùûüç]/g, '');
             const key = queryKey(t);
@@ -197,8 +210,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             break;
         }
     }
-    
-    if (!matches || matches.length === 0) return [];
 
     matches.sort((a, b) => {
         const aIsVostfr = detectLang(a.title) === 'vostfr' || a.title.toLowerCase().includes('vostfr');
