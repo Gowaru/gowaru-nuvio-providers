@@ -1,11 +1,11 @@
 import { extractStreams } from './extractor.js';
 import { expandStreamQualities, withTimeout, safeConfig } from '../utils/resolvers.js';
 
-const PROVIDER_TIMEOUT = safeConfig('NUVIO_TIMEOUT_ANIMESITE', 60000);
+const PROVIDER_TIMEOUT = safeConfig('NUVIO_TIMEOUT_FRENCHMANGA', 60000);
 
 async function getStreams(tmdbId, mediaType, season, episode) {
-    const label = `AnimeSite ${mediaType} ${tmdbId} S${season}E${episode}`;
-    console.log(`[AnimeSite] Request: ${label}`);
+    const label = `FrenchManga ${mediaType} ${tmdbId} S${season}E${episode}`;
+    console.log(`[FrenchManga] Request: ${label}`);
 
     try {
         const streams = await withTimeout(
@@ -18,9 +18,9 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         });
     } catch (error) {
         if (error.message?.includes('[Timeout]')) {
-            console.warn(`[AnimeSite] ${error.message}`);
+            console.warn(`[FrenchManga] ${error.message}`);
         } else {
-            console.error(`[AnimeSite] Error:`, error);
+            console.error(`[FrenchManga] Error:`, error);
         }
         return [];
     }

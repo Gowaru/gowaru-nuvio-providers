@@ -338,6 +338,16 @@ async function extractPlayersFromEpisode(episodeUrl) {
 /**
  * Get player name from URL domain
  */
+function detectLang(url, title) {
+    const u = url.toLowerCase();
+    const t = (title || '').toLowerCase();
+    // Check VOSTFR first (must be before VF check since 'vostfr' contains 'vf')
+    if (/\/animes\/[^/]*-vostfr(?:\/|$)/.test(u) || /\bvostfr\b/.test(t)) return 'VOSTFR';
+    if (/\/animes\/[^/]*-vf(?:\/|$)/.test(u) || /\bvf\b/.test(t)) return 'VF';
+    if (/\/animes\/[^/]*-vo(?:\/|$)/.test(u) || /\bvo\b/.test(t)) return 'VO';
+    return 'VF';
+}
+
 function getPlayerName(url) {
     if (url.includes('sibnet')) return 'Sibnet';
     if (url.includes('vidmoly')) return 'Vidmoly';
@@ -451,9 +461,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     const matchPromises = uniqueMatches.map(async (match) => {
-        const matchLower = match.title.toLowerCase();
-        const isVf = matchLower.includes(' vf') || match.url.includes('vf');
-        const langSuffix = isVf ? 'VF' : 'VOSTFR';
+        const langSuffix = detectLang(match.url, match.title);
 
         const spinoffKeywords = ['vigilantes', 'prelude', 'special', 'ova', 'ona'];
         const isSpinoff = spinoffKeywords.some(k => matchLower.includes(k))

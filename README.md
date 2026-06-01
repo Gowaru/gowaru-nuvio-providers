@@ -23,27 +23,29 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates 17 pillars of the French streaming scene:
+This bundle integrates 19 pillars of the French streaming scene:
 
 | Provider | Description | Languages | Status |
 | :--- | :--- | :--- | :---: |
 | **Sekai** | Specialized in big anime series. Ultra-fast direct streams. | VF / VOSTFR | ⚠️ |
 | **Anime-Sama** | Massive catalog, daily updates. | VF / VOSTFR | ✅ |
 | **AnimesUltra** | Complete catalog based on DataLife Engine. | VF / VOSTFR | ✅ |
-| **VoirAnime** | Comprehensive historical archive. | VF / VOSTFR | ✅ |
+| **VoirAnime** | Comprehensive historical archive. | VF / VOSTFR | ❌ |
 | **Vostfree** | Specialist in streaming & downloads. | VF / VOSTFR | ✅ |
 | **French-Anime** | Large choice of alternative servers. | VF / VOSTFR | ✅ |
-| **AnimeVOSTFR** | High-quality alternative source. | VF / VOSTFR | ✅ |
+| **AnimeVOSTFR** | High-quality alternative source (fixed VF/VOSTFR detection). | VF / VOSTFR | ✅ |
 | **JetAnimes** | Dooplay-based alternative tracker. | VF / VOSTFR | ⚠️ |
 | **Movix** | Movies and TV series in French and with French subtitles. | VF / VOSTFR | ✅ |
 | **Mugiwara-no-Streaming** | Anime streaming via Next.js API with Sibnet, Vidmoly, Sendvid, VK sources. | VF / VOSTFR | ✅ |
 | **Frenchstream** | French movies and series with direct HLS resolution on supported hosts. | VF / VOSTFR | ✅ |
 | **AnimoFlix** | Modern PHP-based streaming site with clean embed URLs, no Cloudflare on core pages. | VF / VOSTFR | ✅ |
-| **AnimeSite** | Anime streaming in French and Japanese with French subtitles for free. Complete catalog, ad-free, in HD | VF / VOSTFR | ✅ |
 | **DuLourd** | Movies, Cartoon, TV series streaming site with clean embed URLs. | VF / VOSTFR | ✅ |
 | **Flemmix** | French dubbed/French subtitled movies/series on flemmix.me (custom PHP, SSR). | VF / VOSTFR | ✅ |
 | **Wookafr** | VF/VOSTFR films/series on wookafr.fyi (WordPress + SomosMovies). | VF / VOSTFR | ✅ |
 | **Coflix** | Stream movies and series in French/English subtitles on Coflix.wiki (DoodStream, LuluVid). | VF/VOSTFR | ✅ |
+| **French-Manga** | Animes VF/VOSTFR on French-Manga.net (DLE, Sibnet resolver). | VF / VOSTFR | ✅ |
+| **AnimeSama.co (DLE)** | DLE mirror of Anime-Sama with Sibnet direct iframes. | VF / VOSTFR | ✅ |
+| **VoirAnime.rip** | Alternative domain of VoirAnime (server-rendered, Sibnet). | VF / VOSTFR | ✅ |
 
 *(Note: JetAnimes is currently marked with a warning as it heavily utilizes gatekeeping link redirectors like secured.lol)*
 
