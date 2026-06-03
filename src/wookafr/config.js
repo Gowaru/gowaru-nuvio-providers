@@ -1,6 +1,6 @@
 export const SITE = {
-  BASE_URL: 'https://wookafr.fyi',
-  DOMAINS: ['https://wookafr.fyi', 'https://wookafr.zip'],
+  BASE_URL: 'https://wookafr.cymru',  // .fyi → .cymru (301 redirect)
+  DOMAINS: ['https://wookafr.cymru'],
 }
 
 export const ENDPOINTS = {
@@ -35,9 +35,9 @@ export const PATTERNS = {
 }
 
 export const TIMEOUTS = {
-  SEARCH: 3000,
+  SEARCH: 5000,
   PAGE: 6000,
-  AJAX: 3000,
+  AJAX: 5000,
   RESOLVE: 8000,
   PROVIDER: 60000,
 }

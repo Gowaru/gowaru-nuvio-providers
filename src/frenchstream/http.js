@@ -4,7 +4,7 @@
 
 import { safeFetch } from '../utils/resolvers.js';
 
-export const BASE_URLS = ['https://french-stream.one', 'https://fs09.lol'];
+export const BASE_URLS = ['https://french-stream.one'];
 export const BASE_URL = BASE_URLS[0];
 export const GLOBAL_TIMEOUT_MS = 20000;
 

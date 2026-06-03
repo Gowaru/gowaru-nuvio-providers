@@ -17,9 +17,6 @@ function normalize(s) {
     .replace(/\s+/g, ' ').trim()
 }
 
-function isJapanese(text) {
-  return /[\u3000-\u9FFF\uF900-\uFAFF]/.test(text || '')
-}
 
 const CACHE = new Map()
 

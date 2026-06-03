@@ -358,15 +358,23 @@ export async function getTmdbTitles(id, mediaType, opts = {}) {
         if (!meta.isAnime) {
             console.warn(`[Metadata] ⚠ ID ${id} = "${meta.name}" (${meta.originalLanguage}) - not anime!`);
             
-            // Fallback Kitsu
-            const altTitles = await kitsuSearchFallback(titles[0], mediaType, opts);
-            if (altTitles.length > 0) {
-                console.log(`[Metadata] Fallback success: ${altTitles.length} alternative titles`);
-                altTitles.effectiveSeason = effectiveSeason;
-                return altTitles;
-            }
+            // Fallback Kitsu uniquement si le contenu a des caractéristiques anime
+            // (langue originale japonaise ou présence de caractères japonais dans le nom)
+            // Évite les faux positifs comme Game of Thrones transformé en Disgaea
+            const hasJapaneseName = /[\u3000-\u9FFF\uF900-\uFAFF]/.test(meta.name || '')
+            const hasJapaneseLang = meta.originalLanguage === 'ja'
             
-            console.warn(`[Metadata] Fallback failed for "${meta.name}", using original titles`);
+            if (hasJapaneseLang || hasJapaneseName) {
+                const altTitles = await kitsuSearchFallback(titles[0], mediaType, opts);
+                if (altTitles.length > 0) {
+                    console.log(`[Metadata] Fallback success: ${altTitles.length} alternative titles`);
+                    altTitles.effectiveSeason = effectiveSeason;
+                    return altTitles;
+                }
+                console.warn(`[Metadata] Kitsu fallback failed for "${meta.name}", using original titles`);
+            } else {
+                console.log(`[Metadata] No anime indicators, skipping Kitsu fallback for "${meta.name}"`);
+            }
         } else {
             console.log(`[Metadata] ✓ ID ${id}: "${meta.name}" confirmed anime (${meta.originalLanguage})`);
         }

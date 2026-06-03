@@ -68,9 +68,23 @@ function getOrigin(url) {
 }
 
 function pickNewsId(onclick, href) {
+    // 1. Try info-button onclick (openModal('12345'))
     const modalId = (onclick || '').match(/openModal\('(\d+)'\)/i)?.[1];
     if (modalId) return modalId;
-    return (href || '').match(/^\/(\d+)-/)?.[1] || null;
+
+    // 2. Try extracting newsid from /index.php?newsid=XXXXXX format (DLE standard)
+    const newsIdMatch = (href || '').match(/[?&]newsid=(\d+)/i);
+    if (newsIdMatch) return newsIdMatch[1];
+
+    // 3. Try /\d+-title format
+    const pathMatch = (href || '').match(/^\/(\d+)-/);
+    if (pathMatch) return pathMatch[1];
+
+    // 4. Try /newsid-\d+ pattern
+    const numericMatch = (href || '').match(/\/(\d+)(?:-|\/|$)/);
+    if (numericMatch) return numericMatch[1];
+
+    return null;
 }
 
 function isSeriesCard($card, href, title) {
@@ -92,20 +106,45 @@ function normalizeHref(href, baseUrl) {
 function parseSearchCards(html, baseUrl) {
     const $ = cheerio.load(html);
     const cards = [];
-    $('.short .short-in').each((_, element) => {
-        const $card = $(element);
-        const hrefRaw = $card.find('a.short-poster').first().attr('href') ||
-            $card.find('a.img-box').first().attr('href') ||
-            $card.find('a[href]').first().attr('href') || '';
-        const href = normalizeHref(hrefRaw, baseUrl);
-        if (!href) return;
-        const title = ($card.find('.short-title').first().text() || '').trim();
-        if (!title) return;
-        const onclick = $card.find('.info-button').attr('onclick') || '';
-        const newsId = pickNewsId(onclick, hrefRaw);
-        if (!newsId) return;
-        cards.push({ newsId, href, title, isSeries: isSeriesCard($card, href, title), baseUrl });
-    });
+
+    // Try multiple selectors to handle different DLE template structures
+    const selectors = [
+        '.short .short-in',      // nested structure
+        '.short-in',             // flat structure
+        '.short',                // fallback: direct short containers
+    ];
+
+    for (const selector of selectors) {
+        $(selector).each((_, element) => {
+            const $card = $(element);
+            const hrefRaw = $card.find('a.short-poster').first().attr('href') ||
+                $card.find('a.img-box').first().attr('href') ||
+                $card.find('a[href]').first().attr('href') || '';
+            const href = normalizeHref(hrefRaw, baseUrl);
+            if (!href) return;
+
+            // Try multiple title selectors
+            const title = ($card.find('.short-title').first().text() ||
+                $card.find('.title').first().text() ||
+                $card.find('img').first().attr('alt') || '').trim();
+            if (!title) return;
+
+            // Extract newsId from multiple possible sources
+            const onclick = $card.find('.info-button').attr('onclick') || '';
+            const dataId = $card.find('[data-id]').first().attr('data-id') || $card.attr('data-id') || '';
+            const newsId = pickNewsId(onclick, hrefRaw) || dataId;
+            if (!newsId) return;
+
+            // Avoid duplicate cards with same newsId
+            if (cards.some(c => c.newsId === newsId)) return;
+
+            cards.push({ newsId, href, title, isSeries: isSeriesCard($card, href, title), baseUrl });
+        });
+
+        // If we found cards with this selector, don't try other selectors
+        if (cards.length > 0) break;
+    }
+
     return cards;
 }
 
@@ -263,24 +302,6 @@ function collectTvSiteCandidates(epData, episode, subType) {
     return streams;
 }
 
-async function fetchMovieSite(newsId, subType) {
-    const url = BASE_URL + '/engine/ajax/film_api.php?id=' + newsId;
-    const data = await fetchJson(url, { baseUrl: BASE_URL });
-    const players = data && data.players;
-    if (!players || typeof players !== 'object') return [];
-    const streams = [];
-    for (const host of Object.keys(players)) {
-        const versions = players[host];
-        if (!versions || typeof versions !== 'object') continue;
-        for (const lang of Object.keys(versions)) {
-            const url = versions[lang];
-            if (typeof url === 'string' && url.startsWith('http')) {
-                streams.push(toStream('Frenchstream', host, lang, url, null, subType));
-            }
-        }
-    }
-    return streams;
-}
 
 /* ---------- STREAM RESOLUTION ---------- */
 

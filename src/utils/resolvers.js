@@ -50,13 +50,6 @@ export function isBudgetExhausted(startTime, budgetMs) {
 }
 
 /**
- * Returns remaining budget in ms, or 0 if exhausted.
- */
-export function remainingBudget(startTime, budgetMs) {
-    return Math.max(0, (budgetMs || TV_BUDGET_MS) - (Date.now() - (startTime || 0)));
-}
-
-/**
  * Safely reads a numeric config value from process.env (Node.js)
  * or returns the default (QuickJS where process is undefined).
  */
@@ -590,9 +583,13 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        // Single domain attempt for TV timeout compatibility (30s vs 60s)
+        // Support all known vidmoly TLDs: .net, .to, .ru, .is, .biz, .me
+        // Normalize to .me for consistent resolution
+        const normalized = url.replace(/vidmoly\.(net|to|ru|is|biz)/, 'vidmoly.me');
         const domains = [
-            url.replace(/vidmoly\.(net|to|ru|is)/, 'vidmoly.me')
+            normalized,
+            // Also try original URL in case .me doesn't work for this specific video
+            url
         ];
         const uniqueDomains = [...new Set(domains)];
         const headers = { 'Referer': 'https://vidmoly.me/', 'Origin': 'https://vidmoly.me' };
@@ -631,9 +628,11 @@ export async function resolveVidmoly(url) {
 export async function resolveUqload(url) {
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
     const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || 'uqload.co';
-    // Single domain attempt for TV timeout compatibility (30s vs 60s)
-    const uniqueDomains = [...new Set([originalDomain])];
-    const baseRef = `https://${originalDomain}/`;
+    // Try original domain + fallbacks for dead domains (uqload.bz is dead, .co is alive)
+    const fallbackDomains = [originalDomain];
+    if (originalDomain.endsWith('.bz')) fallbackDomains.push('uqload.co', 'uqload.to');
+    if (originalDomain.endsWith('.to')) fallbackDomains.push('uqload.co');
+    const uniqueDomains = [...new Set(fallbackDomains)];
 
     return new Promise((resolve) => {
         let failures = 0;
@@ -969,8 +968,8 @@ export async function resolveStream(stream, depth = 0) {
         }
 
         // 3. Generic Fallback & Recursive Peeling
-        // Skip generic fallback for known slow hosts (already tried in specific resolver)
-        const knownSlowHost = urlLower.includes('up4fun.') || urlLower.includes('down-paradise.');
+        // Skip generic fallback for known slow or dead hosts (already tried in specific resolver)
+        const knownSlowHost = urlLower.includes('up4fun.') || urlLower.includes('down-paradise.') || urlLower.includes('getvid.club');
         if (!result || result.url === originalUrl) {
             if (knownSlowHost) {
                 return { ...stream, isDirect: false };

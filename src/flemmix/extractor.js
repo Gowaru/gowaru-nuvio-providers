@@ -116,27 +116,6 @@ function parseSeasonEpisodes(html) {
   return episodes
 }
 
-function detectLanguage(url, html) {
-  const u = url.toLowerCase()
-  if (u.includes('vostfr') || u.includes('vost')) return 'VOSTFR'
-  if (u.includes('ds_lang=fr') || u.includes('vf') || u.includes('french')) return 'VF'
-  if (u.includes('ds_lang=en') || u.includes('vo') || u.includes('english')) return 'VO'
-  const $ = html ? cheerio.load(html) : null
-  if ($) {
-    const pageText = $('body').text().toLowerCase()
-    if (/vostfr|version originale sous-titr[eé]e/i.test(pageText)) return 'VOSTFR'
-    if (/version fran[çc]aise/i.test(pageText)) return 'VF'
-  }
-  return 'VF'
-}
-
-function detectQuality(url, title) {
-  const text = (url + ' ' + (title || '')).toLowerCase()
-  if (/4k|2160/i.test(text)) return '4K'
-  if (/1080|hd|fullhd/i.test(text)) return '1080p'
-  if (/720|hd-ready/i.test(text)) return '720p'
-  return 'HD'
-}
 
 async function fetchTmdbGenre(tmdbId, mediaType) {
   const apiKey = '8265bd1679663a7ea12ac168da84d2e8'
@@ -159,7 +138,7 @@ async function detectSubType(tmdbId, mediaType, titles) {
     const genres = (details.genres || []).map(g => g.id)
     const isAnim = genres.includes(ANIME_GENRE_ID)
     const orig = mediaType === 'movie' ? details.original_title : details.original_name
-    const jap = isJapanese(orig || '')
+    const jap = /[\u3000-\u9FFF\uF900-\uFAFF]/.test(orig || '')
     const keywordMatch = titles.some(t => ANIME_KEYWORDS.test(t))
     if (isAnim && (jap || keywordMatch)) return 'anime'
     return null
