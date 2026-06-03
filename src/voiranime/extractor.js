@@ -512,10 +512,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
           const linkSeason = extractSeasonFromEpisodeLink(text, href);
           if (linkSeason !== null && linkSeason !== effectiveSeason) return; // Wrong season, skip
           
-          // Don't strip the season text - just search for the episode number
+          // Strip season indicators to avoid matching "Saison 1" as episode 1
+          const cleanText = text.replace(/S(?:aison|eason)\s*\d+/ig, '').trim();
           for (const pattern of epPatterns) {
             const regex = new RegExp(`(?:^|[^0-9])${pattern}(?:$|[^0-9])`, "i");
-            if (regex.test(text)) {
+            if (regex.test(cleanText)) {
               episodeUrl = href;
               return false;
             }
@@ -524,29 +525,41 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (episodeUrl) break;
       }
 
-      // Method 2: Auto-increment fallback (season-filtered)
-      if (!episodeUrl) {
-        const chapterLinks = [];
-        $(".wp-manga-chapter a, ul.main.version-chap.no-volumn li.wp-manga-chapter a").each((i, el) => {
-          const href = $(el).attr("href") || '';
-          const text = $(el).text().trim();
-          if (href && !href.includes('/special') && !href.includes('/oav') && !href.includes('/film') && !href.includes('/ova')) {
-            // Filter by season if possible (on generic pages with mixed seasons)
-            const linkSeason = extractSeasonFromEpisodeLink(text, href);
-            if (linkSeason === null || linkSeason === effectiveSeason) {
-              chapterLinks.push(href);
-            }
-          }
-        });
-        chapterLinks.reverse();
-        for (const ep of targetEpisodes) {
-          const idx = ep - 1;
-          if (idx >= 0 && idx < chapterLinks.length) {
-            episodeUrl = chapterLinks[idx];
-            break;
-          }
+  // Method 2: Fallback by extracting episode number from URL
+  if (!episodeUrl) {
+    const chapterLinks = [];
+    $(".wp-manga-chapter a, ul.main.version-chap.no-volumn li.wp-manga-chapter a").each((i, el) => {
+      const href = $(el).attr("href") || '';
+      const text = $(el).text().trim();
+      if (href && !href.includes('/special') && !href.includes('/oav') && !href.includes('/film') && !href.includes('/ova')) {
+        const linkSeason = extractSeasonFromEpisodeLink(text, href);
+        if (linkSeason === null || linkSeason === effectiveSeason) {
+          chapterLinks.push({ href, text });
         }
       }
+    });
+    for (const ep of targetEpisodes) {
+      for (const link of chapterLinks) {
+        const epFromHref = link.href.match(/[-/]0*(\d+)(?:-v(?:ostfr|f))?(?:\/|$)/i);
+        if (epFromHref && parseInt(epFromHref[1], 10) === ep) {
+          episodeUrl = link.href;
+          break;
+        }
+      }
+      if (episodeUrl) break;
+    }
+    // Final fallback: index-based access (try both orders)
+    if (!episodeUrl && chapterLinks.length > 0) {
+      const hrefs = chapterLinks.map(l => l.href);
+      for (const ep of targetEpisodes) {
+        const idx = ep - 1;
+        if (idx >= 0 && idx < hrefs.length) {
+          episodeUrl = hrefs[idx];
+          break;
+        }
+      }
+    }
+  }
 
       if (!episodeUrl) continue;
 
