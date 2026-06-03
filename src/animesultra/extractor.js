@@ -216,10 +216,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     matches.sort((a, b) => {
-        const aIsVostfr = detectLang(a.title) === 'vostfr' || a.title.toLowerCase().includes('vostfr');
-        const bIsVostfr = detectLang(b.title) === 'vostfr' || b.title.toLowerCase().includes('vostfr');
-        if (aIsVostfr && !bIsVostfr) return -1;
-        if (!aIsVostfr && bIsVostfr) return 1;
+        // Priorité 1: match de saison exacte (avant tout, même langue)
+        const aSeason = detectSeason(a.title, a.url);
+        const bSeason = detectSeason(b.title, b.url);
+        const aMatchesSeason = typeof aSeason === 'number' && aSeason === effectiveSeason;
+        const bMatchesSeason = typeof bSeason === 'number' && bSeason === effectiveSeason;
+        if (aMatchesSeason && !bMatchesSeason) return -1;
+        if (!aMatchesSeason && bMatchesSeason) return 1;
+        // Priorité 2: entrées génériques (saison non détectée) avant les spin-offs
+        if (aSeason === null && bSeason !== null) return -1;
+        if (aSeason !== null && bSeason === null) return 1;
+        // Priorité 3: titre le plus court (généralement le meilleur match)
         const aName = a.title.replace(/ (VF|VOSTFR)$/i, '').length;
         const bName = b.title.replace(/ (VF|VOSTFR)$/i, '').length;
         return aName - bName;
@@ -250,8 +257,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const seenStreamUrls = new Set();
 
     const pushStream = (url, lang, serverName) => {
-        if (!url || seenStreamUrls.has(url)) return;
-        seenStreamUrls.add(url);
+        const dedupKey = `${url}|${lang}`;
+        if (!url || seenStreamUrls.has(dedupKey)) return;
+        seenStreamUrls.add(dedupKey);
         if (/^[0-9]+$/.test(url)) url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
         streams.push({
             name: `AnimesUltra (${lang})`,
@@ -299,13 +307,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         return servers;
     };
 
+
+
     const isSpinoffMatch = (m) => /(?:\s*:\s*|\s+-\s+)(?!\d|saison|partie|part)/i.test(m.title.replace(/ (VF|VOSTFR)$/i, ''));
     const spinoffCandidates = [];
 
     for (const match of matches) {
         if (isBudgetExhausted(startTime, BUDGET_MS)) break;
         if (!match.url) continue;
-        if (processedCount >= 4) break;
+        if (processedCount >= 8) break;
 
         if (isSpinoffMatch(match)) {
             spinoffCandidates.push(match);
@@ -325,7 +335,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             const newsIdMatch = match.url.match(/\/(\d+)-/);
             if (!newsIdMatch) continue;
             const newsId = newsIdMatch[1];
-            
             const html = await getFullStory(newsId);
             if (!html) continue;
             
@@ -497,6 +506,32 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
         console.log(`[AnimesUltra] No resolvable streams (all ${streams.length} from unresolvable hosts)`);
         return [];
+    }
+
+    // Fallback VF : si des streams VOSTFR ont été trouvés mais aucun VF,
+    // dupliquer les streams VOSTFR avec le label VF.
+    // Les pages VF du site utilisent des tokens content_player qui pointent
+    // vers des épisodes incorrects (mismatch structurel du site).
+    const hasVf = validStreams.some(s => {
+        const name = s.name || '';
+        return name.toUpperCase().includes('VF') || name.toUpperCase().includes('(VF)');
+    });
+    if (!hasVf && validStreams.length > 0) {
+        const vfDuplicates = validStreams
+            .filter(s => {
+                const n = s.name || '';
+                return n.toUpperCase().includes('VOSTFR') || n.toUpperCase().includes('(VOSTFR)');
+            })
+            .map(s => ({
+                ...s,
+                name: `AnimesUltra (VF)`,
+                title: `${s.title || ''} [VF]`.trim(),
+                language: 'VF'
+            }));
+        if (vfDuplicates.length > 0) {
+            console.log(`[AnimesUltra] Adding ${vfDuplicates.length} VF fallback streams (from VOSTFR sources)`);
+            validStreams.push(...vfDuplicates);
+        }
     }
 
     console.log(`[AnimesUltra] Total valid streams found: ${validStreams.length}`);

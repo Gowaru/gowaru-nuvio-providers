@@ -136,8 +136,8 @@ function toStream(url, language) {
   try { origin = new URL(url).origin } catch {}
 
   return {
-    name: `AnimeSama (${language})`,
-    title: `[${language}] AnimeSama`,
+    name: `AnimeSamaCo (${language})`,
+    title: `[${language}] AnimeSamaCo`,
     url,
     quality: 'HD',
     language,

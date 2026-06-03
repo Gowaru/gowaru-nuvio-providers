@@ -78,7 +78,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.8",
+      "version": "1.2.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -199,7 +199,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.25",
+      "version": "1.0.26",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -386,7 +386,7 @@
       "id": "animesama-co",
       "name": "AnimeSama.co (DLE Mirror)",
       "description": "Animes VF et VOSTFR en streaming sur AnimeSama.co (miroir DLE).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -410,7 +410,7 @@
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

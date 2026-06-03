@@ -25,6 +25,19 @@ function cached(key, fn) {
   return fn().then(data => { CACHE.set(key, { data, ts: now }); return data })
 }
 
+/**
+ * Extract season number from episode link text or URL
+ * Returns null if no season info found.
+ */
+function extractSeasonFromEpisodeLink(text, url) {
+  const combined = `${text || ''} ${url || ''}`
+  const match = combined.match(/S(?:aison|eason)\s*[:\(\s-]*\s*(\d+)/i) ||
+                combined.match(/saison[_-](\d+)/i) ||
+                combined.match(/S(\d+)\s*(?:E|V|VF|VOSTFR|\b)/i)
+  if (match) return parseInt(match[1], 10)
+  return null
+}
+
 function scoreMatch(resultTitle, searchTitle) {
   const nt = normalize(searchTitle)
   const nr = normalize(resultTitle)
@@ -90,6 +103,11 @@ function parseVideoUrls(html) {
   return urls
 }
 
+/**
+ * Search for anime on Voiranime.rip
+ * Returns ALL high-scoring results (deduplicated by slug) so callers can
+ * try multiple variants (VF/VOSTFR, different slug patterns).
+ */
 async function searchAnime(titles) {
   for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
     try {
@@ -97,21 +115,29 @@ async function searchAnime(titles) {
       const results = parseSearchResults(html)
       if (results.length === 0) continue
 
-      let best = null, bestScore = 0
-      for (const r of results) {
-        const score = scoreMatch(r.title, title)
-        if (score > bestScore) { bestScore = score; best = r }
-      }
+      const scored = results
+        .map(r => ({ ...r, score: scoreMatch(r.title, title) }))
+        .filter(r => r.score >= SCORES.MIN_MATCH)
+        .sort((a, b) => b.score - a.score)
 
-      if (best && bestScore >= SCORES.MIN_MATCH) {
-        console.log(`[VoiranimeRip] Matched: "${best.title}" (slug: ${best.slug}) score: ${bestScore}`)
-        return best
+      if (scored.length > 0 && scored[0].score >= SCORES.EXACT_MATCH) {
+        // Deduplicate by slug and return all top-scoring variants
+        const bestScore = scored[0].score
+        const seenSlugs = new Set()
+        const topResults = scored.filter(r => {
+          if (seenSlugs.has(r.slug)) return false
+          if (r.score < bestScore - 20) return false
+          seenSlugs.add(r.slug)
+          return true
+        })
+        console.log(`[VoiranimeRip] Matched: "${topResults[0].title}" (slug: ${topResults[0].slug}) score: ${topResults[0].score}, ${topResults.length} variant(s)`)
+        return topResults
       }
     } catch (e) {
       console.warn(`[VoiranimeRip] Search failed for "${title}": ${e.message}`)
     }
   }
-  return null
+  return []
 }
 
 function parseAvailableSeasons(html) {
@@ -159,12 +185,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 }
 
 async function extractMovie(tmdbId, titles, subType) {
-  const match = await searchAnime(titles)
-  if (!match) {
+  const matches = await searchAnime(titles)
+  if (!matches || matches.length === 0) {
     console.warn(`[VoiranimeRip] Movie not found for TMDB ${tmdbId}`)
     return []
   }
-  return extractMoviePageStreams(match, subType)
+  // Try each match (different slug variants) until we find streams
+  for (const match of matches) {
+    const result = await extractMoviePageStreams(match, subType)
+    if (result.length > 0) return result
+  }
+  return []
 }
 
 async function extractMoviePageStreams(match, subType) {
@@ -227,8 +258,8 @@ async function extractMoviePageStreams(match, subType) {
 
 function toStream(url, language) {
   return {
-    name: `Voiranime (${language})`,
-    title: `[${language}] Voiranime`,
+    name: `Voiranime-Rip (${language})`,
+    title: `[${language}] Voiranime-Rip`,
     url,
     quality: 'HD',
     language,
@@ -267,68 +298,70 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
     console.warn(`[VoiranimeRip] ArmSync failed: ${e.message}`)
   }
 
-  const match = await searchAnime(titles)
-  if (!match) {
+  const matches = await searchAnime(titles)
+  if (!matches || matches.length === 0) {
     console.warn(`[VoiranimeRip] Series not found for TMDB ${tmdbId}`)
     return []
   }
 
-  // Step 1: Try the requested TMDB season directly
-  const directResult = await extractEpisodeStreams(match, targetSeasonNum, parseInt(episode) || 1, subType)
-  if (directResult.length > 0) {
-    return directResult
-  }
-  console.log(`[VoiranimeRip] Direct season S${targetSeasonNum} failed, trying fallback...`)
-
-  // Step 2: Fallback - scrape series page for available seasons
-  try {
-    const seriesHtml = await fetchText(match.url, { timeout: TIMEOUTS.PAGE })
-    const availableSeasons = parseAvailableSeasons(seriesHtml)
-
-    if (availableSeasons.length === 0) {
-      console.warn(`[VoiranimeRip] No seasons found on series page`)
-      return []
+  // Try each search match (different slug variants) with the requested season
+  for (const match of matches) {
+    const result = await extractEpisodeStreams(match, targetSeasonNum, parseInt(episode) || 1, subType)
+    if (result.length > 0) {
+      console.log(`[VoiranimeRip] Found streams with slug: ${match.slug}`)
+      return result
     }
+  }
+  
+  console.log(`[VoiranimeRip] Direct season S${targetSeasonNum} failed on all matches, trying fallback...`)
 
-    console.log(`[VoiranimeRip] Available seasons on site: ${availableSeasons.join(', ')}`)
+  // Step 2: Fallback - for each match, scrape the series page for available seasons
+  for (const match of matches) {
+    try {
+      const seriesHtml = await fetchText(match.url, { timeout: TIMEOUTS.PAGE })
+      const availableSeasons = parseAvailableSeasons(seriesHtml)
 
-    const attempts = []
+      if (availableSeasons.length === 0) {
+        console.warn(`[VoiranimeRip] No seasons found on series page for slug: ${match.slug}`)
+        continue
+      }
 
-    // Try absolute episode across all seasons
-    if (absoluteEp !== null && absoluteEp !== (parseInt(episode) || 1)) {
+      console.log(`[VoiranimeRip] Available seasons on site (${match.slug}): ${availableSeasons.join(', ')}`)
+
+      const attempts = []
+
+      // Try each available season with TMDB episode
       for (const siteSeason of availableSeasons) {
-        attempts.push({ season: siteSeason, episode: absoluteEp })
+        attempts.push({ match, season: siteSeason, episode: parseInt(episode) || 1 })
       }
-    }
 
-    // Final resort: try last season with TMDB episode
-    const lastSeason = availableSeasons[availableSeasons.length - 1]
-    if (lastSeason !== targetSeasonNum) {
-      attempts.push({ season: lastSeason, episode: parseInt(episode) || 1 })
-    }
-
-    if (attempts.length === 0) {
-      console.warn(`[VoiranimeRip] No fallback attempts to make`)
-      return []
-    }
-
-    const results = await Promise.allSettled(
-      attempts.map(a => extractEpisodeStreams(match, a.season, a.episode, subType))
-    )
-
-    for (let i = 0; i < results.length; i++) {
-      if (results[i].status === 'fulfilled' && results[i].value.length > 0) {
-        const { season: s, episode: e } = attempts[i]
-        console.log(`[VoiranimeRip] Fallback succeeded with S${s}E${e}`)
-        return results[i].value
+      // Also try absolute episode across seasons if available
+      if (absoluteEp !== null && absoluteEp !== (parseInt(episode) || 1)) {
+        for (const siteSeason of availableSeasons) {
+          attempts.push({ match, season: siteSeason, episode: absoluteEp })
+        }
       }
-    }
 
-    console.warn(`[VoiranimeRip] Fallback failed: no streams found across any season`)
-  } catch (e) {
-    console.warn(`[VoiranimeRip] Fallback error: ${e.message}`)
+      if (attempts.length === 0) continue
+
+      // Try all attempts in parallel
+      const results = await Promise.allSettled(
+        attempts.map(a => extractEpisodeStreams(a.match, a.season, a.episode, subType))
+      )
+
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'fulfilled' && results[i].value.length > 0) {
+          const { season: s, episode: e } = attempts[i]
+          console.log(`[VoiranimeRip] Fallback succeeded with S${s}E${e}`)
+          return results[i].value
+        }
+      }
+    } catch (e) {
+      console.warn(`[VoiranimeRip] Fallback error for slug ${match.slug}: ${e.message}`)
+    }
   }
 
+  console.warn(`[VoiranimeRip] Fallback failed: no streams found across any match/season`)
   return []
 }
 
