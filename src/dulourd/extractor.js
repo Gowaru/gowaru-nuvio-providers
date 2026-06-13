@@ -1,6 +1,6 @@
 import cheerio from 'cheerio-without-node-native';
 import { fetchText, fetchApi } from './http.js';
-import { resolveStream, safeFetch } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { CONFIG } from './config.js';
 
@@ -296,14 +296,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
   const streams = await resolveStreamsFromEpisode(episodeId, xfields, subType);
 
-  streams.sort((a, b) => {
-    const aIsVf = a.language === 'VF' || (a.title && a.title.includes('VF'));
-    const bIsVf = b.language === 'VF' || (b.title && b.title.includes('VF'));
-    if (aIsVf && !bIsVf) return -1;
-    if (!aIsVf && bIsVf) return 1;
-    return 0;
-  });
-
     console.log(`[DuLourd] Found ${streams.length} stream(s) for ${info.slug} S${effectiveSeason}E${episode}`);
-  return streams;
+  return sortStreamsByLanguage(streams);
 }

@@ -1,6 +1,6 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, isBudgetExhausted } from '../utils/resolvers.js';
+import { resolveStream, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -123,7 +123,7 @@ async function searchAnime(title) {
         }));
 
         // Filter out spinoffs and sort by score
-        const filtered = scored.filter(r => !isSpinoff(r.title) && r.score >= 30);
+        const filtered = scored.filter(r => !isSpinoff(r.title) && r.score >= 25);
         filtered.sort((a, b) => b.score - a.score);
 
         console.log(`[French-Anime] Search "${title}": ${scored.length} total, ${filtered.length} filtered matches`);
@@ -452,16 +452,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    // Sort VF first, then VOSTFR
-    streams.sort((a, b) => {
-        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
-        const aIsVf = isVf(a.name) || isVf(a.title);
-        const bIsVf = isVf(b.name) || isVf(b.title);
-        if (aIsVf && !bIsVf) return -1;
-        if (!aIsVf && bIsVf) return 1;
-        return 0;
-    });
-
     console.log(`[French-Anime] Total streams found: ${streams.length}`);
-    return streams;
+    return sortStreamsByLanguage(streams);
 }

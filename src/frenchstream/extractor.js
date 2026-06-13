@@ -43,7 +43,7 @@ function cached(key, fn) {
 async function fetchTmdbJson(url) {
     const res = await safeFetch(url);
     if (!res || !res.ok) return null;
-    return res.json();
+    return await res.json();
 }
 
 const ANIME_KEYWORDS = /\b(?:anime|japon|shonen|shoujo|seinen|manga)\b/i;

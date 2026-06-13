@@ -5,7 +5,7 @@
 
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -460,8 +460,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    const matchPromises = uniqueMatches.map(async (match) => {
+    // Movie mode: only try the first match (1 hop) to avoid excessive chaining
+    const matchesToProcess = mediaType === 'movie' ? uniqueMatches.slice(0, 1) : uniqueMatches;
+
+    const matchPromises = matchesToProcess.map(async (match) => {
         const langSuffix = detectLang(match.url, match.title);
+        const matchLower = (match.title + ' ' + match.url).toLowerCase();
 
         const spinoffKeywords = ['vigilantes', 'prelude', 'special', 'ova', 'ona'];
         const isSpinoff = spinoffKeywords.some(k => matchLower.includes(k))
@@ -524,16 +528,5 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const validStreams = streams.filter(s => s && s.isDirect);
     console.log(`[AnimeVOSTFR] Total streams found: ${validStreams.length}`);
     
-    // Sort streams to prioritize VF (French) over VOSTFR
-    validStreams.sort((a, b) => {
-        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
-        const aIsVf = isVf(a.name) || isVf(a.title);
-        const bIsVf = isVf(b.name) || isVf(b.title);
-        
-        if (aIsVf && !bIsVf) return -1;
-        if (!aIsVf && bIsVf) return 1;
-        return 0;
-    });
-
-    return validStreams;
+    return sortStreamsByLanguage(validStreams);
 }

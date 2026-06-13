@@ -8,20 +8,6 @@ export const ENDPOINTS = {
   EPISODES_API: `${SITE.BASE_URL}/engine/ajax/manga_episodes_api.php?id=`,
 }
 
-export const SELECTORS = {
-  SEARCH_CONTAINER: 'div.short',
-  SEARCH_POSTER: 'a.short-poster',
-  SEARCH_TITLE: 'div.short-title',
-  SEARCH_VERSION: 'span.film-version a',
-  SEARCH_EPS: 'span.mli-eps',
-  SEARCH_TYPE: 'span.mli-type a',
-  SERIE_CONFIG: '#serie-config',
-  SERIE_DATA_TITLE: 'data-title',
-  SERIE_DATA_NEWS_ID: 'data-news-id',
-  SERIE_DATA_PAGE_URL: 'data-page-url',
-  PLAYER_IFRAME: '#player-iframe-container iframe',
-}
-
 export const PATTERNS = {
   NEWSID: /index\.php\?newsid=(\d+)/,
   SEASON_IN_TITLE: /Saison\s*(\d+)/i,

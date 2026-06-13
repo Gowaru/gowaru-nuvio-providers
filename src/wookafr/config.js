@@ -5,9 +5,7 @@ export const SITE = {
 
 export const ENDPOINTS = {
   SEARCH: `${SITE.BASE_URL}/?s=`,
-  SEARCH_SERIES: `${SITE.BASE_URL}/?s=`,
   AJAX: `${SITE.BASE_URL}/wp-admin/admin-ajax.php`,
-  SERIES_ARCHIVE: `${SITE.BASE_URL}/streaming/series/`,
 }
 
 export const SELECTORS = {
@@ -57,13 +55,6 @@ export const LANGUAGE_MAP = {
   vfq: 'VF',
   vost: 'VOSTFR',
 }
-
-export const QUALITY_KEYWORDS = [
-  { pattern: /4k|2160p?/i, label: '4K' },
-  { pattern: /1080p?|hd|fullhd/i, label: '1080p' },
-  { pattern: /720p?|hd-ready/i, label: '720p' },
-  { pattern: /480p?|sd/i, label: '480p' },
-]
 
 export const ANIME_GENRE_ID = 16
 

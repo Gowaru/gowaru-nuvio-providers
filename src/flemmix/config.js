@@ -68,13 +68,6 @@ export const LANGUAGE_MAP = {
   vostfr: 'VOSTFR',
 }
 
-export const QUALITY_KEYWORDS = [
-  { pattern: /4k|2160p?/i, label: '4K' },
-  { pattern: /1080p?|hd|fullhd/i, label: '1080p' },
-  { pattern: /720p?|hd-ready/i, label: '720p' },
-  { pattern: /480p?|sd/i, label: '480p' },
-]
-
 export const ANIME_GENRE_ID = 16
 
 export const ANIME_KEYWORDS = /\b(?:anime|japonais|japon|shonen|shoujo|seinen|manga)\b/i

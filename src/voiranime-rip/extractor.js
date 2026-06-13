@@ -1,55 +1,14 @@
 import cheerio from 'cheerio-without-node-native'
 import { fetchText, postSearch } from './http.js'
-import { resolveStream, safeFetch } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js'
+import {
+  normalize, cached, scoreMatch, resolveWithTimeout, detectSubType, toStream, parseAvailableSeasons,
+} from '../utils/dle-extractor.js'
 import {
   SITE, PATTERNS, TIMEOUTS, SCORES,
   CACHE_TTL, MAX_SEARCH_TITLES,
 } from './config.js'
-
-function normalize(s) {
-  return (s || '')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[':!.,?()\[\]\/-]/g, ' ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ').trim()
-}
-
-const CACHE = new Map()
-
-function cached(key, fn) {
-  const now = Date.now()
-  if (CACHE.has(key) && now - CACHE.get(key).ts < CACHE_TTL) return CACHE.get(key).data
-  return fn().then(data => { CACHE.set(key, { data, ts: now }); return data })
-}
-
-/**
- * Extract season number from episode link text or URL
- * Returns null if no season info found.
- */
-function extractSeasonFromEpisodeLink(text, url) {
-  const combined = `${text || ''} ${url || ''}`
-  const match = combined.match(/S(?:aison|eason)\s*[:\(\s-]*\s*(\d+)/i) ||
-                combined.match(/saison[_-](\d+)/i) ||
-                combined.match(/S(\d+)\s*(?:E|V|VF|VOSTFR|\b)/i)
-  if (match) return parseInt(match[1], 10)
-  return null
-}
-
-function scoreMatch(resultTitle, searchTitle) {
-  const nt = normalize(searchTitle)
-  const nr = normalize(resultTitle)
-  if (!nt || !nr) return 0
-  if (nr === nt) return SCORES.EXACT_MATCH
-  if (nr.includes(nt) || nt.includes(nr)) return SCORES.STRONG_MATCH
-  const words = nt.split(/\s+/).filter(w => w.length > 2)
-  const rWords = new Set(nr.split(/\s+/))
-  const matched = words.filter(w => rWords.has(w)).length
-  if (words.length > 0) return Math.round((matched / words.length) * 50)
-  return 0
-}
 
 function parseSearchResults(html) {
   if (!html) return []
@@ -116,7 +75,7 @@ async function searchAnime(titles) {
       if (results.length === 0) continue
 
       const scored = results
-        .map(r => ({ ...r, score: scoreMatch(r.title, title) }))
+        .map(r => ({ ...r, score: scoreMatch(r.title, title, SCORES) }))
         .filter(r => r.score >= SCORES.MIN_MATCH)
         .sort((a, b) => b.score - a.score)
 
@@ -140,42 +99,17 @@ async function searchAnime(titles) {
   return []
 }
 
-function parseAvailableSeasons(html) {
-  if (!html) return []
-  const seasons = new Set()
-  const regex = /\/saison-(\d+)\//g
-  let m
-  while ((m = regex.exec(html)) !== null) {
-    seasons.add(parseInt(m[1]))
-  }
-  return [...seasons].sort((a, b) => a - b)
-}
+const SEASON_PATTERN = /\/saison-(\d+)\//g
 
-async function detectSubType(tmdbId, mediaType) {
-  const apiKey = '8265bd1679663a7ea12ac168da84d2e8'
-  const type = mediaType === 'movie' ? 'movie' : 'tv'
-  try {
-    const details = await cached(`tmdb_${tmdbId}_${mediaType}`, async () => {
-      const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}&language=en-US`
-      const res = await safeFetch(url)
-      if (!res || !res.ok) return null
-      const text = await res.text()
-      return JSON.parse(text)
-    })
-    if (!details) return null
-    const genres = (details.genres || []).map(g => g.id)
-    if (genres.includes(16)) return 'anime'
-    return null
-  } catch {
-    return null
-  }
+async function detectSubTypeCached(tmdbId, mediaType) {
+  return cached(`tmdb_subtype_${tmdbId}_${mediaType}`, () => detectSubType(tmdbId, mediaType), CACHE_TTL)
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
   const titles = await getTmdbTitles(tmdbId, mediaType, { season })
   if (!titles || titles.length === 0) return []
 
-  const subType = await detectSubType(tmdbId, mediaType)
+  const subType = await detectSubTypeCached(tmdbId, mediaType)
   if (subType) console.log(`[VoiranimeRip] Detected subtype: ${subType}`)
 
   if (mediaType === 'movie') {
@@ -225,7 +159,7 @@ async function extractMoviePageStreams(match, subType) {
       if (seen.has(key)) continue
       seen.add(key)
 
-      const stream = toStream(v.url, lang)
+      const stream = toStream(v.url, lang, 'Voiranime-Rip', SITE.BASE_URL)
       if (subType) stream.subType = subType
 
       const resolved = await resolveWithTimeout(stream)
@@ -242,7 +176,7 @@ async function extractMoviePageStreams(match, subType) {
         if (seen.has(key)) continue
         seen.add(key)
 
-        const stream = toStream(v.url, lang)
+        const stream = toStream(v.url, lang, 'Voiranime-Rip', SITE.BASE_URL)
         if (subType) stream.subType = subType
         streams.push({ ...stream, provider: 'voiranime-rip', isDirect: false })
       }
@@ -254,34 +188,6 @@ async function extractMoviePageStreams(match, subType) {
     console.warn(`[VoiranimeRip] Movie extraction failed: ${e.message}`)
   }
   return []
-}
-
-function toStream(url, language) {
-  return {
-    name: `Voiranime-Rip (${language})`,
-    title: `[${language}] Voiranime-Rip`,
-    url,
-    quality: 'HD',
-    language,
-    headers: {
-      Referer: `${SITE.BASE_URL}/`,
-      Origin: SITE.BASE_URL,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    },
-  }
-}
-
-async function resolveWithTimeout(stream) {
-  try {
-    const resolved = await resolveStream(stream)
-    if (resolved && resolved.url) {
-      if (resolved.isDirect) return resolved
-      return { ...resolved, isDirect: true }
-    }
-    return null
-  } catch {
-    return null
-  }
 }
 
 async function extractSeries(tmdbId, mediaType, titles, season, episode, subType) {
@@ -319,7 +225,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
   for (const match of matches) {
     try {
       const seriesHtml = await fetchText(match.url, { timeout: TIMEOUTS.PAGE })
-      const availableSeasons = parseAvailableSeasons(seriesHtml)
+      const availableSeasons = parseAvailableSeasons(seriesHtml, SEASON_PATTERN)
 
       if (availableSeasons.length === 0) {
         console.warn(`[VoiranimeRip] No seasons found on series page for slug: ${match.slug}`)
@@ -393,7 +299,7 @@ async function extractEpisodeStreams(match, season, episode, subType) {
       if (seen.has(key)) continue
       seen.add(key)
 
-      const stream = toStream(v.url, lang)
+      const stream = toStream(v.url, lang, 'Voiranime-Rip', SITE.BASE_URL)
       if (subType) stream.subType = subType
 
       const resolved = await resolveWithTimeout(stream)
@@ -411,7 +317,7 @@ async function extractEpisodeStreams(match, season, episode, subType) {
         if (seen.has(key)) continue
         seen.add(key)
 
-        const stream = toStream(v.url, lang)
+        const stream = toStream(v.url, lang, 'Voiranime-Rip', SITE.BASE_URL)
         if (subType) stream.subType = subType
         streams.push({ ...stream, provider: 'voiranime-rip', isDirect: false })
       }

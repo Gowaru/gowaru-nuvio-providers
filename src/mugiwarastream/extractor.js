@@ -1,6 +1,6 @@
 import { fetchText, BASE } from './http.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, safeJson } from '../utils/resolvers.js';
 
 function extractPushContent(html) {
     const chunks = [];
@@ -89,9 +89,13 @@ function normalizeSearchTitle(s) {
 }
 
 function searchAnime(html) {
-    const results = JSON.parse(html);
-    if (!results || !Array.isArray(results.results)) return null;
-    return results.results;
+    try {
+        const results = safeJson(JSON.parse(html || '{}'));
+        if (results && Array.isArray(results.results)) return results.results;
+    } catch (e) {
+        console.warn('[Mugiwara] Search JSON parse failed:', e.message);
+    }
+    return null;
 }
 
 function getEpisodeCount(saison) {

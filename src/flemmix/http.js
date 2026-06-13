@@ -1,4 +1,4 @@
-import { safeFetch } from '../utils/resolvers.js'
+import { safeFetch, fetchWithRetry, sleep } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
 
 export const HEADERS = {
@@ -16,61 +16,35 @@ export const AJAX_HEADERS = {
   'X-Requested-With': 'XMLHttpRequest',
 }
 
-const RETRY_DELAYS = [1000, 2500, 5000]
-
-function sleep(ms) {
-  return new Promise(resolve => {
-    const start = Date.now()
-    function check() { if (Date.now() - start >= ms) resolve(); else Promise.resolve().then(check) }
-    check()
-  })
-}
-
 export async function fetchText(url, options = {}) {
-  const retries = options.retries ?? 2
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
+  const retries = options.retries ?? 2
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout })
-      if (!res || !res.ok) {
-        const status = res && typeof res.status === 'number' ? res.status : 'no-response'
-        if (attempt < retries && status >= 500) {
-          console.warn(`[Flemmix] HTTP ${status} for ${url}, retrying (${attempt + 1}/${retries})...`)
-          await sleep(RETRY_DELAYS[attempt] || 1500)
-          continue
-        }
-        if (status === 404) return ''
-        throw new Error(`HTTP error ${status} for ${url}`)
-      }
-      return await res.text()
-    } catch (e) {
-      if (attempt >= retries || (e.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(e.message))) throw e
-      console.warn(`[Flemmix] Attempt ${attempt + 1} failed for ${url}: ${e.message}`)
-      await sleep(RETRY_DELAYS[attempt] || 1500)
+  return fetchWithRetry(async () => {
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout })
+    if (!res) throw new Error(`No response from ${url}`)
+    if (!res.ok) {
+      const status = typeof res.status === 'number' ? res.status : 'no-response'
+      if (status === 404) return ''
+      throw new Error(`HTTP error ${status} for ${url}`)
     }
-  }
-  throw new Error(`Failed to fetch ${url} after ${retries + 1} attempts`)
+    return await res.text()
+  }, { retries })
 }
 
 export async function fetchJson(url, options = {}) {
   const mergedHeaders = { ...AJAX_HEADERS, ...(options.headers || {}) }
-  for (let attempt = 0; attempt <= 2; attempt++) {
+
+  return fetchWithRetry(async () => {
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? TIMEOUTS.SEARCH })
+    if (!res) throw new Error(`No response from ${url}`)
+    const text = await res.text()
+    if (!text || text === '[]') return []
     try {
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? TIMEOUTS.SEARCH })
-      if (!res) continue
-      const text = await res.text()
-      if (!text || text === '[]') return []
-      try {
-        return JSON.parse(text)
-      } catch {
-        return null
-      }
-    } catch (e) {
-      if (attempt >= 2) throw e
-      await sleep(RETRY_DELAYS[attempt] || 3000)
+      return JSON.parse(text)
+    } catch {
+      return null
     }
-  }
-  return null
+  }, { retries: 2 })
 }

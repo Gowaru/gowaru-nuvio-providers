@@ -4,7 +4,7 @@ import { resolveStream, safeFetch } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js'
 import {
-  SITE, ENDPOINTS, SELECTORS, PATTERNS, TIMEOUTS, SCORES,
+  SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES,
 } from './config.js'
 

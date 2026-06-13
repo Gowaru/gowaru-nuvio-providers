@@ -3,10 +3,6 @@ export const SITE = {
   DOMAIN: 'voiranime.rip',
 }
 
-export const ENDPOINTS = {
-  SEARCH_API: `${SITE.BASE_URL}/template-php/defaut/fetch.php`,
-}
-
 export const PATTERNS = {
   SLUG: /^\/([^/]+)\/$/,
   SEASON_LINK: /\/([^/]+)\/saison-(\d+)\//,
@@ -29,4 +25,4 @@ export const SCORES = {
 }
 
 export const CACHE_TTL = 5 * 60 * 1000
-export const MAX_SEARCH_TITLES = 3
+export const MAX_SEARCH_TITLES = 6

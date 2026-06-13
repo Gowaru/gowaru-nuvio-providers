@@ -20,7 +20,8 @@ export async function fetchJson(url, options = {}) {
     console.log(`[Movix] Fetching: ${url}`);
 
     try {
-        const res = await safeFetch(url, { timeout: 15000, headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+        const { headers: customHeaders, ...rest } = options;
+        const res = await safeFetch(url, { timeout: 15000, headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
         if (!res || !res.ok) {
             const status = res && typeof res.status === 'number' ? res.status : 'no-response';
             console.log(`[Movix] HTTP ${status} for ${url}`);
@@ -28,7 +29,8 @@ export async function fetchJson(url, options = {}) {
         }
 
         try {
-            return await res.json();
+            const data = await res.json();
+            return data != null ? data : null;
         } catch (e) {
             const txt = await res.text();
             console.log(`[Movix] JSON parse error for ${url}. Content length: ${String(txt && txt.length)}`);

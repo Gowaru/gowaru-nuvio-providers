@@ -1,4 +1,4 @@
-import { safeFetch } from '../utils/resolvers.js'
+import { safeFetch, fetchWithRetry } from '../utils/resolvers.js'
 
 const BASE_URL = 'https://coflix.cymru'
 
@@ -17,53 +17,33 @@ export const AJAX_HEADERS = {
   'X-Requested-With': 'XMLHttpRequest',
 }
 
-function sleep(ms) {
-  return new Promise(resolve => {
-    const start = Date.now()
-    function check() { if (Date.now() - start >= ms) resolve(); else Promise.resolve().then(check) }
-    check()
-  })
-}
-
 export async function fetchText(url, options = {}) {
-  const retries = options.retries ?? 2
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? 15000 })
-      if (!res || !res.ok) {
-        const status = res && typeof res.status === 'number' ? res.status : 'no-response'
-        if (status === 404) return ''
-        if (attempt < retries && status >= 500) {
-          await sleep(1000 * (attempt + 1))
-          continue
-        }
-        throw new Error(`HTTP error ${status}`)
-      }
-      return await res.text()
-    } catch (e) {
-      if (attempt >= retries) throw e
-      await sleep(1000 * (attempt + 1))
+  const retries = options.retries ?? 2
+
+  return fetchWithRetry(async () => {
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? 15000 })
+    if (!res) throw new Error(`No response from ${url}`)
+    if (!res.ok) {
+      const status = typeof res.status === 'number' ? res.status : 'no-response'
+      if (status === 404) return ''
+      throw new Error(`HTTP error ${status}`)
     }
-  }
-  return ''
+    return await res.text()
+  }, { retries })
 }
 
 export async function fetchJson(url, options = {}) {
   const mergedHeaders = { ...AJAX_HEADERS, ...(options.headers || {}) }
-  for (let attempt = 0; attempt <= 2; attempt++) {
-    try {
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? 15000, ...options })
-      if (!res) continue
-      const text = await res.text()
-      if (!text) return null
-      try { return JSON.parse(text) } catch { return null }
-    } catch (e) {
-      if (attempt >= 2) return null
-      await sleep(1000 * (attempt + 1))
-    }
-  }
-  return null
+
+  return fetchWithRetry(async () => {
+    const { headers: _h, ...restOpts } = options;
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? 15000, ...restOpts })
+    if (!res) throw new Error(`No response from ${url}`)
+    const text = await res.text()
+    if (!text) return null
+    try { return JSON.parse(text) } catch { return null }
+  }, { retries: 2 })
 }
 
 export { BASE_URL }

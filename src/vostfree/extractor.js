@@ -4,12 +4,12 @@
 
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, withTimeout, isBudgetExhausted } from '../utils/resolvers.js';
+import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://vostfree.ws";
-const MAX_SEARCH_TITLES = 4;
+const MAX_SEARCH_TITLES = 9;
 const MIN_QUERY_LENGTH = 5;
 
 const KNOWN_HOSTS = ['sibnet', 'uqload', 'oneupload', 'sendvid', 'voe', 'dood', 'stape', 'streamtape', 'myvi', 'mytv', 'vidmoly', 'fsvid', 'vidzy'];
@@ -165,7 +165,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const searchedNormalized = new Set();
     if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
         const hasSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
-        if (!hasSeasonMatch) {
+        if (!hasSeasonMatch && allMatches.length > 0) {
+            console.log(`[Vostfree] ${allMatches.length} match(es) without explicit season — skipping fallback`);
+        } else if (!hasSeasonMatch) {
             for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
                 if (title.length > 60) continue;
                 if (title.length < MIN_QUERY_LENGTH) continue;
@@ -380,16 +382,5 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         headers: s.headers || {}
     }));
     
-    // Sort streams to prioritize VF (French) over VOSTFR
-    cleaned.sort((a, b) => {
-        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
-        const aIsVf = isVf(a.name) || isVf(a.title);
-        const bIsVf = isVf(b.name) || isVf(b.title);
-        
-        if (aIsVf && !bIsVf) return -1;
-        if (!aIsVf && bIsVf) return 1;
-        return 0;
-    });
-
-    return cleaned;
+    return sortStreamsByLanguage(cleaned);
 }

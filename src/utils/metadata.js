@@ -166,7 +166,8 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
         ]);
 
         if (mainRes) {
-            const data = await mainRes.json();
+            const mainJson = await mainRes.json();
+            const data = mainJson != null ? mainJson : {};
             const titleEn = (type === 'movie' ? data.title : data.name)?.trim();
             const titleOriginal = (type === 'movie' ? data.original_title : data.original_name)?.trim();
 
@@ -202,7 +203,8 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
         }
 
         if (altRes) {
-            const altData = await altRes.json();
+            const altJson = await altRes.json();
+            const altData = altJson != null ? altJson : {};
             const altList = type === 'movie' ? altData.titles : altData.results;
             if (altList && Array.isArray(altList)) {
                 altList.forEach(alt => {
@@ -215,7 +217,8 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
         }
 
         if (transRes) {
-            const transData = await transRes.json();
+            const transJson = await transRes.json();
+            const transData = transJson != null ? transJson : {};
             const frTrans = (transData.translations || []).find(t => t.iso_639_1 === 'fr');
             const titleFr = frTrans?.data?.name?.trim() || frTrans?.data?.title?.trim();
             if (titleFr && !titles.some(existing => existing.toLowerCase() === titleFr.toLowerCase())) {

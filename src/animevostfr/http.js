@@ -19,7 +19,8 @@ const HTTP_SKIP_CODES = [403, 404, 429, 500, 502, 503, 504, 522, 523, 524];
 
 export async function fetchText(url, options = {}) {
     console.log(`[AnimeVOSTFR] Fetching: ${url}`);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    const { headers: customHeaders, ...rest } = options;
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         if (HTTP_SKIP_CODES.includes(status)) throw new Error(`HTTP_SKIP ${status}`);

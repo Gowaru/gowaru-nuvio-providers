@@ -1,6 +1,6 @@
 import { fetchText, fetchJson } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream } from '../utils/resolvers.js';
+import { resolveStream, sortStreamsByLanguage, sleep, fetchWithRetry } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -10,13 +10,6 @@ const TIMEOUT = 25000;
 
 const SPECIAL_SLUG_RE = /(?:ona|oav|film|movie|special|scan|chapitre|volume|dub|uncut)(?:-|$)/i;
 const MAX_TITLE_SEARCHES = 10;
-
-function sleep(ms) {
-    const start = Date.now();
-    return new Promise(resolve => {
-        (function check() { if (Date.now() - start >= ms) resolve(); else check(); })();
-    });
-}
 
 async function searchAnime(title) {
     try {
@@ -108,19 +101,6 @@ function scoreSearchMatch(result, searchTitle) {
     return score;
 }
 
-async function fetchWithRetry(url, options = {}, retries = 2) {
-    for (let i = 0; i <= retries; i++) {
-        try {
-            return await fetchText(url, options);
-        } catch (err) {
-            if (err.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(err.message)) throw err;
-            if (i === retries) throw err;
-            const jitter = Math.round(Math.random() * 500);
-            await sleep(1000 * (i + 1) + jitter);
-        }
-    }
-}
-
 function parseSeasonNumber(seasonSlug) {
     const m = seasonSlug.match(/saison[-\s]*(\d+)/i);
     if (m) return parseInt(m[1]);
@@ -189,9 +169,9 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
 
     // Verify candidates in order (best score first)
     for (const candidate of ranked) {
-        const verifyHtml = await fetchWithRetry(`${BASE_URL}/anime/${candidate.slug}/`, { timeout: TIMEOUT });
+        const verifyHtml = await fetchWithRetry(() => fetchText(`${BASE_URL}/anime/${candidate.slug}/`, { timeout: TIMEOUT }));
         const $v = cheerio.load(verifyHtml);
-        const pageTitle = $v('h1.anime-title-pro').first().text().trim();
+        const pageTitle = $v('h1.hero-title').first().text().trim();
         let matchOk = true;
         if (!pageTitle) {
             console.warn(`[AnimoFlix] No page title found for slug ${candidate.slug} — rejecting`);
@@ -221,10 +201,10 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     const slug = bestMatch.slug;
     console.log(`[AnimoFlix] Matched: "${bestMatch.title}" (slug: ${slug})`);
 
-    const animeDetailHtml = await fetchWithRetry(`${BASE_URL}/anime/${slug}/`, { timeout: TIMEOUT });
+    const animeDetailHtml = await fetchWithRetry(() => fetchText(`${BASE_URL}/anime/${slug}/`, { timeout: TIMEOUT }));
     const $ = cheerio.load(animeDetailHtml);
 
-    const pageTitle = $('h1.anime-title-pro').first().text().trim();
+    const pageTitle = $('h1.hero-title').first().text().trim();
     if (pageTitle) {
         const nPage = normalize(pageTitle);
         const nSearch = normalize(bestMatch.title);
@@ -237,7 +217,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     let filmSeasonHref = null;
     $('.season-card').each((i, el) => {
         const href = $(el).attr('href');
-        const title = $(el).find('.season-title').text().trim();
+        const title = $(el).find('.season-card-title').text().trim();
         if (href && title) {
             if (/film|movie/i.test(title)) {
                 filmSeasonHref = href;
@@ -284,7 +264,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
             ? targetSeason.href
             : `${BASE_URL}${targetSeason.href.startsWith('/') ? '' : '/'}${targetSeason.href}`;
 
-        const seasonHtml = await fetchWithRetry(seasonPageUrl, { timeout: TIMEOUT });
+        const seasonHtml = await fetchWithRetry(() => fetchText(seasonPageUrl, { timeout: TIMEOUT }));
         const $s = cheerio.load(seasonHtml);
         const episodeLinks = {};
 
@@ -338,16 +318,7 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
     const validStreams = streams.filter(s => s && s.isDirect);
     console.log(`[AnimoFlix] Total streams found: ${validStreams.length}`);
 
-    validStreams.sort((a, b) => {
-        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
-        const aIsVf = isVf(a.name) || isVf(a.title);
-        const bIsVf = isVf(b.name) || isVf(b.title);
-        if (aIsVf && !bIsVf) return -1;
-        if (!aIsVf && bIsVf) return 1;
-        return 0;
-    });
-
-    return validStreams;
+    return sortStreamsByLanguage(validStreams);
 }
 
 async function extractMovieStreams(slug, seasonHref) {
@@ -373,7 +344,7 @@ async function extractMovieStreams(slug, seasonHref) {
         const langResults = await Promise.allSettled(
             tryUrlBuilders.map(buildUrl => {
                 const url = buildUrl(lang);
-                return fetchWithRetry(url, { timeout: TIMEOUT }).then(html => {
+                return fetchWithRetry(() => fetchText(url, { timeout: TIMEOUT })).then(html => {
                     if (html.includes('lecteurSelect')) {
                         return extractEpisodeStreams(url, lang === 'vf' ? 'VF' : 'VOSTFR', slug);
                     }
@@ -393,7 +364,7 @@ async function extractMovieStreams(slug, seasonHref) {
 }
 
 async function extractEpisodeStreams(episodeUrl, langLabel, slug) {
-    const html = await fetchWithRetry(episodeUrl, { timeout: TIMEOUT });
+    const html = await fetchWithRetry(() => fetchText(episodeUrl, { timeout: TIMEOUT }));
     const $ = cheerio.load(html);
 
     const embedUrls = [];

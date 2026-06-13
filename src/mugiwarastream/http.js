@@ -12,7 +12,8 @@ export const HEADERS = {
 
 export async function fetchText(url, options = {}) {
     console.log(`[Mugiwara] Fetching: ${url}`);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(options.headers || {}) }, ...options });
+    const { headers: customHeaders, ...rest } = options;
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP ${status} for ${url}`);

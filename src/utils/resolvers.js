@@ -3,6 +3,125 @@
  * Optimized for QuickJS (Nuvio runtime)
  */
 
+// ─── Shared Budget & Helpers ────────────────────────────────────────────────
+
+/**
+ * Budget standard pour tous les providers.
+ * NuvioTV a 30s OkHttp + 60s plugin total.
+ * On garde 45s pour laisser 15s de marge.
+ */
+export const PROVIDER_BUDGET_MS = 45000;
+
+/**
+ * Delais de retry standards (ms)
+ */
+const RETRY_DELAYS = [1000, 3000, 5000];
+
+/**
+ * Busy-wait sleep pour QuickJS (pas de setTimeout).
+ * À utiliser dans tous les providers plutôt que de dupliquer.
+ */
+export function sleep(ms) {
+  const target = Date.now() + ms;
+  return new Promise(resolve => {
+    const check = () => Date.now() >= target ? resolve() : Promise.resolve().then(check);
+    check();
+  });
+}
+
+/**
+ * Fetch avec retry et backoff.
+ * @param {Function} fetchFn - Fonction de fetch à appeler (ex: () => fetchText(url))
+ * @param {object} [opts]
+ * @param {number} [opts.retries=2] - Nombre de tentatives
+ * @param {number[]} [opts.delays] - Délais entre tentatives
+ * @returns {Promise<string>} Résultat du fetch
+ */
+export async function fetchWithRetry(fetchFn, opts = {}) {
+  const retries = opts.retries ?? 2;
+  const delays = opts.delays ?? RETRY_DELAYS;
+  let lastError;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fetchFn();
+    } catch (err) {
+      lastError = err;
+      // Ne pas retry les 4xx sauf 429
+      if (err.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(err.message)) throw err;
+      if (i === retries) throw err;
+      if (delays[i]) await sleep(delays[i]);
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Trie les streams pour mettre VF en premier, puis VOSTFR.
+ * @param {Array} streams
+ * @returns {Array}
+ */
+export function sortStreamsByLanguage(streams) {
+  if (!Array.isArray(streams)) return [];
+  return [...streams].sort((a, b) => {
+    const getPref = (s) => {
+      const text = ((s.name || '') + ' ' + (s.title || '') + ' ' + (s.language || '')).toUpperCase();
+      if (text.includes('VF') || text.includes('FRENCH') || text.includes('VFF') || text.includes('VFQ')) return 0;
+      if (text.includes('VOSTFR') || text.includes('VOST') || text.includes('MULTI')) return 1;
+      if (text.includes('VO')) return 2;
+      return 3;
+    };
+    return getPref(a) - getPref(b);
+  });
+}
+
+/**
+ * Guard pour response.json() qui retourne null en QuickJS au lieu de throw.
+ * Voir DOCUMENTATION.md : "response.json() returns null (not rejected) on parse failure"
+ */
+export function safeJson(data) {
+  return data != null ? data : [];
+}
+
+/**
+ * Crée un provider standardisé avec timeout, error handling et expandStreamQualities.
+ * Élimine la duplication de boilerplate dans tous les index.js.
+ *
+ * @param {string} name - Nom du provider (ex: "VoirAnime")
+ * @param {Function} extractFn - Fonction d'extraction (extractStreams)
+ * @param {object} [opts]
+ * @param {number} [opts.timeout=45000] - Timeout en ms
+ * @param {object} [opts.quality] - Options pour expandStreamQualities
+ * @returns {Function} getStreams(tmdbId, mediaType, season, episode) → Promise<Array>
+ */
+export function createProvider(name, extractFn, opts = {}) {
+  const PROVIDER_TIMEOUT = safeConfig(`NUVIO_TIMEOUT_${name.toUpperCase().replace(/[^a-z0-9]/g, '_')}`, opts.timeout || PROVIDER_BUDGET_MS);
+  const qualityOpts = opts.quality || { includeCodec: true, includeFps: false };
+
+  return async function getStreams(tmdbId, mediaType, season, episode) {
+    const se = mediaType === 'movie' ? '' : ` S${season}E${episode}`;
+    const label = `${name} ${mediaType} ${tmdbId}${se}`;
+    console.log(`[${name}] Request: ${label}`);
+
+    try {
+      const streams = await withTimeout(
+        extractFn(tmdbId, mediaType, season, episode),
+        PROVIDER_TIMEOUT,
+        label
+      );
+      return await expandStreamQualities(streams, qualityOpts);
+    } catch (error) {
+      if (error.message && error.message.includes('[Timeout]')) {
+        console.warn(`[${name}] ${error.message}`);
+      } else {
+        console.error(`[${name}] Error:`, error && error.message || error);
+      }
+      return [];
+    }
+  };
+}
+
+// ─── Existing Code ──────────────────────────────────────────────────────────
+
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
     "Accept-Encoding": "identity",
@@ -26,8 +145,8 @@ const CODEC_PREFERENCE = ['AV1', 'H.265', 'H.264', 'VP9'];
  */
 export function sanitizeSearchQuery(query) {
   return (query || '')
-    .replace(/\s*[-–—]\s*/g, ' ')    // hyphens/dashes to spaces (preserving word boundaries)
-    .replace(/[''`]/g, ' ')           // apostrophes to spaces
+    .replace(/[–—]/g, ' ')            // long dashes to spaces (preserve regular hyphens)
+    .replace(/[''`]/g, "'")           // normalize smart/curly quotes to straight apostrophe
     .replace(/[()\[\]{}:;,!?]/g, ' ') // common punctuation to spaces
     .replace(/\s+/g, ' ')             // collapse multiple spaces
     .trim();
@@ -179,6 +298,39 @@ function getCachedManifest(key) {
 
 function setCachedManifest(key, data) {
     manifestCache.set(key, { data, ts: Date.now() });
+}
+
+// ─── Global Fetch Cache ─────────────────────────────────────────────────────
+// Évite les appels réseau dupliqués entre providers (TMDB API, ArmSync, etc.)
+
+/**
+ * Cache mémoire global pour safeFetch.
+ * Clé = méthode|url (ex: "GET|https://api.tmdb.org/3/tv/123")
+ * TTL court (5s) pour éviter les données périmées tout en capturant
+ * les doublons dans une même chaîne d'exécution.
+ */
+let FETCH_CACHE_TTL = 5000;
+
+/**
+ * Permet de configurer le TTL du cache depuis l'extérieur.
+ * @param {number} ms - Nouveau TTL en millisecondes
+ */
+export function setFetchCacheTtl(ms) {
+    FETCH_CACHE_TTL = ms > 0 ? ms : 5000;
+}
+
+const fetchCache = new Map();
+
+function getCachedFetch(key) {
+    const entry = fetchCache.get(key);
+    if (entry && Date.now() - entry.ts < FETCH_CACHE_TTL) return entry.data;
+    return null;
+}
+
+function setCachedFetch(key, data) {
+    // Nettoyage simple : si le cache dépasse 100 entrées, on vide tout
+    if (fetchCache.size >= 100) fetchCache.clear();
+    fetchCache.set(key, { data, ts: Date.now() });
 }
 
 function qualityRank(value) {
@@ -385,6 +537,26 @@ export async function expandStreamQualities(streams, options = {}) {
 export async function safeFetch(url, options = {}) {
     const start = Date.now();
     const SLOW_THRESHOLD = 15000;
+
+    // Cache lookup pour les requêtes GET (élimine les doublons TMDB/ArmSync)
+    const method = (options.method || 'GET').toUpperCase();
+    const cacheKey = method + '|' + url;
+    if (method === 'GET') {
+        const cached = getCachedFetch(cacheKey);
+        if (cached) {
+            return {
+                text: () => Promise.resolve(cached.bodyText),
+                json: async () => {
+                    try { return JSON.parse(cached.bodyText); } catch (e) { throw e; }
+                },
+                ok: cached.ok,
+                status: cached.status,
+                url: cached.finalUrl || url,
+                headers: cached.headers || {}
+            };
+        }
+    }
+
     try {
         const { timeout, ...rest } = options;
         const fetchOpts = {
@@ -408,6 +580,17 @@ export async function safeFetch(url, options = {}) {
             bodyText = await response.text();
         } catch (e) {
             bodyText = '';
+        }
+
+        // Cache les réponses GET réussies (status 2xx) pour éviter les doublons
+        if (method === 'GET' && status >= 200 && status < 300) {
+            setCachedFetch(cacheKey, {
+                bodyText,
+                ok: true,
+                status,
+                finalUrl: response.url,
+                headers: response.headers
+            });
         }
 
         return {

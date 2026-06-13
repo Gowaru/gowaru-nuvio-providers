@@ -1,6 +1,6 @@
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, safeFetch, isBudgetExhausted } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -536,16 +536,5 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     console.log(`[AnimesUltra] Total valid streams found: ${validStreams.length}`);
     
-    // Sort streams to prioritize VF (French) over VOSTFR
-    validStreams.sort((a, b) => {
-        const isVf = (str) => str && (str.toUpperCase().includes('VF') || str.toUpperCase().includes('FRENCH'));
-        const aIsVf = isVf(a.name) || isVf(a.title);
-        const bIsVf = isVf(b.name) || isVf(b.title);
-        
-        if (aIsVf && !bIsVf) return -1;
-        if (!aIsVf && bIsVf) return 1;
-        return 0;
-    });
-
-    return validStreams;
+    return sortStreamsByLanguage(validStreams);
 }

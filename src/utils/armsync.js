@@ -30,25 +30,15 @@ async function syncFetch(url, options = {}) {
 export async function getImdbId(tmdbId, mediaType) {
     if (!tmdbId) return null;
 
-    const tmdbUrl = `https://www.themoviedb.org/${mediaType === 'movie' ? 'movie' : 'tv'}/${tmdbId}`;
-
-    const [armRes, tmdbRes] = await Promise.all([
-        syncFetch(`${ARM_API}/themoviedb?id=${tmdbId}`),
-        syncFetch(tmdbUrl)
-    ]);
+    const armRes = await syncFetch(`${ARM_API}/themoviedb?id=${tmdbId}`);
 
     if (armRes) {
         try {
-            const data = await armRes.json();
+            const armJson = await armRes.json();
+            const data = armJson != null ? armJson : null;
             const entry = Array.isArray(data) ? data[0] : data;
             if (entry && entry.imdb) return entry.imdb;
         } catch (e) {}
-    }
-
-    if (tmdbRes) {
-        const html = await tmdbRes.text();
-        const imdbMatch = html.match(/imdb\.com\/title\/(tt\d+)/);
-        if (imdbMatch) return imdbMatch[1];
     }
 
     return null;
@@ -64,7 +54,8 @@ export async function getAbsoluteEpisode(imdbId, season, episode) {
     const res = await syncFetch(`${CINEMATA_API}/meta/series/${imdbId}.json`);
     if (!res) return null;
     
-    const data = await res.json();
+    const json = await res.json();
+    const data = json != null ? json : {};
     if (!data?.meta?.videos) return null;
 
     // Filter and normalize
@@ -106,7 +97,8 @@ export async function getEpisodeAirDate(imdbId, season, episode) {
     const res = await syncFetch(`${CINEMATA_API}/meta/${type}/${imdbId}.json`);
     if (!res) return null;
     
-    const data = await res.json();
+    const json = await res.json();
+    const data = json != null ? json : {};
     if (type === 'movie') return data?.meta?.released?.split('T')[0] || null;
     if (!data?.meta?.videos) return null;
 
@@ -124,7 +116,8 @@ export async function resolveMalMetadata(imdbId, releaseDate) {
     const armRes = await syncFetch(`${ARM_API}/imdb?id=${imdbId}`);
     if (!armRes) return null;
     
-    const candidates = await armRes.json();
+    const candidatesJson = await armRes.json();
+    const candidates = candidatesJson != null ? candidatesJson : [];
     if (!Array.isArray(candidates)) return null;
 
     const targetDate = Temporal.PlainDate.from(releaseDate);
