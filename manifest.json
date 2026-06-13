@@ -78,7 +78,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.11",
+      "version": "1.2.12",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -151,7 +151,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
-      "version": "1.1.44",
+      "version": "1.1.45",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -175,7 +175,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.42",
+      "version": "1.1.43",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -199,7 +199,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.27",
+      "version": "1.0.28",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -410,7 +410,7 @@
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
-      "version": "1.0.3",
+      "version": "1.0.5",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

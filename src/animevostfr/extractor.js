@@ -345,7 +345,8 @@ function detectLang(url, title) {
     if (/\/animes\/[^/]*-vostfr(?:\/|$)/.test(u) || /\bvostfr\b/.test(t)) return 'VOSTFR';
     if (/\/animes\/[^/]*-vf(?:\/|$)/.test(u) || /\bvf\b/.test(t)) return 'VF';
     if (/\/animes\/[^/]*-vo(?:\/|$)/.test(u) || /\bvo\b/.test(t)) return 'VO';
-    return 'VF';
+    // Default: VOSTFR pour un site spécialisé VOSTFR (animevostfr.org)
+    return 'VOSTFR';
 }
 
 function getPlayerName(url) {

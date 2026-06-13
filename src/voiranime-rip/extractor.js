@@ -33,6 +33,28 @@ function parseSearchResults(html) {
   return results
 }
 
+/**
+ * Detect language from a page URL or content
+ */
+function detectLanguage(html) {
+  const $ = cheerio.load(html)
+
+  // Check title
+  const title = $('title').text().toLowerCase()
+  if (/\bvostfr\b/.test(title)) return 'VOSTFR'
+  if (/\bvf\b/.test(title) && !/\bvostfr\b/.test(title)) return 'VF'
+
+  // Check page content (first 5000 chars)
+  const body = $('body').text().toLowerCase().slice(0, 5000)
+  const hasVostfr = /\bvostfr\b/.test(body)
+  const hasVf = /\bvf\b/.test(body)
+  
+  if (hasVostfr && !hasVf) return 'VOSTFR'
+  if (hasVf && !hasVostfr) return 'VF'
+
+  return null
+}
+
 function parseVideoUrls(html) {
   const urls = []
   if (!html) return urls
@@ -44,7 +66,8 @@ function parseVideoUrls(html) {
     iframeSrc = $('.video-wrapper iframe').first().attr('src')
   }
   if (iframeSrc) {
-    urls.push({ url: iframeSrc, lang: null })
+    const pageLang = detectLanguage(html)
+    urls.push({ url: iframeSrc, lang: pageLang })
   }
 
   // 2. Extract language-specific URLs from JS inline object
@@ -59,7 +82,61 @@ function parseVideoUrls(html) {
     }
   }
 
+  // 3. Fallback: detect page language and apply to any stream still without lang
+  if (urls.some(u => !u.lang)) {
+    const pageLang = detectLanguage(html)
+    if (pageLang) {
+      for (const u of urls) {
+        if (!u.lang) u.lang = pageLang
+      }
+    }
+  }
+
   return urls
+}
+
+/**
+ * Generate short fallback queries from a title for sites whose search engine
+ * doesn't return results for long/verbose queries.
+ * e.g. "Moi, quand je me réincarne en Slime" → ["Slime", "en Slime", "Moi"]
+ */
+function generateFallbackQueries(titles) {
+  const seen = new Set()
+  const fallbacks = []
+
+  for (const title of titles) {
+    const words = title.split(/\s+/).filter(w => w.length > 2)
+    
+    // Last word (usually the most distinctive: "Slime", "Titan", "Man", etc.)
+    if (words.length >= 2) {
+      const lastWord = words[words.length - 1]
+      if (!seen.has(lastWord) && lastWord.length >= 3) {
+        seen.add(lastWord)
+        fallbacks.push(lastWord)
+      }
+      
+      // Last 2 words for slightly more context
+      const lastTwo = words.slice(-2).join(' ')
+      if (!seen.has(lastTwo) && lastTwo.split(' ').every(w => w.length >= 3)) {
+        seen.add(lastTwo)
+        fallbacks.push(lastTwo)
+      }
+    }
+    
+    // First word (title-specific: "Moi", "That", "One", "Attack")
+    if (words.length >= 1) {
+      const firstWord = words[0]
+      if (!seen.has(firstWord) && firstWord.length >= 3 && firstWord.length <= 8) {
+        seen.add(firstWord)
+        fallbacks.push(firstWord)
+      }
+    }
+
+    // Stop once we have enough fallback queries
+    if (fallbacks.length >= 4) break
+  }
+
+  return fallbacks
 }
 
 /**
@@ -68,35 +145,73 @@ function parseVideoUrls(html) {
  * try multiple variants (VF/VOSTFR, different slug patterns).
  */
 async function searchAnime(titles) {
+  // Step 1: Try normal title queries
   for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
     try {
-      const html = await postSearch(title, { timeout: TIMEOUTS.SEARCH })
-      const results = parseSearchResults(html)
-      if (results.length === 0) continue
-
-      const scored = results
-        .map(r => ({ ...r, score: scoreMatch(r.title, title, SCORES) }))
-        .filter(r => r.score >= SCORES.MIN_MATCH)
-        .sort((a, b) => b.score - a.score)
-
-      if (scored.length > 0 && scored[0].score >= SCORES.EXACT_MATCH) {
-        // Deduplicate by slug and return all top-scoring variants
-        const bestScore = scored[0].score
-        const seenSlugs = new Set()
-        const topResults = scored.filter(r => {
-          if (seenSlugs.has(r.slug)) return false
-          if (r.score < bestScore - 20) return false
-          seenSlugs.add(r.slug)
-          return true
-        })
-        console.log(`[VoiranimeRip] Matched: "${topResults[0].title}" (slug: ${topResults[0].slug}) score: ${topResults[0].score}, ${topResults.length} variant(s)`)
-        return topResults
-      }
+      const result = await trySearchQuery(title)
+      if (result) return result
     } catch (e) {
       console.warn(`[VoiranimeRip] Search failed for "${title}": ${e.message}`)
     }
   }
+
+  // Step 2: Fallback — try short keyword queries (the site's search engine
+  // often fails on long/exact titles but works with short distinctive words)
+  console.log(`[VoiranimeRip] No results with full titles, trying short fallback queries...`)
+  const fallbackQueries = generateFallbackQueries(titles)
+  for (const query of fallbackQueries) {
+    try {
+      const result = await trySearchQuery(query, true)
+      if (result) {
+        console.log(`[VoiranimeRip] Fallback query "${query}" succeeded!`)
+        return result
+      }
+    } catch (e) {
+      console.warn(`[VoiranimeRip] Fallback search failed for "${query}": ${e.message}`)
+    }
+  }
+
   return []
+}
+
+/**
+ * Try a single search query and return top-scoring results if any match.
+ * @param {string} query - The search query
+ * @param {boolean} [isFallback=false] - If true, relaxes the scoring threshold
+ *   since short queries can't reach EXACT_MATCH but still return valid results.
+ */
+async function trySearchQuery(query, isFallback = false) {
+  const html = await postSearch(query, { timeout: TIMEOUTS.SEARCH })
+  const results = parseSearchResults(html)
+  if (results.length === 0) return null
+
+  const scored = results
+    .map(r => ({ ...r, score: scoreMatch(r.title, query, SCORES) }))
+    .filter(r => r.score >= SCORES.MIN_MATCH)
+    .sort((a, b) => b.score - a.score)
+
+  // For normal queries: EXACT_MATCH threshold ensures high confidence
+  // For fallback queries: use MIN_MATCH since short keywords can't reach
+  //   EXACT_MATCH but the site's own search already filtered for relevance.
+  //   The queries are ordered by distinctiveness (last word first), so
+  //   the most specific query tries first and finds the correct result.
+  const threshold = isFallback ? SCORES.MIN_MATCH : SCORES.EXACT_MATCH
+
+  if (scored.length > 0 && scored[0].score >= threshold) {
+    // Deduplicate by slug and return all top-scoring variants
+    const bestScore = scored[0].score
+    const seenSlugs = new Set()
+    const topResults = scored.filter(r => {
+      if (seenSlugs.has(r.slug)) return false
+      if (r.score < bestScore - 20) return false
+      seenSlugs.add(r.slug)
+      return true
+    })
+    console.log(`[VoiranimeRip] Matched: "${topResults[0].title}" (slug: ${topResults[0].slug}) score: ${topResults[0].score}, ${topResults.length} variant(s)`)
+    return topResults
+  }
+
+  return null
 }
 
 const SEASON_PATTERN = /\/saison-(\d+)\//g

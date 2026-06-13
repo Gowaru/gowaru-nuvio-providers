@@ -767,39 +767,47 @@ export async function resolveSibnet(url) {
 export async function resolveVidmoly(url) {
     try {
         // Support all known vidmoly TLDs: .net, .to, .ru, .is, .biz, .me
-        // Normalize to .me for consistent resolution
-        const normalized = url.replace(/vidmoly\.(net|to|ru|is|biz)/, 'vidmoly.me');
-        const domains = [
-            normalized,
-            // Also try original URL in case .me doesn't work for this specific video
-            url
-        ];
-        const uniqueDomains = [...new Set(domains)];
-        const headers = { 'Referer': 'https://vidmoly.me/', 'Origin': 'https://vidmoly.me' };
+        // Try original URL FIRST (avoids dead .me which returns 404+ads)
+        const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || '';
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.me/';
+
+        // Try all possible domains: original first, then alternative TLDs
+        const tldVariants = ['biz', 'me', 'net', 'to', 'ru', 'is'];
+        const domains = [url]; // Original domain first
+        for (const tld of tldVariants) {
+            const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
+            if (altUrl !== url) domains.push(altUrl);
+        }
+        const uniqueDomains = [...new Set(domains)].slice(0, 4); // Max 4 attempts
 
         for (const fetchUrl of uniqueDomains) {
             try {
-                let res = await safeFetch(fetchUrl, { headers });
-                if (!res) continue;
+                const fetchDomain = fetchUrl.match(/^https?:\/\/([^/]+)/)?.[1] || '';
+                const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
+                let res = await safeFetch(fetchUrl, { headers: { 'Referer': ref, 'Origin': ref } });
+                if (!res || !res.ok) continue;
                 let html = await res.text();
+                // Skip if response is ad/404 page (short or contains ad scripts)
+                if (html.length < 500 || html.includes('finisheddaysflamboyant')) continue;
+                
                 if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
                 const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                               html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                               html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match) return { url: match[1], headers: { "Referer": "https://vidmoly.me/" } };
+                if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
 
                 const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
                                    html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
                 if (jsRedirect && jsRedirect[1] !== fetchUrl) {
-                    res = await safeFetch(jsRedirect[1], { headers });
+                    res = await safeFetch(jsRedirect[1], { headers: { 'Referer': ref, 'Origin': ref } });
                     if (res) {
                         html = await res.text();
                         if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
                         const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                                        html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                                        html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                        if (match2) return { url: match2[1], headers: { "Referer": "https://vidmoly.me/" } };
+                        if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
                     }
                 }
             } catch (e) {}

@@ -204,15 +204,24 @@ function detectLanguageFromUrl(url) {
 function detectLanguageFromPage(html) {
     const $ = cheerio.load(html);
     const title = $('title').text().toLowerCase();
-    const body = $('body').text().toLowerCase().slice(0, 5000);
+    const body = $('body').text().toLowerCase();
 
-    // Check title first
+    // Check title first — word boundary prevents matching inside other words
     if (/\bvf\b/.test(title) || title.includes('version française') || title.includes('francais')) return 'VF';
     if (/\bvostfr\b/.test(title) || title.includes('version originale')) return 'VOSTFR';
 
-    // Check body
-    if (body.includes('vf') && !body.includes('vostfr')) return 'VF';
-    if (body.includes('vostfr')) return 'VOSTFR';
+    // Check body — use word boundaries to avoid matching 'vf' inside URLs, attributes, etc.
+    const bodySample = body.slice(0, 10000);
+    const hasVf = /\bvf\b/i.test(bodySample);
+    const hasVostfr = /\bvostfr\b/i.test(bodySample);
+
+    if (hasVf && !hasVostfr) return 'VF';
+    if (hasVostfr) return 'VOSTFR';
+
+    // Check meta tags, keywords, description
+    const metaDesc = $('meta[name="description"]').attr('content') || '';
+    if (/\bvf\b/i.test(metaDesc)) return 'VF';
+    if (/\bvostfr\b/i.test(metaDesc)) return 'VOSTFR';
 
     return null;
 }

@@ -184,8 +184,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     });
 
     const searchedQueries = new Set();
-    // Only 2 parallel searches max — the site is slow, and we want to fail fast
-    const searchPromises = searchQueries.slice(0, 2).map(q =>
+    // Try all unique search queries in parallel. The site is slow, but queries
+    // run in parallel so max wait is the same for 2 or 10 queries (~8s timeout).
+    // We need enough query diversity to find spin-offs with non-English titles
+    // like "Shingeki! Kyojin Chuugakkou" which are low in the sort order.
+    const searchPromises = searchQueries.map(q =>
         trySearch(q).then(() => searchedQueries.add(queryKey(q)))
     );
     await Promise.allSettled(searchPromises);
