@@ -2,7 +2,10 @@
  * HTTP Utilities for Vostfree
  */
 
-import { safeFetch } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+
+const DOMAIN = 'vostfree.ws';
+const rateLimit = createProviderRateLimiter();
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -20,6 +23,7 @@ const HTTP_SKIP_CODES = [403, 404, 429, 500, 502, 503, 504, 522, 523, 524];
 export async function fetchText(url, options = {}) {
     console.log(`[Vostfree] Fetching: ${url}`);
     const { headers: customHeaders, ...rest } = options;
+    await rateLimit(DOMAIN);
     const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';

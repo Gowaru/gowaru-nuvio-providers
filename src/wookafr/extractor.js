@@ -239,8 +239,11 @@ async function trySearchSeries(titles) {
   for (const r of settled) {
     if (r.status === 'fulfilled' && r.value) return r.value
   }
-  const slugMatch = await trySlugFallback(titles[0], 'series')
+  // Try slug fallback before using general results (which may be wrong movies)
+  const slugMatch = await trySlugFallback(titles[0], 'series', 0)
   if (slugMatch) { console.log(`[Wookafr] Found series via slug: ${slugMatch.url}`); return slugMatch }
+  // Only fall back to general (movie) results if slug failed
+  // This avoids matching a movie page for a series anime
   return null
 }
 
@@ -264,14 +267,42 @@ async function probeSlug(slug, type, domain) {
   }
 }
 
-async function trySlugFallback(title, type) {
+function cleanSlug(slug) {
+  // Strip season-related suffixes (same pattern as other providers)
+  return slug
+    .replace(/-(?:1st|2nd|3rd|4th|5th)-season$/, '')
+    .replace(/-(?:season|saison)-?\d+$/, '')
+    .replace(/-s\d+$/, '')
+    .replace(/-(?:part|cour|arc|volume)-?\d+$/, '')
+    .replace(/-(?:tv|film|movie|special)$/, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+async function trySlugFallback(title, type, season) {
   const slug = toSlug(title)
-  const candidates = [...new Set([slug, slug.replace(/-season-\d+$/, ''), slug.replace(/-saison-\d+$/, '')])]
+  const candidates = [slug]
+  
+  // Add cleaned slug (strips season suffixes)
+  const cleaned = cleanSlug(slug)
+  if (cleaned !== slug && cleaned.length > 3) candidates.push(cleaned)
+  
+  // Add base slug without common season patterns
+  candidates.push(slug.replace(/-(?:season|saison)-?\d+$/, ''))
+  candidates.push(slug.replace(/-\d+(?:st|nd|rd|th)?-season$/, ''))
+  
+  // For season > 1, also try {clean}-{season} pattern
+  if (season > 1) {
+    candidates.push(`${cleaned}-${season}`)
+    candidates.push(`${slug}-${season}`)
+  }
+  
+  const uniqueCandidates = [...new Set(candidates.filter(c => c && c.length > 3))]
   const domains = [...new Set([SITE.BASE_URL, ...SITE.DOMAINS])]
   
   for (const domain of domains) {
     const results = await Promise.allSettled(
-      candidates.map(s => probeSlug(s, type, domain))
+      uniqueCandidates.map(s => probeSlug(s, type, domain))
     )
     for (const r of results) {
       if (r.status === 'fulfilled' && r.value) return r.value

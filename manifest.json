@@ -6,7 +6,7 @@
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.46",
+      "version": "1.1.47",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -30,7 +30,7 @@
       "id": "wookafr",
       "name": "Wookafr",
       "description": "Films et séries en streaming VF sur Wookafr.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -78,7 +78,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.12",
+      "version": "1.2.13",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -103,7 +103,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.45",
+      "version": "1.1.46",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -127,7 +127,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -151,7 +151,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Animes VF et VOSTFR en streaming gratuit sur French Anime.",
-      "version": "1.1.45",
+      "version": "1.1.46",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -175,7 +175,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.43",
+      "version": "1.1.44",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -199,7 +199,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.28",
+      "version": "1.0.29",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -223,7 +223,7 @@
       "id": "jetanimes",
       "name": "JetAnimes",
       "description": "Regarder vos animes en streaming sur JetAnimes.",
-      "version": "1.0.20",
+      "version": "1.0.21",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -247,7 +247,7 @@
       "id": "sekai",
       "name": "Sekai",
       "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.16",
+      "version": "1.0.17",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -271,7 +271,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "1.0.31",
+      "version": "1.0.32",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -321,7 +321,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (séries site-native, films par catégories).",
-      "version": "2.0.8",
+      "version": "2.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -362,7 +362,7 @@
       "id": "coflix",
       "name": "Coflix",
       "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki (DoodStream, LuluVid).",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -386,7 +386,7 @@
       "id": "animesama-co",
       "name": "AnimeSama.co (DLE Mirror)",
       "description": "Animes VF et VOSTFR en streaming sur AnimeSama.co (miroir DLE).",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -410,7 +410,7 @@
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -434,7 +434,7 @@
       "id": "french-manga",
       "name": "French-Manga",
       "description": "Animes VF et VOSTFR en streaming sur French-Manga.net",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

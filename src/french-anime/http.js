@@ -2,6 +2,11 @@
  * HTTP Utilities for French-Anime
  */
 
+import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+
+const rateLimit = createProviderRateLimiter(400, 0.4);
+const DOMAIN = 'french-anime.com';
+
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -10,13 +15,12 @@ export const HEADERS = {
     "Connection": "keep-alive",
 };
 
-import { safeFetch } from '../utils/resolvers.js';
-
 /**
  * Fetch text content from a URL
  */
 export async function fetchText(url, options = {}) {
     console.log(`[French-Anime] Fetching: ${url}`);
+    await rateLimit(DOMAIN);
     const { headers: customHeaders, ...rest } = options;
     const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
     if (!res || !res.ok) {

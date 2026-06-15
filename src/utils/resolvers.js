@@ -30,6 +30,55 @@ export function sleep(ms) {
 }
 
 /**
+ * Rate limiter configurable par domaine.
+ * Ajoute un délai minimum entre deux requêtes vers le même domaine,
+ * avec du jitter aléatoire pour éviter les patterns synchronisés.
+ *
+ * Usage:
+ *   const limitAnimoFlix = createRateLimiter();
+ *   await limitAnimoFlix('animoflix.to'); // Attend si nécessaire
+ *   const res = await safeFetch(url, opts);
+ *
+ * @param {number} [baseDelay=1000] - Délai de base en ms entre deux requêtes
+ * @param {number} [jitterPercent=0.3] - Jitter aléatoire (+/- % du delay)
+ * @returns {Function} rateLimit(domain) → Promise qui résout quand on peut envoyer
+ */
+export function createRateLimiter(baseDelay = 1000, jitterPercent = 0.3) {
+  const lastRequest = new Map();
+
+  return async function rateLimit(domain) {
+    const now = Date.now();
+    const last = lastRequest.get(domain) || 0;
+    const elapsed = now - last;
+    const jitter = baseDelay * jitterPercent * (Math.random() * 2 - 1); // +/- jitterPercent
+    const delay = Math.max(0, baseDelay + jitter - elapsed);
+
+    if (delay > 0) {
+      await sleep(delay);
+    }
+
+    lastRequest.set(domain, Date.now());
+  };
+}
+
+/**
+ * Convenience wrapper: crée un rate limiter avec les valeurs par défaut
+ * standard pour les providers HTTP (200ms base, 40% jitter).
+ * Remplace le pattern dupliqué `createRateLimiter(200, 0.4)` dans les http.js.
+ *
+ * Usage:
+ *   const rateLimit = createProviderRateLimiter();          // 200ms + 40%
+ *   const rateLimit = createProviderRateLimiter(400, 0.4);  // custom
+ *
+ * @param {number} [baseDelay=200] - Délai de base en ms
+ * @param {number} [jitterPercent=0.4] - Jitter aléatoire (+/- % du delay)
+ * @returns {Function} rateLimit(domain) → Promise
+ */
+export function createProviderRateLimiter(baseDelay = 200, jitterPercent = 0.4) {
+  return createRateLimiter(baseDelay, jitterPercent);
+}
+
+/**
  * Fetch avec retry et backoff.
  * @param {Function} fetchFn - Fonction de fetch à appeler (ex: () => fetchText(url))
  * @param {object} [opts]

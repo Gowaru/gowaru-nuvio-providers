@@ -131,23 +131,31 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
         if (!isMovie) {
             const ep = data?.episodes?.[String(episodeNum)] || data?.episodes?.[episodeNum];
-            if (!ep || typeof ep !== 'object') continue;
+            if (ep && typeof ep === 'object') {
+                // Format 1: fstream → ep.languages { lang: [{player, url, quality}] }
+                if (ep.languages) {
+                    for (const lang of Object.keys(ep.languages)) {
+                        const list = ep.languages[lang];
+                        if (!Array.isArray(list)) continue;
+                        for (const item of list) pushStream(streams, 'FStream', item?.player, lang, item?.url, item?.quality);
+                    }
+                }
 
-            // Format 1: fstream → ep.languages { lang: [{player, url, quality}] }
-            if (ep.languages) {
-                for (const lang of Object.keys(ep.languages)) {
-                    const list = ep.languages[lang];
+                // Format 2: wiflix → ep { lang: [{name, url, episode}] }
+                for (const lang of ['vf', 'vostfr', 'vo', 'VFF', 'VFQ', 'VOSTFR', 'Default']) {
+                    const list = ep[lang];
                     if (!Array.isArray(list)) continue;
-                    for (const item of list) pushStream(streams, 'FStream', item?.player, lang, item?.url, item?.quality);
+                    for (const item of list) pushStream(streams, 'Wiflix', item?.name || item?.player, lang, item?.url, item?.quality);
                 }
             }
+        }
 
-            // Format 2: wiflix → ep { lang: [{name, url, episode}] }
-            for (const lang of ['vf', 'vostfr', 'vo', 'VFF', 'VFQ', 'VOSTFR', 'Default']) {
-                const list = ep[lang];
-                if (!Array.isArray(list)) continue;
-                for (const item of list) pushStream(streams, 'Wiflix', item?.name || item?.player, lang, item?.url, item?.quality);
-            }
+        // Format 3: cpasmal direct format { vf: [{player, url}], vostfr: [...] }
+        // (data at top level, not nested under episodes)
+        for (const lang of ['vf', 'vostfr', 'vo', 'VFF', 'VFQ']) {
+            const list = data[lang];
+            if (!Array.isArray(list)) continue;
+            for (const item of list) pushStream(streams, 'Cpasmal', item?.player || item?.name, lang, item?.url, item?.quality);
         }
     }
 

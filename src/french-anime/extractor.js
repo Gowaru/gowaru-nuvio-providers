@@ -3,6 +3,7 @@ import cheerio from 'cheerio-without-node-native';
 import { resolveStream, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { stripSeasonSuffix } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://french-anime.com";
 const SPINOFF_KEYWORDS = ['fan letter', 'log:', 'memories', 'vigilante', 'illegals', 'film', 'movie', 'special', 'oav', 'ona'];
@@ -235,7 +236,7 @@ function detectSeasonFromUrl(url) {
 /** Generate smarter search queries from a title */
 function generateSearchQueries(title) {
     const queries = [];
-    const t = title.trim();
+    const t = stripSeasonSuffix(title.trim());
     if (!t || t.length < 2) return queries;
 
     // 1. The title itself
@@ -304,7 +305,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    // Generate search queries from the first few titles
+    // Generate search queries from TMDB titles + Japanese original
     const searchQueries = [];
     // Title 0: English title (best for general search)
     if (titles[0]) searchQueries.push(...generateSearchQueries(titles[0]));
@@ -312,8 +313,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (titles[1] && normalize(titles[1]) !== normalize(titles[0])) {
         searchQueries.push(...generateSearchQueries(titles[1]));
     }
+    // Title 2+: Japanese/alternative titles (many French sites use the romanji title in URLs)
+    for (let i = 2; i < Math.min(titles.length, 6); i++) {
+        const altTitle = titles[i];
+        if (altTitle && normalize(altTitle) !== normalize(titles[0]) && normalize(altTitle) !== normalize(titles[1])) {
+            searchQueries.push(...generateSearchQueries(altTitle));
+        }
+    }
 
-    const uniqueQueries = [...new Set(searchQueries)].filter(q => q.length >= 3).slice(0, 15);
+    const uniqueQueries = [...new Set(searchQueries)].filter(q => q.length >= 3).slice(0, 20);
     console.log(`[French-Anime] Search queries: ${uniqueQueries.join(' | ')}`);
 
     // Execute all search queries in parallel, collect best results
@@ -340,10 +348,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    // Score each result against the FIRST title (primary)
-    const primaryTitle = titles[0];
+    // Score each result against ALL TMDB titles (take the best score)
     const scoredResults = [...urlMap.values()].map(r => {
-        let score = computeTitleMatch(primaryTitle, r.title);
+        // Best match against any TMDB title (English, French, Japanese, alternative)
+        let maxScore = 0;
+        for (const title of titles.slice(0, 8)) {
+            const s = computeTitleMatch(title, r.title);
+            if (s > maxScore) maxScore = s;
+        }
+        let score = Math.max(r.score || 0, maxScore); // Keep best of search score + title match
 
         // Boost VF results slightly (penalize VOSTFR when searching French)
         if (r.url.includes('/animes-vf/')) score += 5;
@@ -417,10 +430,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             // Detect language from URL path first, then page content
             const langLabel = detectLanguageFromUrl(match.url) || detectLanguageFromPage(html) || 'VOSTFR';
 
-            // Filter slow hosts, then sort by speed, take max 3 per page
+            // Filter slow hosts, then sort by speed, take max 6 per page
             const fastUrls = allPlayerUrls.filter(u => !isSlowHost(u));
             fastUrls.sort((a, b) => urlSpeedPriority(a) - urlSpeedPriority(b));
-            const urlsToTry = fastUrls.slice(0, 3);
+            const urlsToTry = fastUrls.slice(0, 6);
 
             // Resolve each URL
             const resolvedStreams = [];

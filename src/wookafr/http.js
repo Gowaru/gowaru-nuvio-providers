@@ -1,5 +1,8 @@
-import { safeFetch } from '../utils/resolvers.js'
+import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
+
+const rateLimit = createProviderRateLimiter()
+const DOMAIN = SITE.DOMAIN || 'wookafr.cymru'
 
 export const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -9,6 +12,7 @@ export const HEADERS = {
 }
 
 export async function fetchText(url, options = {}) {
+  await rateLimit(DOMAIN)
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
 
@@ -22,6 +26,7 @@ export async function fetchText(url, options = {}) {
 }
 
 export async function postForm(url, data, options = {}) {
+  await rateLimit(DOMAIN)
   const body = Object.entries(data)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&')

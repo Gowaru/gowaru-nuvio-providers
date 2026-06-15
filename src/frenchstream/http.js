@@ -2,7 +2,10 @@
  * HTTP Utilities for Frenchstream
  */
 
-import { safeFetch } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+
+const rateLimit = createProviderRateLimiter();
+const DOMAIN = 'french-stream.one';
 
 export const BASE_URLS = ['https://french-stream.one'];
 export const BASE_URL = BASE_URLS[0];
@@ -18,6 +21,7 @@ export const HEADERS = {
 };
 
 export async function fetchText(url, options = {}) {
+    await rateLimit(DOMAIN);
     console.log(`[Frenchstream] Fetching: ${url}`);
     const base = options.baseUrl || (() => { try { return new URL(url).origin; } catch (e) { return BASE_URL; } })();
     const timeout = options.timeout || GLOBAL_TIMEOUT_MS;

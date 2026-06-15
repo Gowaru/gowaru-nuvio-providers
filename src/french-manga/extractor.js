@@ -1,8 +1,9 @@
 import cheerio from 'cheerio-without-node-native'
-import { fetchText, fetchJson, postSearch } from './http.js'
+import { fetchText, fetchJson, ajaxSearch, fetchCategoryPage } from './http.js'
 import { resolveStream, safeFetch } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js'
+import { stripSeasonSuffix } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES,
@@ -75,6 +76,7 @@ function parseSearchResults(html) {
   const $ = cheerio.load(html)
   const results = []
 
+  // Home page: div.short elements
   $('div.short').each((_, el) => {
     const $card = $(el)
     const $poster = $card.find('a.short-poster').first()
@@ -97,6 +99,33 @@ function parseSearchResults(html) {
       season,
     })
   })
+
+  // AJAX search results: .search-item elements (class is 'search-title' NOT 'search-item-title')
+  $('div.search-item').each((_, el) => {
+    const $item = $(el)
+    const onclick = $item.attr('onclick') || ''
+    const hrefMatch = onclick.match(/location\.href\s*=\s*['"]([^'"]+)['"]/)
+    const href = hrefMatch ? hrefMatch[1] : ''
+    const title = $item.find('.search-title').first().text().trim() || $item.find('.search-item-title').first().text().trim()
+    const poster = $item.find('.search-poster img').attr('alt') || $item.find('.search-item-poster img').attr('alt') || ''
+    
+    if (!href || !title) return
+
+    const newsidMatch = href.match(/(\d+)-/)
+    const season = extractSeason(title) || extractSeason(poster)
+
+    results.push({
+      url: href.startsWith('http') ? href : `${SITE.BASE_URL}${href}`,
+      newsid: newsidMatch ? newsidMatch[1] : null,
+      title,
+      altTitle: poster,
+      version: 'VF',
+      season,
+    })
+  })
+
+  // Category pages: also use div.short (same format as home page)
+  // Already handled above
 
   return results
 }
@@ -211,8 +240,10 @@ async function trySearchFallback(allResults, tmdbTitles) {
 }
 
 async function trySearch(titles, targetSeason) {
+  // Strip season suffixes from TMDB titles for better matching
+  const cleanTitles = titles.map(t => stripSeasonSuffix(t));
   const allPostResults = []
-  for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
+  for (const title of cleanTitles.slice(0, MAX_SEARCH_TITLES)) {
     try {
       // Try POST search first (actual DLE filtered search — more accurate)
       const postResults = await trySearchPostRaw(title, targetSeason)
@@ -240,10 +271,39 @@ async function trySearch(titles, targetSeason) {
 }
 
 async function trySearchPostRaw(title, targetSeason) {
-  const html = await postSearch(title, { timeout: TIMEOUTS.SEARCH })
-  if (!html) return null
-  const results = parseSearchResults(html)
-  return results.length > 0 ? results : null
+  // Try AJAX search first (real search endpoint)
+  try {
+    const html = await ajaxSearch(title, { timeout: TIMEOUTS.SEARCH })
+      if (html && html.length > 50) {
+      const results = parseSearchResults(html)
+      if (results.length > 0) {
+        console.log(`[FrenchManga] AJAX search found ${results.length} results for "${title}"`)
+        return results
+      }
+    }
+  } catch (e) {
+    console.warn(`[FrenchManga] AJAX search failed for "${title}": ${e.message}`)
+  }
+  
+  // Fallback: category pages for broader matching (cached per category)
+  const categories = ['films', 'mangas', 'animes', 'animes-vf', 'animes-vostfr']
+  for (const cat of categories) {
+    try {
+      const html = await cached(`category_${cat}`, () =>
+        fetchCategoryPage(cat, { timeout: TIMEOUTS.SEARCH })
+      )
+      if (html && html.length > 100) {
+        const results = parseSearchResults(html)
+        if (results.length > 0) {
+          console.log(`[FrenchManga] Category "${cat}" has ${results.length} items, checking for "${title}"...`)
+          const match = bestMatch(results, title, targetSeason)
+          if (match) return results
+        }
+      }
+    } catch {}
+  }
+  
+  return null
 }
 
 async function fetchEpisodeApi(newsid) {

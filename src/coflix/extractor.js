@@ -4,6 +4,7 @@
  * Uses iframe embed from lecteurvideo.com for streaming
  */
 
+import { stripSeasonSuffix } from '../utils/dle-extractor.js'
 import { fetchText } from './http.js'
 import { resolveStream } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
@@ -20,7 +21,8 @@ function cached(key, fn) {
 }
 
 function toSlug(title) {
-  return title
+  const clean = stripSeasonSuffix(title)
+  return clean
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[':!.,?()\[\]"]/g, '')

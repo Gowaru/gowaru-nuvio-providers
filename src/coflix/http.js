@@ -1,4 +1,7 @@
-import { safeFetch, fetchWithRetry } from '../utils/resolvers.js'
+import { safeFetch, fetchWithRetry, createProviderRateLimiter } from '../utils/resolvers.js'
+
+const rateLimit = createProviderRateLimiter();
+const DOMAIN = 'coflix.cymru';
 
 const BASE_URL = 'https://coflix.cymru'
 
@@ -18,6 +21,7 @@ export const AJAX_HEADERS = {
 }
 
 export async function fetchText(url, options = {}) {
+  await rateLimit(DOMAIN);
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
   const retries = options.retries ?? 2
 

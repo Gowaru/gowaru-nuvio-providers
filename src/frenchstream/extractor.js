@@ -1,3 +1,4 @@
+import { stripSeasonSuffix } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
 import { safeFetch, resolveStream } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
@@ -152,8 +153,8 @@ function buildTitleQueries(titles) {
     const queries = [];
     const push = (v) => { if (typeof v === 'string' && v.trim() && !queries.some(q => q.toLowerCase() === v.trim().toLowerCase())) queries.push(v.trim()); };
     for (const title of (titles || []).slice(0, 2)) {
-        push(title);
-        const bc = title.split(':')[0];
+        push(stripSeasonSuffix(title));
+        const bc = stripSeasonSuffix(title).split(':')[0];
         if (bc && bc.length >= 3) push(bc);
     }
     return queries.slice(0, MAX_SEARCH_QUERIES);

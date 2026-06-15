@@ -1,3 +1,4 @@
+import { stripSeasonSuffix } from '../utils/dle-extractor.js';
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
@@ -153,8 +154,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const trySearch = async (title) => {
         if (!title || title.length > 50) return;
-        if (!/^[a-zA-Z0-9\sàâéèêëîïôùûüç'\-:!.,?()ÀÂÉÈÊËÎÏÔÙÛÜÇ]+$/.test(title)) return;
-        const results = await searchAnime(title);
+        const cleanTitle = stripSeasonSuffix(title)
+        if (!cleanTitle || cleanTitle.length < 3) return;
+        if (!/^[a-zA-Z0-9\sàâéèêëîïôùûüç'\-:!.,?()ÀÂÉÈÊËÎÏÔÙÛÜÇ]+$/.test(cleanTitle)) return;
+        const results = await searchAnime(cleanTitle);
         if (results && results.length > 0) {
             for (const r of results) {
                 const id = r.url.match(/\/(\d+)-/)?.[1];
@@ -509,32 +512,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
         console.log(`[AnimesUltra] No resolvable streams (all ${streams.length} from unresolvable hosts)`);
         return [];
-    }
-
-    // Fallback VF : si des streams VOSTFR ont été trouvés mais aucun VF,
-    // dupliquer les streams VOSTFR avec le label VF.
-    // Les pages VF du site utilisent des tokens content_player qui pointent
-    // vers des épisodes incorrects (mismatch structurel du site).
-    const hasVf = validStreams.some(s => {
-        const name = s.name || '';
-        return name.toUpperCase().includes('VF') || name.toUpperCase().includes('(VF)');
-    });
-    if (!hasVf && validStreams.length > 0) {
-        const vfDuplicates = validStreams
-            .filter(s => {
-                const n = s.name || '';
-                return n.toUpperCase().includes('VOSTFR') || n.toUpperCase().includes('(VOSTFR)');
-            })
-            .map(s => ({
-                ...s,
-                name: `AnimesUltra (VF)`,
-                title: `${s.title || ''} [VF]`.trim(),
-                language: 'VF'
-            }));
-        if (vfDuplicates.length > 0) {
-            console.log(`[AnimesUltra] Adding ${vfDuplicates.length} VF fallback streams (from VOSTFR sources)`);
-            validStreams.push(...vfDuplicates);
-        }
     }
 
     console.log(`[AnimesUltra] Total valid streams found: ${validStreams.length}`);

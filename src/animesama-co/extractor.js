@@ -3,12 +3,49 @@ import { fetchText, postSearch } from './http.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js'
 import {
-  normalize, cached, scoreMatch, resolveWithTimeout, detectSubType, toStream, parseAvailableSeasons,
+  normalize, cached, scoreMatch, resolveWithTimeout, detectSubType, toStream, parseAvailableSeasons, stripSeasonSuffix,
 } from '../utils/dle-extractor.js'
 import {
   SITE, PATTERNS, TIMEOUTS, SCORES,
   CACHE_TTL, MAX_SEARCH_TITLES,
 } from './config.js'
+
+/**
+ * Generate short fallback queries from titles for sites whose search engine
+ * doesn't return results for long/verbose queries.
+ * e.g. "Mushoku Tensei: Jobless Reincarnation" → ["Tensei", "Reincarnation", "Mushoku"]
+ */
+function generateFallbackQueries(titles) {
+  const seen = new Set()
+  const fallbacks = []
+
+  for (const title of titles) {
+    const cleanTitle = stripSeasonSuffix(title)
+    const words = cleanTitle.split(/\s+/).filter(w => w.length > 3)
+    
+    // Last word (usually the most distinctive)
+    if (words.length >= 2) {
+      const lastWord = words[words.length - 1]
+      if (!seen.has(lastWord) && lastWord.length >= 4) {
+        seen.add(lastWord)
+        fallbacks.push(lastWord)
+      }
+    }
+    
+    // First word (title-specific)
+    if (words.length >= 1) {
+      const firstWord = words[0]
+      if (!seen.has(firstWord) && firstWord.length >= 4 && firstWord.length <= 10) {
+        seen.add(firstWord)
+        fallbacks.push(firstWord)
+      }
+    }
+
+    if (fallbacks.length >= 4) break
+  }
+
+  return fallbacks
+}
 
 function parseSearchResults(html) {
   if (!html) return []
@@ -82,7 +119,8 @@ function detectLanguage(html) {
 async function searchAnime(titles) {
   for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
     try {
-      const html = await postSearch(title, { timeout: TIMEOUTS.SEARCH })
+      const cleanTitle = stripSeasonSuffix(title)
+      const html = await postSearch(cleanTitle, { timeout: TIMEOUTS.SEARCH })
       const results = parseSearchResults(html)
       if (results.length === 0) continue
 
@@ -100,6 +138,36 @@ async function searchAnime(titles) {
       console.warn(`[AnimeSamaCo] Search failed for "${title}": ${e.message}`)
     }
   }
+
+  // Fallback: try short keyword queries (the site's search engine
+  // often fails on long/exact titles but works with short distinctive words)
+  console.log(`[AnimeSamaCo] Search failed for all titles, trying short fallback queries...`)
+  const fallbackQueries = generateFallbackQueries(titles)
+  for (const query of fallbackQueries) {
+    try {
+      const html = await postSearch(query, { timeout: TIMEOUTS.SEARCH })
+      const results = parseSearchResults(html)
+      if (results.length === 0) continue
+
+      let best = null, bestScore = 0
+      for (const r of results) {
+        for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
+          const cleanTitle = stripSeasonSuffix(title)
+          const score = scoreMatch(r.title, cleanTitle, SCORES)
+          if (score > bestScore) { bestScore = score; best = r }
+        }
+      }
+
+      // Fallback queries use MIN_MATCH since short keywords can't reach EXACT_MATCH
+      if (best && bestScore >= SCORES.MIN_MATCH) {
+        console.log(`[AnimeSamaCo] Fallback query "${query}" matched: "${best.title}" (id: ${best.animeId}) score: ${bestScore}`)
+        return best
+      }
+    } catch (e) {
+      console.warn(`[AnimeSamaCo] Fallback query "${query}" failed: ${e.message}`)
+    }
+  }
+
   return null
 }
 

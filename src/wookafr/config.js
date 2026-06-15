@@ -1,6 +1,7 @@
 export const SITE = {
   BASE_URL: 'https://wookafr.cymru',  // .fyi → .cymru (301 redirect)
   DOMAINS: ['https://wookafr.cymru'],
+  DOMAIN: 'wookafr.cymru',
 }
 
 export const ENDPOINTS = {

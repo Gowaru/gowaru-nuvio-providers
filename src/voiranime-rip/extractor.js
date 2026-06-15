@@ -3,12 +3,42 @@ import { fetchText, postSearch } from './http.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js'
 import {
-  normalize, cached, scoreMatch, resolveWithTimeout, detectSubType, toStream, parseAvailableSeasons,
+  normalize, cached, scoreMatch, resolveWithTimeout, detectSubType, toStream, parseAvailableSeasons, stripSeasonSuffix,
 } from '../utils/dle-extractor.js'
 import {
   SITE, PATTERNS, TIMEOUTS, SCORES,
   CACHE_TTL, MAX_SEARCH_TITLES,
 } from './config.js'
+
+/**
+ * Validate a fallback match: the result title must share at least 2 significant
+ * words (length > 3) with the original TMDB title to prevent false positives.
+ * e.g. "Reincarnation" matches "Reincarnation no Kaben" (1 word) ❌
+ *      "Reincarnation" matches "Mushoku Tensei: Jobless Reincarnation" (1 word) ❌
+ *      "Slime" matches "Moi quand je me réincarne en Slime" (1 word) ✅ but unique enough
+ */
+function validateFallbackMatch(resultTitle, originalTitles) {
+  const resultWords = new Set(normalize(resultTitle).split(/\s+/).filter(w => w.length > 3))
+  
+  for (const title of originalTitles) {
+    const cleanTitle = stripSeasonSuffix(title)
+    const titleWords = normalize(cleanTitle).split(/\s+/).filter(w => w.length > 3)
+    
+    // Count overlapping significant words
+    let overlap = 0
+    for (const w of titleWords) {
+      if (resultWords.has(w)) overlap++
+    }
+    
+    // At least 2 overlapping words OR the query contains a highly distinctive word
+    if (overlap >= 2) return true
+    
+    // Edge case: distinctive short titles like "Overlord" (single word)
+    if (titleWords.length <= 2 && overlap >= 1) return true
+  }
+  
+  return false
+}
 
 function parseSearchResults(html) {
   if (!html) return []
@@ -148,7 +178,7 @@ async function searchAnime(titles) {
   // Step 1: Try normal title queries
   for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
     try {
-      const result = await trySearchQuery(title)
+      const result = await trySearchQuery(title, false, titles)
       if (result) return result
     } catch (e) {
       console.warn(`[VoiranimeRip] Search failed for "${title}": ${e.message}`)
@@ -161,7 +191,7 @@ async function searchAnime(titles) {
   const fallbackQueries = generateFallbackQueries(titles)
   for (const query of fallbackQueries) {
     try {
-      const result = await trySearchQuery(query, true)
+      const result = await trySearchQuery(query, true, titles)
       if (result) {
         console.log(`[VoiranimeRip] Fallback query "${query}" succeeded!`)
         return result
@@ -180,12 +210,13 @@ async function searchAnime(titles) {
  * @param {boolean} [isFallback=false] - If true, relaxes the scoring threshold
  *   since short queries can't reach EXACT_MATCH but still return valid results.
  */
-async function trySearchQuery(query, isFallback = false) {
-  const html = await postSearch(query, { timeout: TIMEOUTS.SEARCH })
+async function trySearchQuery(query, isFallback = false, originalTitles = null) {
+  const cleanQuery = stripSeasonSuffix(query)
+  const html = await postSearch(cleanQuery, { timeout: TIMEOUTS.SEARCH })
   const results = parseSearchResults(html)
   if (results.length === 0) return null
 
-  const scored = results
+  let scored = results
     .map(r => ({ ...r, score: scoreMatch(r.title, query, SCORES) }))
     .filter(r => r.score >= SCORES.MIN_MATCH)
     .sort((a, b) => b.score - a.score)
@@ -198,6 +229,17 @@ async function trySearchQuery(query, isFallback = false) {
   const threshold = isFallback ? SCORES.MIN_MATCH : SCORES.EXACT_MATCH
 
   if (scored.length > 0 && scored[0].score >= threshold) {
+    // For fallback queries, validate that the match shares enough words
+    // with the ORIGINAL TMDB titles (not just the short fallback query)
+    if (isFallback) {
+      const validated = scored.filter(r => validateFallbackMatch(r.title, originalTitles || [query]))
+      if (validated.length === 0) {
+        console.log(`[VoiranimeRip] Fallback "${query}" scored ${scored[0].score} but failed word validation (false positive)`)
+        return null
+      }
+      scored = validated
+    }
+
     // Deduplicate by slug and return all top-scoring variants
     const bestScore = scored[0].score
     const seenSlugs = new Set()

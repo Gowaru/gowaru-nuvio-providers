@@ -2,7 +2,10 @@
  * HTTP Utilities for AnimesUltra
  */
 
-import { safeFetch } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+
+const rateLimit = createProviderRateLimiter();
+const DOMAIN = 'ww.animesultra.org';
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -17,6 +20,7 @@ export const HEADERS = {
  */
 export async function fetchText(url, options = {}) {
     console.log(`[AnimesUltra] Fetching: ${url}`);
+    await rateLimit(DOMAIN);
     const { headers: customHeaders, ...rest } = options;
     const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
     if (!res || !res.ok) {

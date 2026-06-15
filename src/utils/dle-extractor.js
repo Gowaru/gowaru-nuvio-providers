@@ -6,6 +6,19 @@ import cheerio from 'cheerio-without-node-native'
 import { resolveStream, safeFetch } from './resolvers.js'
 
 /**
+ * Strip season suffixes from TMDB titles for better search matching.
+ * e.g. "Mushoku Tensei: Jobless Reincarnation Season 1" → "Mushoku Tensei: Jobless Reincarnation"
+ *      "JUJUTSU KAISEN S2" → "JUJUTSU KAISEN"
+ */
+export function stripSeasonSuffix(title) {
+  if (!title) return title
+  let cleaned = title
+    .replace(/\s+(?:Season|Saison|Stagione|Temporada)\s+\d+\s*$/i, '')
+    .replace(/\s+S\d+\s*$/i, '')
+  return cleaned.trim() || title
+}
+
+/**
  * Normalize a string for matching (lowercase, no accents, no punctuation)
  */
 export function normalize(s) {

@@ -1,3 +1,4 @@
+import { stripSeasonSuffix } from '../utils/dle-extractor.js';
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, safeFetch, isBudgetExhausted } from '../utils/resolvers.js';
@@ -138,7 +139,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // Only try the best candidate title — searching is very slow on this site
-    const bestCandidate = candidates[0];
+    const bestCandidate = stripSeasonSuffix(candidates[0]);
     if (!bestCandidate) return [];
     const matches = await searchAnime(bestCandidate);
 

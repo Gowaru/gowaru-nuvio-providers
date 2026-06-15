@@ -1,5 +1,8 @@
-import { safeFetch, sanitizeSearchQuery, fetchWithRetry } from '../utils/resolvers.js'
+import { safeFetch, sanitizeSearchQuery, fetchWithRetry, createProviderRateLimiter } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
+
+const rateLimit = createProviderRateLimiter()
+const DOMAIN = SITE.DOMAIN
 
 export const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -17,6 +20,7 @@ export const AJAX_HEADERS = {
 }
 
 export async function fetchText(url, options = {}) {
+  await rateLimit(DOMAIN)
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
   const retries = options.retries ?? 2
@@ -34,6 +38,7 @@ export async function fetchText(url, options = {}) {
 }
 
 export async function postSearch(query, options = {}) {
+  await rateLimit(DOMAIN)
   const sanitized = sanitizeSearchQuery(query)
   const body = `query=${encodeURIComponent(sanitized)}`
   const mergedHeaders = {

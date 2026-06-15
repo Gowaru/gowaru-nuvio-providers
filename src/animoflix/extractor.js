@@ -23,23 +23,37 @@ async function searchAnime(title) {
         const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
         const $ = cheerio.load(html);
         const results = [];
-        $('.post-title a, .TPost a[href*="/anime/"], a[href*="/anime/"]').each((i, el) => {
-            const href = $(el).attr('href');
-            const rawText = $(el).text().trim();
-            const text = rawText.replace(/\s+/g, ' ').trim();
-            if (href && href.includes('/anime/') && text.length > 2) {
-                const slugRaw = href.replace(/.*\/anime\//, '').replace(/\/$/, '');
-                if (slugRaw.includes('/')) return;
-                const imgAlt = $(el).closest('.TPost, .TPostMv, article, li').find('img').first().attr('alt');
-                const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
-                results.push({
-                    title: cleanTitle,
-                    title2: cleanTitle,
-                    slug: slugRaw,
-                    url: href
-                });
-            }
-        });
+        // Try multiple selectors to find search result links
+        const selectors = [
+            '.post-title a[href*="/anime/"]',
+            '.TPost a[href*="/anime/"]',
+            'a[href*="/anime/"]',
+            '.result-item a',
+            '.search-item a',
+            '.card a[href*="/anime/"]',
+            'article a[href*="/anime/"]',
+        ];
+        for (const sel of selectors) {
+            $(sel).each((i, el) => {
+                if (results.length >= 15) return false;
+                const href = $(el).attr('href');
+                const rawText = $(el).text().trim();
+                const text = rawText.replace(/\s+/g, ' ').trim();
+                if (href && href.includes('/anime/') && text.length > 2) {
+                    const slugRaw = href.replace(/.*\/anime\//, '').replace(/\/$/, '');
+                    if (slugRaw.includes('/') || results.some(r => r.slug === slugRaw)) return;
+                    const imgAlt = $(el).closest('.TPost, .TPostMv, article, li, .card, .result-item, .search-item').find('img').first().attr('alt');
+                    const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
+                    results.push({
+                        title: cleanTitle,
+                        title2: cleanTitle,
+                        slug: slugRaw,
+                        url: href
+                    });
+                }
+            });
+            if (results.length > 0) break;
+        }
         if (results.length > 0) return results;
     } catch (e) {
         console.warn(`[AnimoFlix] Search HTML fallback also failed: ${e.message}`);
@@ -104,11 +118,17 @@ function scoreSearchMatch(result, searchTitle) {
 function parseSeasonNumber(seasonSlug) {
     const m = seasonSlug.match(/saison[-\s]*(\d+)/i);
     if (m) return parseInt(m[1]);
-    if (/the-final-season|final-season/i.test(seasonSlug)) return 4;
+    const sm = seasonSlug.match(/season[-\s]*(\d+)/i);
+    if (sm) return parseInt(sm[1]);
+    const cm = seasonSlug.match(/cour[-\s]*(\d+)/i);
+    if (cm) return parseInt(cm[1]);
+    if (/final-season|the-final-season/i.test(seasonSlug)) return 99;
     if (/partie-\d+/i.test(seasonSlug)) {
         const pm = seasonSlug.match(/partie-(\d+)/i);
         if (pm) return parseInt(pm[1]);
     }
+    const ptm = seasonSlug.match(/part[-\s]*(\d+)/i);
+    if (ptm) return parseInt(ptm[1]);
     return null;
 }
 
@@ -215,6 +235,8 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
 
     const seasons = [];
     let filmSeasonHref = null;
+    
+    // Primary: parse .season-card elements
     $('.season-card').each((i, el) => {
         const href = $(el).attr('href');
         const title = $(el).find('.season-card-title').text().trim();
@@ -228,6 +250,30 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
             seasons.push({ href, title, seasonNum });
         }
     });
+    
+    // Fallback: if no season cards found, try a[href*="saison-"] links
+    if (seasons.length === 0 && filmSeasonHref === null) {
+        $('a[href*="saison-"]').each((i, el) => {
+            const href = $(el).attr('href');
+            const title = $(el).text().trim();
+            if (href && title && href.includes('/anime/' + slug + '/')) {
+                const seasonNum = parseSeasonNumber(href);
+                if (seasonNum) {
+                    seasons.push({ href, title, seasonNum });
+                }
+            }
+        });
+        // Also try film/movie links
+        if (filmSeasonHref === null) {
+            $('a[href*="/film/"], a[href*="/movie/"]').each((i, el) => {
+                const href = $(el).attr('href');
+                if (href && href.includes('/anime/' + slug + '/')) {
+                    filmSeasonHref = href;
+                    return false;
+                }
+            });
+        }
+    }
 
     if (isMovie) {
         // Try season-based URL first (movies listed under Saison 1), then fall back to film URL
@@ -338,6 +384,8 @@ async function extractMovieStreams(slug, seasonHref) {
         (lang) => `${BASE_URL}/anime/${slug}/film/${lang}/episode-1/`,
         (lang) => `${BASE_URL}/anime/${slug}/film/${lang}/`,
         (lang) => `${BASE_URL}/anime/${slug}/movie/${lang}/episode-1/`,
+        (lang) => `${BASE_URL}/anime/${slug}/film/${lang}/`,
+        (lang) => `${BASE_URL}/anime/${slug}/${lang}/episode-1/`,
     );
 
     for (const lang of langs) {
@@ -345,7 +393,8 @@ async function extractMovieStreams(slug, seasonHref) {
             tryUrlBuilders.map(buildUrl => {
                 const url = buildUrl(lang);
                 return fetchWithRetry(() => fetchText(url, { timeout: TIMEOUT })).then(html => {
-                    if (html.includes('lecteurSelect')) {
+                    // Check for player presence: either #epLecteurSelect, JSON-LD embedUrl, or iframe
+                    if (html.includes('epLecteurSelect') || html.includes('"embedUrl"') || html.includes('<iframe')) {
                         return extractEpisodeStreams(url, lang === 'vf' ? 'VF' : 'VOSTFR', slug);
                     }
                     throw new Error('No player');
@@ -368,17 +417,75 @@ async function extractEpisodeStreams(episodeUrl, langLabel, slug) {
     const $ = cheerio.load(html);
 
     const embedUrls = [];
-    $('#lecteurSelect option').each((i, el) => {
+    
+    // Method 1: Try #epLecteurSelect (site's actual player select ID)
+    $('#epLecteurSelect option').each((i, el) => {
         const val = $(el).val();
         if (val && val.startsWith('http')) {
             embedUrls.push(val);
         }
     });
-
+    
+    // Method 2: Try fallback selectors (older site version)
     if (embedUrls.length === 0) {
-        const jsonLdEmbed = html.match(/"embedUrl"\s*:\s*"(https?:\/\/[^"]+)"/);
-        if (jsonLdEmbed) {
-            embedUrls.push(jsonLdEmbed[1]);
+        $('#lecteurSelect option, select.video-source option, select.player-select option').each((i, el) => {
+            const val = $(el).val();
+            if (val && val.startsWith('http')) {
+                embedUrls.push(val);
+            }
+        });
+    }
+
+    // Method 3: JSON-LD embedUrl
+    if (embedUrls.length === 0) {
+        // Match both double-quoted and single-quoted embedUrl values
+        const jsonLdMatch = html.match(/"embedUrl"\s*:\s*"(https?:\/\/[^"]+)"/) ||
+                           html.match(/'embedUrl'\s*:\s*'(https?:\/\/[^']+)'/) ||
+                           html.match(/embedUrl\s*:\s*["'](https?:\/\/[^"']+)["']/);
+        if (jsonLdMatch) {
+            embedUrls.push(jsonLdMatch[1]);
+        }
+        // Try to find all embedUrl variants in JSON-LD array
+        const allEmbeds = html.match(/"embedUrl"\s*:\s*"(https?:\/\/[^"]+)"/g);
+        if (allEmbeds && allEmbeds.length > 1) {
+            for (const e of allEmbeds) {
+                const url = e.match(/"embedUrl"\s*:\s*"([^"]+)"/);
+                if (url && !embedUrls.includes(url[1])) {
+                    embedUrls.push(url[1]);
+                }
+            }
+        }
+    }
+
+    // Method 4: Iframe fallback
+    if (embedUrls.length === 0) {
+        const knownIframeSelectors = [
+            '#videoPlayer',
+            '.video-wrapper iframe',
+            '.player-wrapper iframe',
+            '.embed-wrapper iframe',
+            'iframe[src*="sibnet"]',
+            'iframe[src*="sendvid"]',
+            'iframe[src*="dood"]',
+            'iframe[src*="voe"]',
+            'iframe[src*="uqload"]',
+            'iframe[src*="vidmoly"]',
+        ];
+        for (const sel of knownIframeSelectors) {
+            $(sel).each((i, el) => {
+                const src = $(el).attr('src');
+                if (src && src.startsWith('http')) {
+                    embedUrls.push(src);
+                }
+            });
+            if (embedUrls.length > 0) break;
+        }
+        // Last resort: any iframe with http src
+        if (embedUrls.length === 0) {
+            $('iframe[src^="http"]').each((i, el) => {
+                const src = $(el).attr('src');
+                if (src) embedUrls.push(src);
+            });
         }
     }
 

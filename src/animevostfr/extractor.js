@@ -3,6 +3,7 @@
  * Site: animevostfr.org (WordPress + ToroPlay theme)
  */
 
+import { stripSeasonSuffix } from '../utils/dle-extractor.js';
 import { fetchText } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, sortStreamsByLanguage } from '../utils/resolvers.js';
@@ -401,14 +402,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     // Also generate shorter title forms for search
     const shortTitles = [];
     for (const t of baseTitles) {
-        shortTitles.push(t);
+        const cleanT = stripSeasonSuffix(t);
+        shortTitles.push(cleanT);
         // Try shorter forms: split on ":", "-", "–"
-        const parts = t.split(/[:\–\-]+/).map(s => s.trim()).filter(s => s.length > 5);
+        const parts = cleanT.split(/[:\–\-]+/).map(s => s.trim()).filter(s => s.length > 5);
         for (const p of parts) {
-            if (p !== t) shortTitles.push(p);
+            if (p !== cleanT) shortTitles.push(p);
         }
         // Try first 3-4 significant words
-        const words = t.split(/\s+/).filter(w => w.length > 2);
+        const words = cleanT.split(/\s+/).filter(w => w.length > 2);
         if (words.length > 3) {
             shortTitles.push(words.slice(0, 3).join(' '));
             shortTitles.push(words.slice(0, 4).join(' '));

@@ -2,7 +2,7 @@
  * HTTP Utilities for VoirAnime
  */
 
-import { safeFetch } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -12,10 +12,14 @@ export const HEADERS = {
     "Connection": "keep-alive",
 };
 
+const rateLimit = createProviderRateLimiter();
+const DOMAIN = 'voir-anime.to';
+
 /**
  * Fetch text content from a URL
  */
 export async function fetchText(url, options = {}) {
+    await rateLimit(DOMAIN);
     console.log(`[VoirAnime] Fetching: ${url}`);
     const { headers: customHeaders, ...rest } = options;
     const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });

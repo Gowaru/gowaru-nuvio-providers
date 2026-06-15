@@ -18,14 +18,7 @@ const BUDGET_MS = 45000;
 const SEARCH_CACHE = new Map();
 const SEARCH_CACHE_TTL = 300000;
 
-const PROBE_BUDGET_MS = 15000;
-let totalProbeTimeMs = 0;
-
-function isProbeBudgetExhausted() {
-  return totalProbeTimeMs >= PROBE_BUDGET_MS;
-}
-
-const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid'];
+const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid', 'Moon', 'FHD', 'SB'];
 
 const SPINOFF_KEYWORDS = ['fan letter', 'log:', 'memories', 'vigilante', 'illegals', 'film', 'movie', 'special', 'oav', 'ona', 'x ut', 'collab'];
 
@@ -130,6 +123,18 @@ function generateFallbackSlugs(baseSlug, season) {
   ].filter(Boolean);
 }
 
+function cleanSlug(slug) {
+  // Strip season-related suffixes like "-2nd-season", "-season-2", "-part-1", etc.
+  // so that "jujutsu-kaisen-2nd-season" becomes "jujutsu-kaisen"
+  return slug
+    .replace(/-(?:1st|2nd|3rd|4th|5th)-season$/, '')
+    .replace(/-(?:season|saison)-?\d+$/, '')
+    .replace(/-s\d+$/, '')
+    .replace(/-(?:part|cour|arc|volume)-?\d+$/, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 /**
  * Batch HEAD probe with delay (Cloudflare-safe)
  */
@@ -159,15 +164,18 @@ async function batchProbe(urls, batchSize = 2, delayMs = 800) {
 async function searchAnime(title, season = 1) {
   const baseSlug = toSlug(title);
   const results = [];
+  const searchStartTime = Date.now();
+  
+  function isProbeBudgetExhausted() {
+    return Date.now() - searchStartTime >= 15000;
+  }
 
   // --- STEP 0: Try season-specific slugs FIRST ---
   // Each season has its own page: /anime/overlord-4-vf/, etc.
   if (season > 1 && baseSlug.length > 3 && !isProbeBudgetExhausted()) {
     const seasonSlugs = generateFallbackSlugs(baseSlug, season);
     const seasonUrls = seasonSlugs.map(s => `${BASE_URL}/anime/${s}/`);
-    const probeStart = Date.now();
     const validSeasonUrls = await batchProbe(seasonUrls, 2, 500);
-    totalProbeTimeMs += Date.now() - probeStart;
     
     if (validSeasonUrls.length > 0) {
       console.log(`[VoirAnime] Season-specific slugs found (${season}): ${validSeasonUrls.join(', ')}`);
@@ -176,6 +184,29 @@ async function searchAnime(title, season = 1) {
         results.push({ title: `${title} S${season} ${lang}`, url });
       });
       return results;
+    }
+  }
+
+  // --- STEP 0b: Try season-specific slugs from CLEANED slug ---
+  // When the TMDB title has season info (e.g. "Jujutsu Kaisen 2nd Season"),
+  // the base slug is "jujutsu-kaisen-2nd-season" and STEP 0 generates
+  // "jujutsu-kaisen-2nd-season-2" which is wrong. The clean slug
+  // "jujutsu-kaisen" with "-2" gives the correct "jujutsu-kaisen-2".
+  if (season > 1 && results.length === 0 && !isProbeBudgetExhausted()) {
+    const cleanBaseSlug = cleanSlug(baseSlug);
+    if (cleanBaseSlug !== baseSlug && cleanBaseSlug.length > 3) {
+      const cleanSlugs = generateFallbackSlugs(cleanBaseSlug, season);
+      const cleanUrls = cleanSlugs.map(s => `${BASE_URL}/anime/${s}/`);
+      const validCleanUrls = await batchProbe(cleanUrls, 2, 500);
+      
+      if (validCleanUrls.length > 0) {
+        console.log(`[VoirAnime] Clean season-specific slugs found (${season}): ${validCleanUrls.join(', ')}`);
+        validCleanUrls.forEach(url => {
+          const lang = url.includes('-vf') ? 'VF' : 'VOSTFR';
+          results.push({ title: `${title} S${season} ${lang}`, url });
+        });
+        return results;
+      }
     }
   }
 
@@ -303,7 +334,7 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
     const filteredHosts = allHosts.filter(h => {
       const hl = h.toLowerCase();
       return KNOWN_HOSTS.some(prefix => hl.includes(prefix.toLowerCase())) &&
-             !/YU|YourUpload|MOON\b|Lecteur\s+SB/i.test(h);
+             !/YU|YourUpload/i.test(h);
     });
 
     if (filteredHosts.length === 0) {
@@ -344,7 +375,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
   const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
   const startTime = Date.now();
-  totalProbeTimeMs = 0; // Reset probe budget for this request
 
   // ArmSync: try to get absolute episode
   let targetEpisodes = [episode || 1];
