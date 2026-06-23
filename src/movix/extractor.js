@@ -74,7 +74,7 @@ async function resolveForExo(stream) {
     } else {
         // Timeout réduit à 4s pour accélérer l'échec sur les hosts lents
         try { resolved = await withTimeout(resolveStream(stream), 4000); }
-        catch (e) {}
+        catch (e) { console.warn(`[Movix] resolveStream timeout: ${e?.message}`); }
     }
     if (!resolved || !resolved.url || !resolved.isDirect) return null;
     if (!isExoPlayableUrl(resolved.url)) return null;
@@ -93,7 +93,7 @@ async function fetchOnce(url) {
         const data = await fetchJson(url);
         if (!data || data.error) return null;
         return data;
-    } catch (e) { return null; }
+    } catch (e) { console.warn(`[Movix] fetchOnce failed: ${e?.message}`); return null; }
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {

@@ -51,6 +51,7 @@ async function searchAnime(title) {
         results.sort((a, b) => b.score - a.score);
         return results;
     } catch (e) {
+        console.warn(`[JetAnimes] Search failed: ${e?.message}`);
         return [];
     }
 }
@@ -92,6 +93,7 @@ async function fetchEmbed(postId, nume, type, referer) {
         if (!j || !j.embed_url) return null;
         return j.embed_url;
     } catch (e) {
+        console.warn(`[JetAnimes] fetchEmbed failed: ${e?.message}`);
         return null;
     }
 }

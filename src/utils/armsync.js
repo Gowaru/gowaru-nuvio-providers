@@ -38,7 +38,9 @@ export async function getImdbId(tmdbId, mediaType) {
             const data = armJson != null ? armJson : null;
             const entry = Array.isArray(data) ? data[0] : data;
             if (entry && entry.imdb) return entry.imdb;
-        } catch (e) {}
+        } catch (e) {
+            console.warn(`[ArmSync] JSON parse failed for getImdbId: ${e?.message}`);
+        }
     }
 
     return null;
@@ -132,27 +134,31 @@ export async function resolveMalMetadata(imdbId, releaseDate) {
         const anime = (await jikanRes.json())?.data;
         if (!anime) continue;
 
-        const airedFrom = anime.aired?.from ? Temporal.PlainDate.from(anime.aired.from) : null;
-        if (airedFrom) {
-            const start = airedFrom.subtract({ days: 2 });
-            const end = anime.aired?.to
-                ? Temporal.PlainDate.from(anime.aired.to).add({ days: 2 })
-                : Temporal.Now.plainDateISO().add({ days: 2 });
+        try {
+            const airedFrom = anime.aired?.from ? Temporal.PlainDate.from(anime.aired.from) : null;
+            if (airedFrom) {
+                const start = airedFrom.subtract({ days: 2 });
+                const end = anime.aired?.to
+                    ? Temporal.PlainDate.from(anime.aired.to).add({ days: 2 })
+                    : Temporal.Now.plainDateISO().add({ days: 2 });
 
-            if (Temporal.PlainDate.compare(targetDate, start) >= 0 && Temporal.PlainDate.compare(targetDate, end) <= 0) {
-                if (anime.type === "Movie" || anime.episodes === 1) {
-                    return { malId, absoluteEpisode: 1, type: anime.type };
-                }
-                const epsRes = await syncFetch(`${JIKAN_API}/anime/${malId}/episodes`);
-                if (epsRes) {
-                    const episodes = (await epsRes.json())?.data;
-                    if (Array.isArray(episodes)) {
-                        const match = episodes.find(ep => ep.aired && Math.abs(targetDate.since(Temporal.PlainDate.from(ep.aired), { largestUnit: 'day' }).days) <= 2);
-                        if (match) return { malId, absoluteEpisode: match.mal_id, title: anime.title };
+                if (Temporal.PlainDate.compare(targetDate, start) >= 0 && Temporal.PlainDate.compare(targetDate, end) <= 0) {
+                    if (anime.type === "Movie" || anime.episodes === 1) {
+                        return { malId, absoluteEpisode: 1, type: anime.type };
                     }
+                    const epsRes = await syncFetch(`${JIKAN_API}/anime/${malId}/episodes`);
+                    if (epsRes) {
+                        const episodes = (await epsRes.json())?.data;
+                        if (Array.isArray(episodes)) {
+                            const match = episodes.find(ep => ep.aired && Math.abs(targetDate.since(Temporal.PlainDate.from(ep.aired), { largestUnit: 'day' }).days) <= 2);
+                            if (match) return { malId, absoluteEpisode: match.mal_id, title: anime.title };
+                        }
+                    }
+                    return { malId, absoluteEpisode: null, potentialMatch: true };
                 }
-                return { malId, absoluteEpisode: null, potentialMatch: true };
             }
+        } catch (e) {
+            console.warn(`[ArmSync] MAL/date match failed: ${e?.message}`);
         }
     }
     return null;

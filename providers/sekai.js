@@ -1,6 +1,6 @@
 /**
  * sekai - Built from src/sekai/
- * Generated: 2026-06-15T00:10:23.507223495Z
+ * Generated: 2026-06-23T17:53:11.107191048Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -204,7 +204,7 @@ var __provider = (() => {
     return null;
   }
   function setCachedFetch(key, data) {
-    if (fetchCache.size >= 100) fetchCache.clear();
+    if (fetchCache.size >= 200) fetchCache.clear();
     fetchCache.set(key, { data, ts: Date.now() });
   }
   function qualityRank(value) {
@@ -495,7 +495,7 @@ var __provider = (() => {
       };
       manifestCache = /* @__PURE__ */ new Map();
       MANIFEST_CACHE_TTL = 12e4;
-      FETCH_CACHE_TTL = 5e3;
+      FETCH_CACHE_TTL = 3e4;
       fetchCache = /* @__PURE__ */ new Map();
     }
   });
@@ -506,7 +506,11 @@ var __provider = (() => {
       yield rateLimit(DOMAIN);
       console.log(`[Sekai] Fetching: ${url}`);
       const _a = options, { headers: customHeaders } = _a, rest = __objRest(_a, ["headers"]);
-      const res = yield safeFetch(url, __spreadValues({ headers: __spreadValues(__spreadValues({}, HEADERS2), customHeaders || {}) }, rest));
+      const mergedOpts = __spreadValues({
+        headers: __spreadValues(__spreadValues({}, HEADERS2), customHeaders || {}),
+        timeout: 1e4
+      }, rest);
+      const res = yield safeFetch(url, mergedOpts);
       if (!res || !res.ok) {
         const status = res && typeof res.status === "number" ? res.status : "no-response";
         throw new Error(`HTTP ${status} for ${url}`);
@@ -551,6 +555,7 @@ var __provider = (() => {
           const entry = Array.isArray(data) ? data[0] : data;
           if (entry && entry.imdb) return entry.imdb;
         } catch (e) {
+          console.warn(`[ArmSync] JSON parse failed for getImdbId: ${e == null ? void 0 : e.message}`);
         }
       }
       return null;
@@ -894,6 +899,11 @@ var __provider = (() => {
   }
   function getSeriesData() {
     return __async(this, null, function* () {
+      const now = Date.now();
+      if (seriesCache && now - seriesCacheTs < CACHE_TTL) {
+        console.log(`[Sekai] Using cached seriesData (${Math.round((now - seriesCacheTs) / 1e3)}s old)`);
+        return seriesCache;
+      }
       const html = yield fetchText(`${BASE_URL}/`);
       const startStr = "var seriesData = [";
       const startIdx = html.indexOf(startStr);
@@ -923,6 +933,8 @@ var __provider = (() => {
       } catch (e) {
         console.error("[Sekai] Regex parsing error on seriesData", e);
       }
+      seriesCache = results;
+      seriesCacheTs = Date.now();
       return results;
     });
   }
@@ -1041,6 +1053,7 @@ var __provider = (() => {
             if (resolved) absEp = resolved;
           }
         } catch (e) {
+          console.warn(`[Sekai] ArmSync failed: ${e == null ? void 0 : e.message}`);
         }
       }
       console.log(`[Sekai] Checking ${mediaType} S${season} E${episodeNum} -> Absolute: ${absEp}`);
@@ -1049,16 +1062,19 @@ var __provider = (() => {
       let targetSeries = null;
       let targetScore = 0;
       for (const t of titles) {
-        if (!t) continue;
+        if (!t || targetScore >= 100) continue;
+        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
         const nt = normalizeTitle(t);
         if (!nt || nt.length < 2) continue;
         for (const s of allSeries) {
+          if (targetScore >= 100) break;
           let score = scoreMatch(nt, normalizeTitle(s.title));
           if (score > targetScore) {
             targetScore = score;
             targetSeries = s;
           }
           for (const a of s.aliases) {
+            if (targetScore >= 100) break;
             const na = normalizeTitle(a);
             score = scoreMatch(nt, na);
             if (score > 0 && score - 5 > targetScore) {
@@ -1078,15 +1094,17 @@ var __provider = (() => {
       if (mainEpMap[absEp] && Object.keys(mainEpMap[absEp]).length > 0) {
         return formatStreams(mainEpMap[absEp]);
       }
-      let arcsUrls = extractArcsUrls(mainHtml, targetSeries.url).slice(0, 3);
+      const arcsUrls = extractArcsUrls(mainHtml, targetSeries.url).slice(0, 3);
       console.log(`[Sekai] Found ${arcsUrls.length} arcs. Fetching...`);
-      const arcsHtmls = yield Promise.all(arcsUrls.map((u) => fetchText(u).catch(() => "")));
-      for (const html of arcsHtmls) {
-        if (!html) continue;
-        const arcMap = buildEpisodeMap(html);
-        if (arcMap[absEp] && Object.keys(arcMap[absEp]).length > 0) {
-          mainEpMap = arcMap;
-          break;
+      if (!isBudgetExhausted(startTime, BUDGET_MS) && arcsUrls.length > 0) {
+        const arcsHtmls = yield Promise.all(arcsUrls.map((u) => fetchText(u).catch(() => "")));
+        for (const html of arcsHtmls) {
+          if (!html || isBudgetExhausted(startTime, BUDGET_MS)) continue;
+          const arcMap = buildEpisodeMap(html);
+          if (arcMap[absEp] && Object.keys(arcMap[absEp]).length > 0) {
+            mainEpMap = arcMap;
+            break;
+          }
         }
       }
       if (mainEpMap[absEp] && Object.keys(mainEpMap[absEp]).length > 0) {
@@ -1130,7 +1148,7 @@ var __provider = (() => {
     }
     return streams;
   }
-  var BASE_URL, BUDGET_MS;
+  var BASE_URL, BUDGET_MS, CACHE_TTL, seriesCache, seriesCacheTs;
   var init_extractor = __esm({
     "src/sekai/extractor.js"() {
       init_http();
@@ -1139,6 +1157,9 @@ var __provider = (() => {
       init_metadata();
       BASE_URL = "https://sekai.one";
       BUDGET_MS = 4e4;
+      CACHE_TTL = 3e5;
+      seriesCache = null;
+      seriesCacheTs = 0;
     }
   });
 

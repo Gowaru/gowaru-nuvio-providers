@@ -1,6 +1,6 @@
 /**
  * Extractor Logic for VoirAnime
- * Modernized: WordPress search first, spinoff filtering, season-aware scoring
+ * Optimisé : batchProbe plus rapide, slugs ciblés, fallback WordPress réactivé
  */
 
 import { fetchText } from "./http.js";
@@ -10,13 +10,16 @@ import { getImdbId, getAbsoluteEpisode } from "../utils/armsync.js";
 import { getTmdbTitles } from "../utils/metadata.js";
 
 const BASE_URL = "https://voir-anime.to";
-const HEAD_TIMEOUT = 3000;
-const PAGE_TIMEOUT = 12000;
+const HEAD_TIMEOUT = 1500;
+const PAGE_TIMEOUT = 10000;
 const HOST_TIMEOUT = 8000;
 const SEARCH_TIMEOUT = 15000;
 const BUDGET_MS = 45000;
 const SEARCH_CACHE = new Map();
 const SEARCH_CACHE_TTL = 300000;
+
+// Cache des slugs déjà testés (évite les doubles HEAD requests dans la même exécution)
+const slugProbeCache = new Map();
 
 const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid', 'Moon', 'FHD', 'SB'];
 
@@ -42,7 +45,7 @@ function normalizeForSearch(s) {
   return (s || '')
     .toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[':!.,?()[\]]/g, ' ')
+    .replace(/[':!.,?()\[\]]/g, ' ')
     .replace(/\b(the|vostfr|vost|vf|french|streaming|anime)\s+/g, '')
     .replace(/\s+/g, ' ').trim();
 }
@@ -57,12 +60,9 @@ function scoreSearchResult(resultTitle, resultUrl, searchTitle, searchSeason) {
 
   let score = 0;
 
-  // Exact match
   if (nr === ns) score = 100;
-  // One contains the other
   else if (nr.includes(ns) || ns.includes(nr)) score = 80;
   else {
-    // Word overlap scoring
     const rWords = new Set(nr.split(/\s+/).filter(w => w.length > 2));
     const sWords = new Set(ns.split(/\s+/).filter(w => w.length > 2));
     if (rWords.size > 0 && sWords.size > 0) {
@@ -75,34 +75,26 @@ function scoreSearchResult(resultTitle, resultUrl, searchTitle, searchSeason) {
     }
   }
 
-  // Spinoff penalty
   if (isSpinoff(resultTitle) || isSpinoff(resultUrl)) score -= 50;
   if (resultTitle.toLowerCase().includes('x ut')) score -= 30;
 
-  // Season match bonus/penalty
   const seasonMatch = resultUrl.match(/[-](\d+)(?:-vf|-vostfr)?\/?$/);
   const saisonMatch = resultUrl.match(/saison[_-](\d+)/i);
   const urlSeason = seasonMatch ? parseInt(seasonMatch[1]) : (saisonMatch ? parseInt(saisonMatch[1]) : null);
 
   if (urlSeason !== null) {
     if (urlSeason === searchSeason) score += 20;
-    else score -= 40; // Wrong season = strong penalty
+    else score -= 40;
   } else if (searchSeason === 1) {
-    // No explicit season in URL + searching S1 = good
     score += 10;
   }
 
   return Math.max(score, 0);
 }
 
-/**
- * Extract season number from episode link text or URL
- * Returns null if no season info found.
- */
 function extractSeasonFromEpisodeLink(text, url) {
   const combined = `${text || ''} ${url || ''}`;
-  // Pattern: "Saison 2", "Season 2", "saison-2", "S2"
-  const match = combined.match(/S(?:aison|eason)\s*[:\(\s-]*\s*(\d+)/i) ||
+  const match = combined.match(/S(?:aison|eason)\s*[:\\(\\s-]*\s*(\d+)/i) ||
                 combined.match(/saison[_-](\d+)/i) ||
                 combined.match(/S(\d+)\s*(?:E|V|VF|VOSTFR|\b)/i);
   if (match) return parseInt(match[1], 10);
@@ -110,22 +102,18 @@ function extractSeasonFromEpisodeLink(text, url) {
 }
 
 /**
- * Generate season-aware slug variants for fallback probing
- * Ordered by priority (most likely first)
+ * Generate season-aware slug variants for fallback probing.
+ * Optimisé : essaie d'abord les plus probables, limite à 3.
  */
 function generateFallbackSlugs(baseSlug, season) {
-  // Try most likely numeric variants (e.g., overlord-4, overlord-4-vf)
   return [
     `${baseSlug}-${season}`,
     `${baseSlug}-${season}-vf`,
     `${baseSlug}-saison-${season}`,
-    `${baseSlug}-saison-${season}-vf`,
   ].filter(Boolean);
 }
 
 function cleanSlug(slug) {
-  // Strip season-related suffixes like "-2nd-season", "-season-2", "-part-1", etc.
-  // so that "jujutsu-kaisen-2nd-season" becomes "jujutsu-kaisen"
   return slug
     .replace(/-(?:1st|2nd|3rd|4th|5th)-season$/, '')
     .replace(/-(?:season|saison)-?\d+$/, '')
@@ -136,71 +124,126 @@ function cleanSlug(slug) {
 }
 
 /**
- * Batch HEAD probe with delay (Cloudflare-safe)
+ * HEAD probe avec cache et délai réduit (300ms au lieu de 800ms).
  */
-async function batchProbe(urls, batchSize = 2, delayMs = 800) {
+async function probeUrl(url) {
+  if (slugProbeCache.has(url)) return slugProbeCache.get(url);
+  try {
+    await fetchText(url, { method: "HEAD", timeout: HEAD_TIMEOUT });
+    slugProbeCache.set(url, true);
+    return true;
+  } catch (e) {
+    slugProbeCache.set(url, false);
+    return false;
+  }
+}
+
+async function batchProbe(urls, batchSize = 3, delayMs = 100) {
   const results = [];
   for (let i = 0; i < urls.length; i += batchSize) {
     const batch = urls.slice(i, i + batchSize);
     const batchResults = await Promise.allSettled(
       batch.map(async (url) => {
-        await fetchText(url, { method: "HEAD", timeout: HEAD_TIMEOUT });
-        return url;
+        const ok = await probeUrl(url);
+        return ok ? url : null;
       })
     );
     for (const r of batchResults) {
-      if (r.status === "fulfilled") results.push(r.value);
+      if (r.status === "fulfilled" && r.value) results.push(r.value);
     }
+    if (results.length > 0) return results; // Early exit si trouvé
     if (i + batchSize < urls.length) await sleep(delayMs);
   }
   return results;
 }
 
 /**
+ * WordPress search sur VoirAnime avec parsing du HTML de résultats.
+ * Fallback quand le slug probing direct échoue.
+ */
+async function wordpressSearch(query, season) {    try {
+      const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(sanitizeSearchQuery(query))}`;
+      const html = await fetchText(searchUrl, { timeout: 8000 });
+    if (!html) return [];
+
+    const $ = cheerio.load(html);
+    const results = [];
+
+    // Pattern: les résultats de recherche sont dans des articles ou des listes
+    $('article a[href*="/anime/"], .post-title a[href*="/anime/"], .entry-title a[href*="/anime/"], .result-item a[href*="/anime/"]').each((_, el) => {
+      const href = $(el).attr('href') || '';
+      const title = $(el).text().trim();
+      if (title && href) {
+        // Éviter les doublons VF/VOSTFR ici (on gère ça plus tard)
+        if (results.some(r => r.url === href)) return;
+        const score = scoreSearchResult(title, href, query, season);
+        results.push({ title, url: href, score });
+      }
+    });
+
+    // Fallback: chercher les liens /anime/ dans tout le HTML
+    if (results.length === 0) {
+      const animeRegex = /<a[^>]+href="([^"]*\/anime\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+      let m;
+      while ((m = animeRegex.exec(html)) !== null) {
+        const href = m[1].startsWith('http') ? m[1] : `https://voir-anime.to${m[1]}`;
+        const title = m[2].trim();
+        if (title && href && !results.some(r => r.url === href)) {
+          const score = scoreSearchResult(title, href, query, season);
+          results.push({ title, url: href, score });
+        }
+      }
+    }
+
+    // Trier par score et prendre les meilleurs résultats
+    results.sort((a, b) => b.score - a.score);
+    const best = results.filter(r => r.score >= 30).slice(0, 4);
+
+    console.log(`[VoirAnime] WordPress search for "${query}": ${best.length} results (from ${results.length} total)`);
+    return best.map(r => ({ title: r.title, url: r.url }));
+  } catch (e) {
+    console.warn(`[VoirAnime] WordPress search failed: ${e?.message}`);
+    return [];
+  }
+}
+
+/**
  * Search for anime on VoirAnime
- * Priority: 1) Season-specific slug probing, 2) WordPress search (scored + filtered), 3) Generic slug fallback
- * Returns ALL matching variants (VF + VOSTFR) when both exist.
+ * Priority: 1) Season-specific slug probing, 2) Generic slug, 3) WordPress search
  */
 async function searchAnime(title, season = 1) {
   const baseSlug = toSlug(title);
   const results = [];
   const searchStartTime = Date.now();
-  
+
   function isProbeBudgetExhausted() {
     return Date.now() - searchStartTime >= 15000;
   }
 
-  // --- STEP 0: Try season-specific slugs FIRST ---
-  // Each season has its own page: /anime/overlord-4-vf/, etc.
+  // --- STEP 0: Season-specific slugs for S2+ ---
   if (season > 1 && baseSlug.length > 3 && !isProbeBudgetExhausted()) {
     const seasonSlugs = generateFallbackSlugs(baseSlug, season);
     const seasonUrls = seasonSlugs.map(s => `${BASE_URL}/anime/${s}/`);
-    const validSeasonUrls = await batchProbe(seasonUrls, 2, 500);
-    
+    const validSeasonUrls = await batchProbe(seasonUrls, 2, 300);
+
     if (validSeasonUrls.length > 0) {
-      console.log(`[VoirAnime] Season-specific slugs found (${season}): ${validSeasonUrls.join(', ')}`);
+      console.log(`[VoirAnime] Season slugs found (S${season}): ${validSeasonUrls}`);
       validSeasonUrls.forEach(url => {
         const lang = url.includes('-vf') ? 'VF' : 'VOSTFR';
         results.push({ title: `${title} S${season} ${lang}`, url });
       });
       return results;
     }
-  }
 
-  // --- STEP 0b: Try season-specific slugs from CLEANED slug ---
-  // When the TMDB title has season info (e.g. "Jujutsu Kaisen 2nd Season"),
-  // the base slug is "jujutsu-kaisen-2nd-season" and STEP 0 generates
-  // "jujutsu-kaisen-2nd-season-2" which is wrong. The clean slug
-  // "jujutsu-kaisen" with "-2" gives the correct "jujutsu-kaisen-2".
-  if (season > 1 && results.length === 0 && !isProbeBudgetExhausted()) {
+    // Try with cleaned slug
     const cleanBaseSlug = cleanSlug(baseSlug);
-    if (cleanBaseSlug !== baseSlug && cleanBaseSlug.length > 3) {
+    if (cleanBaseSlug !== baseSlug && cleanBaseSlug.length > 3 && !isProbeBudgetExhausted()) {
       const cleanSlugs = generateFallbackSlugs(cleanBaseSlug, season);
       const cleanUrls = cleanSlugs.map(s => `${BASE_URL}/anime/${s}/`);
-      const validCleanUrls = await batchProbe(cleanUrls, 2, 500);
-      
+      const validCleanUrls = await batchProbe(cleanUrls, 2, 300);
+
       if (validCleanUrls.length > 0) {
-        console.log(`[VoirAnime] Clean season-specific slugs found (${season}): ${validCleanUrls.join(', ')}`);
+        console.log(`[VoirAnime] Clean season slugs found (S${season}): ${validCleanUrls}`);
         validCleanUrls.forEach(url => {
           const lang = url.includes('-vf') ? 'VF' : 'VOSTFR';
           results.push({ title: `${title} S${season} ${lang}`, url });
@@ -210,46 +253,37 @@ async function searchAnime(title, season = 1) {
     }
   }
 
-  // --- STEP 1: Try generic slug AND its VF variant ---
-  if (baseSlug.length > 3) {
-    // 1a: Try base slug (VOSTFR)
+  // --- STEP 1: Generic slug (VF + VOSTFR en parallèle) ---
+  if (baseSlug.length > 3 && !isProbeBudgetExhausted()) {
     const exactUrl = `${BASE_URL}/anime/${baseSlug}/`;
-    try { 
-      await fetchText(exactUrl, { method: "HEAD", timeout: HEAD_TIMEOUT });
-      console.log(`[VoirAnime] Generic slug found: ${exactUrl}`);
-      results.push({ title, url: exactUrl });
-      
-      // 1b: Try VF variant of the generic slug
-      const exactVfUrl = `${BASE_URL}/anime/${baseSlug}-vf/`;
-      try { 
-        await sleep(300); 
-        await fetchText(exactVfUrl, { method: "HEAD", timeout: HEAD_TIMEOUT });
-        console.log(`[VoirAnime] Generic VF slug found: ${exactVfUrl}`);
-        results.push({ title: `${title} VF`, url: exactVfUrl });
-      } catch (e) {}
-      
-      return results;
-    } catch (e) {}
-    
-    // 1c: Only VF variant exists
-    const exactVfUrl2 = `${BASE_URL}/anime/${baseSlug}-vf/`;
-    try { 
-      await sleep(300); 
-      await fetchText(exactVfUrl2, { method: "HEAD", timeout: HEAD_TIMEOUT });
-      console.log(`[VoirAnime] VF-only slug found: ${exactVfUrl2}`);
-      results.push({ title: `${title} VF`, url: exactVfUrl2 });
-      return results;
-    } catch (e) {}
+    const exactVfUrl = `${BASE_URL}/anime/${baseSlug}-vf/`;
+
+    // Prober les 2 variantes en parallèle
+    const [hasVostfr, hasVf] = await Promise.all([
+      probeUrl(exactUrl),
+      probeUrl(exactVfUrl),
+    ]);
+
+    if (hasVostfr) results.push({ title, url: exactUrl });
+    if (hasVf) results.push({ title: `${title} VF`, url: exactVfUrl });
+    if (results.length > 0) return results;
   }
 
-  // Step 1 slug probing failed — skip WordPress search (takes 15s and rarely finds
-  // anything when the slug already failed on VoirAnime)
+  // --- STEP 2: WordPress search (15s timeout) ---
+  if (!isProbeBudgetExhausted()) {
+    const searchResults = await wordpressSearch(title, season);
+    for (const r of searchResults) {
+      const lang = r.url.includes('-vf') ? 'VF' : 'VOSTFR';
+      if (!results.some(ex => ex.url === r.url)) {
+        results.push({ ...r, title: `${r.title}` });
+      }
+    }
+    if (results.length > 0) return results;
+  }
+
   return [];
 }
 
-/**
- * Extract host options from episode page HTML
- */
 function extractHosts(html) {
   const urls = [];
   const regex = /<option[^>]*value="([^"]+)"[^>]*>/gi;
@@ -261,9 +295,6 @@ function extractHosts(html) {
   return urls;
 }
 
-/**
- * Resolve a single host URL to a stream
- */
 async function resolveHost(host, episodeUrl, lang, streamHeaders) {
   try {
     const hostUrl = `${episodeUrl}${episodeUrl.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`;
@@ -286,49 +317,42 @@ async function resolveHost(host, episodeUrl, lang, streamHeaders) {
         headers: { ...streamHeaders },
       });
     }
-  } catch (err) {}
+  } catch (err) { console.warn(`[VoirAnime] resolveHost failed: ${err?.message}`); }
   return null;
 }
 
-/**
- * Try to generate an episode URL by pattern from an existing episode link.
- * VoirAnime's Madara theme only shows the first 25 chapters in static HTML.
- * For S2+ episodes (absolute > 25), we infer the URL pattern and probe it.
- */
 async function generateEpisodeUrl(html, targetEp, startTime) {
   const $ = cheerio.load(html);
   const firstLink = $('.wp-manga-chapter a').first();
   if (!firstLink.length) return null;
-  
+
   const href = firstLink.attr('href') || '';
-  // Pattern: /anime/{slug}/{prefix}-{N}{suffix}/
-  // e.g. /anime/shingeki-no-kyojin/shingeki-no-kyojin-attaque-des-titans-25-vostfr/
   const match = href.match(/\/anime\/([^/]+)\/(.+?-)(\d+)(-v(?:ostfr|f))?\//);
   if (!match) return null;
-  
+
   const slugName = match[1];
   const prefix = match[2];
   const suffix = match[4] || '';
-  
-  const paddings = ['', '0', '00'];
-  for (const pad of paddings) {
-    if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-    const url = `https://voir-anime.to/anime/${slugName}/${prefix}${pad}${targetEp}${suffix}/`;
-    try {
-      await fetchText(url, { method: 'HEAD', timeout: HEAD_TIMEOUT });
-      console.log(`[VoirAnime] Generated episode URL found: ${url}`);
-      return url;
-    } catch (e) {}
+
+  // Paddings testés en parallèle
+  const paddings = ['0', ''];
+  const results = await Promise.allSettled(
+    paddings.map(async (pad) => {
+      if (isBudgetExhausted(startTime, BUDGET_MS)) return null;
+      const url = `https://voir-anime.to/anime/${slugName}/${prefix}${pad}${targetEp}${suffix}/`;
+      const ok = await probeUrl(url);
+      return ok ? url : null;
+    })
+  );
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) return r.value;
   }
   return null;
 }
 
-/**
- * Resolve all streams from an episode page
- */
 async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
   try {
-    const epRawHtml = await fetchWithRetry(() => fetchText(episodeUrl, { timeout: PAGE_TIMEOUT }));
+    const epRawHtml = await fetchWithRetry(() => fetchText(episodeUrl, { timeout: PAGE_TIMEOUT }), { retries: 1 });
     const allHosts = extractHosts(epRawHtml);
 
     const filteredHosts = allHosts.filter(h => {
@@ -338,7 +362,6 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
     });
 
     if (filteredHosts.length === 0) {
-      // Try direct iframe
       const $ = cheerio.load(epRawHtml);
       let iframe = null;
       $("iframe").each((_, el) => {
@@ -365,6 +388,7 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
     const resolved = await Promise.all(hostPromises);
     return resolved.filter(Boolean);
   } catch (e) {
+    console.warn(`[VoirAnime] resolveEpisodeStreams failed: ${e?.message}`);
     return [];
   }
 }
@@ -376,6 +400,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
   const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
   const startTime = Date.now();
 
+  // Vider le cache de slug probing pour une nouvelle exécution
+  slugProbeCache.clear();
+
   // ArmSync: try to get absolute episode
   let targetEpisodes = [episode || 1];
   if (!isBudgetExhausted(startTime, BUDGET_MS)) {
@@ -384,8 +411,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
       if (imdbId && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, episode);
         if (absoluteEpisode && absoluteEpisode !== episode) {
-          // VoirAnime uses absolute numbering (all episodes on one page).
-          // When ArmSync resolves a different absolute number, use only that.
           targetEpisodes = [absoluteEpisode];
         }
       }
@@ -401,12 +426,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     matches = SEARCH_CACHE.get(cacheKey).matches || [];
     console.log(`[VoirAnime] Search cache hit for ${cacheKey}`);
   } else {
-    // Prioritize base titles (without season suffix) — they're more likely
-    // to match the site's slug, especially for Japanese romanji titles
     const searchTitles = titles.slice(0, 15);
     const baseTitles = searchTitles.filter(t => !/\bS(?:eason|aison)?\s*\d/i.test(t));
     const seasonTitles = searchTitles.filter(t => /\bS(?:eason|aison)?\s*\d/i.test(t));
+
+    // Essayer d'abord les titres sans suffixe de saison, puis avec
     for (const title of [...baseTitles, ...seasonTitles]) {
+      if (isBudgetExhausted(startTime, BUDGET_MS)) break;
       const result = await searchAnime(title, effectiveSeason);
       if (result && result.length > 0) {
         matches = result;
@@ -432,11 +458,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const lang = match.title.toUpperCase().includes("VF") || match.url.includes("-vf") ? "VF" : "VOSTFR";
 
     try {
-      const html = await fetchWithRetry(() => fetchText(match.url, { timeout: PAGE_TIMEOUT }));
+      const html = await fetchText(match.url, { timeout: 6000 });
+      if (!html) continue;
       const $ = cheerio.load(html);
 
-      // Find episode links
-      const paddings = ["", "0", "00"];
+      const paddings = ["0", ""];
       const epPatterns = [];
       for (const ep of targetEpisodes) {
         const epS = ep.toString();
@@ -458,22 +484,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         'a[href*="/ep/"]',
       ];
 
-      // Determine the expected season from the page URL and the requested season
-      // Each season page may have episodes for only that season
       for (const sel of epSelectors) {
         $(sel).each((i, el) => {
           if (episodeUrl) return false;
           const text = $(el).text().trim();
           const href = $(el).attr("href") || '';
-          
-          // Verify the linked episode doesn't belong to a different season/type
           if (href.includes('/special') || href.includes('/oav') || href.includes('/film') || href.includes('/ova')) return;
-          
-          // Extract season from link text/URL to validate it matches the target season
+
           const linkSeason = extractSeasonFromEpisodeLink(text, href);
-          if (linkSeason !== null && linkSeason !== effectiveSeason) return; // Wrong season, skip
-          
-          // Strip season indicators to avoid matching "Saison 1" as episode 1
+          if (linkSeason !== null && linkSeason !== effectiveSeason) return;
+
           const cleanText = text.replace(/S(?:aison|eason)\s*\d+/ig, '').trim();
           for (const pattern of epPatterns) {
             const regex = new RegExp(`(?:^|[^0-9])${pattern}(?:$|[^0-9])`, "i");
@@ -486,63 +506,57 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         if (episodeUrl) break;
       }
 
-  // Method 2: Fallback by extracting episode number from URL
-  if (!episodeUrl) {
-    const chapterLinks = [];
-    $(".wp-manga-chapter a, ul.main.version-chap.no-volumn li.wp-manga-chapter a").each((i, el) => {
-      const href = $(el).attr("href") || '';
-      const text = $(el).text().trim();
-      if (href && !href.includes('/special') && !href.includes('/oav') && !href.includes('/film') && !href.includes('/ova')) {
-        const linkSeason = extractSeasonFromEpisodeLink(text, href);
-        if (linkSeason === null || linkSeason === effectiveSeason) {
-          chapterLinks.push({ href, text });
+      if (!episodeUrl) {
+        const chapterLinks = [];
+        $(".wp-manga-chapter a, ul.main.version-chap.no-volumn li.wp-manga-chapter a").each((i, el) => {
+          const href = $(el).attr("href") || '';
+          const text = $(el).text().trim();
+          if (href && !href.includes('/special') && !href.includes('/oav') && !href.includes('/film') && !href.includes('/ova')) {
+            const linkSeason = extractSeasonFromEpisodeLink(text, href);
+            if (linkSeason === null || linkSeason === effectiveSeason) {
+              chapterLinks.push({ href, text });
+            }
+          }
+        });
+        for (const ep of targetEpisodes) {
+          for (const link of chapterLinks) {
+            const epFromHref = link.href.match(/[-/]0*(\d+)(?:-v(?:ostfr|f))?(?:\/|$)/i);
+            if (epFromHref && parseInt(epFromHref[1], 10) === ep) {
+              episodeUrl = link.href;
+              break;
+            }
+          }
+          if (episodeUrl) break;
+        }
+        if (!episodeUrl && chapterLinks.length > 0) {
+          const hrefs = chapterLinks.map(l => l.href);
+          for (const ep of targetEpisodes) {
+            const idx = ep - 1;
+            if (idx >= 0 && idx < hrefs.length) {
+              episodeUrl = hrefs[idx];
+              break;
+            }
+          }
         }
       }
-    });
-    for (const ep of targetEpisodes) {
-      for (const link of chapterLinks) {
-        const epFromHref = link.href.match(/[-/]0*(\d+)(?:-v(?:ostfr|f))?(?:\/|$)/i);
-        if (epFromHref && parseInt(epFromHref[1], 10) === ep) {
-          episodeUrl = link.href;
-          break;
-        }
-      }
-      if (episodeUrl) break;
-    }
-    // Final fallback: index-based access (try both orders)
-    if (!episodeUrl && chapterLinks.length > 0) {
-      const hrefs = chapterLinks.map(l => l.href);
-      for (const ep of targetEpisodes) {
-        const idx = ep - 1;
-        if (idx >= 0 && idx < hrefs.length) {
-          episodeUrl = hrefs[idx];
-          break;
-        }
-      }
-    }
-  }
 
-  // Method 3: Pattern-based URL generation for episodes not in static HTML
-  // VoirAnime only shows 25 episodes (S1) in the initial page. S2+ episodes
-  // are loaded via JS. We infer the URL pattern and probe for the target.
-  if (!episodeUrl && targetEpisodes.length > 0) {
-    for (const ep of targetEpisodes) {
-      if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-      const genUrl = await generateEpisodeUrl(html, ep, startTime);
-      if (genUrl) {
-        episodeUrl = genUrl;
-        break;
+      if (!episodeUrl && targetEpisodes.length > 0) {
+        for (const ep of targetEpisodes) {
+          if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+          const genUrl = await generateEpisodeUrl(html, ep, startTime);
+          if (genUrl) {
+            episodeUrl = genUrl;
+            break;
+          }
+        }
       }
-    }
-  }
 
       if (!episodeUrl) continue;
 
-      // Resolve streams
       const epStreams = await resolveEpisodeStreams(episodeUrl, lang, streamHeaders);
       streams.push(...epStreams);
 
-    } catch (e) {}
+    } catch (e) { console.warn(`[VoirAnime] Match processing failed: ${e?.message}`); }
   }
 
   const validStreams = streams.filter(s => s && s.isDirect);

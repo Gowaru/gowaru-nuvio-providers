@@ -13,7 +13,12 @@ export async function fetchText(url, options = {}) {
     await rateLimit(DOMAIN);
     console.log(`[Sekai] Fetching: ${url}`);
     const { headers: customHeaders, ...rest } = options;
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
+    const mergedOpts = {
+        headers: { ...HEADERS, ...(customHeaders || {}) },
+        timeout: 10000,
+        ...rest,
+    };
+    const res = await safeFetch(url, mergedOpts);
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP ${status} for ${url}`);

@@ -4,7 +4,7 @@
 
 import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
 
-const DOMAIN = 'vostfree.ws';
+const DOMAIN = 'ipv4.vostfree.ws';
 const rateLimit = createProviderRateLimiter();
 
 export const HEADERS = {

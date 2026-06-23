@@ -1,6 +1,6 @@
 import cheerio from 'cheerio-without-node-native';
 import { fetchText, fetchApi } from './http.js';
-import { resolveStream, safeFetch, sortStreamsByLanguage } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { CONFIG } from './config.js';
 
@@ -180,7 +180,9 @@ async function tryFetchForSlug(url) {
       await res.text();
       return { url };
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn(`[DuLourd] Slug probe failed for ${url}: ${e?.message}`);
+  }
   return null;
 }
 
@@ -220,7 +222,7 @@ async function findContent(titles, mediaType) {
       try {
         const r = await safeFetch(match.url, { timeout: 5000 });
         if (r && r.ok) { await r.text(); return match; }
-      } catch (e) { /* unreachable link */ }
+      } catch (e) { console.warn(`[DuLourd] Unreachable link: ${match.url}: ${e?.message}`); }
     }
   }
 
@@ -238,18 +240,20 @@ async function getEpisodePageUrl(seriesUrl, season, episode) {
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
+    const startTime = Date.now();
+    const BUDGET_MS = 45000;
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 
     const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
 
+    if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
     const info = await findContent(titles, mediaType);
   if (!info) {
     console.warn(`[DuLourd] Content not found for ${tmdbId} (${mediaType})`);
     return [];
-  }
-
-  if (mediaType === 'movie') {
+  }    if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
+    if (mediaType === 'movie') {
     console.warn(`[DuLourd] Movie support is limited (pages blocked 403). Trying to fetch: ${info.url}`);
     try {
       const html = await fetchText(info.url, { timeout: CONFIG.TIMEOUTS.PAGE });
@@ -269,6 +273,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     return [];
   }
 
+  if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
+
   // Fetch series page to detect subtype
   let seriesHtml;
   try {
@@ -279,6 +285,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
   }
   const subType = detectSubType(seriesHtml, info.genre);
 
+    if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
     const episodeUrl = await getEpisodePageUrl(info.url, effectiveSeason, episode);
   let epHtml;
   try {

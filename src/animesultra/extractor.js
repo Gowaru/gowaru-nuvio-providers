@@ -256,7 +256,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                     return d.html;
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn(`[AnimesUltra] Full-story fetch/parse failed for ${newsId}: ${e?.message}`);
+        }
         return null;
     };
 

@@ -316,7 +316,9 @@ async function _extractStreams(tmdbId, mediaType, season, episode) {
 
         for (const lang of langs) {
             episodeLinks[lang] = [];
-            $s(`a.episode-card[href*="/${lang}/episode-"]`).each((i, el) => {
+            // URLs réelles: /anime/{slug}/saison-{N}/{lang}/episode-{N}/
+            // Les <a> n'ont PAS de classe 'episode-card' → on matche par pattern d'URL
+            $s(`a[href*="/${lang}/episode-"]`).each((i, el) => {
                 const href = $(el).attr('href');
                 const epMatch = href.match(/episode-(\d+)\/?$/);
                 if (href && epMatch) {
@@ -486,6 +488,26 @@ async function extractEpisodeStreams(episodeUrl, langLabel, slug) {
                 const src = $(el).attr('src');
                 if (src) embedUrls.push(src);
             });
+        }
+    }
+
+    // Method 5: Extract from data-player or data-src attributes (site-specific)
+    if (embedUrls.length === 0) {
+        $('[data-player], [data-src]').each((i, el) => {
+            const player = $(el).attr('data-player') || $(el).attr('data-src');
+            if (player && player.startsWith('http') && !embedUrls.includes(player)) {
+                embedUrls.push(player);
+            }
+        });
+    }
+
+    // Method 6: Parse embedded player URL from JSON configuration in inline scripts
+    if (embedUrls.length === 0) {
+        const playerMatch = html.match(/playerUrl\s*[=:]\s*['"]?(https?:\/\/[^'"\s]+)['"\s]/i) ||
+                           html.match(/videoUrl\s*[=:]\s*['"]?(https?:\/\/[^'"\s]+)['"\s]/i) ||
+                           html.match(/srcUrl\s*[=:]\s*['"]?(https?:\/\/[^'"\s]+)['"\s]/i);
+        if (playerMatch && playerMatch[1].startsWith('http')) {
+            embedUrls.push(playerMatch[1]);
         }
     }
 

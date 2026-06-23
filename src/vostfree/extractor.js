@@ -8,7 +8,7 @@ import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage } 
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-const BASE_URL = "https://vostfree.ws";
+const BASE_URL = "https://ipv4.vostfree.ws";
 const MAX_SEARCH_TITLES = 9;
 const MIN_QUERY_LENGTH = 5;
 

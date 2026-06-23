@@ -355,17 +355,18 @@ function setCachedManifest(key, data) {
 /**
  * Cache mémoire global pour safeFetch.
  * Clé = méthode|url (ex: "GET|https://api.tmdb.org/3/tv/123")
- * TTL court (5s) pour éviter les données périmées tout en capturant
- * les doublons dans une même chaîne d'exécution.
+ * TTL de 30s pour partager les résultats TMDB/ArmSync entre tous les
+ * providers qui s'exécutent dans la même chaîne (ex: VoirAnime + Vostfree
+ * pour le même titre). Évite ~60 appels API dupliqués sur une requête typique.
  */
-let FETCH_CACHE_TTL = 5000;
+let FETCH_CACHE_TTL = 30000;
 
 /**
  * Permet de configurer le TTL du cache depuis l'extérieur.
  * @param {number} ms - Nouveau TTL en millisecondes
  */
 export function setFetchCacheTtl(ms) {
-    FETCH_CACHE_TTL = ms > 0 ? ms : 5000;
+    FETCH_CACHE_TTL = ms > 0 ? ms : 30000;
 }
 
 const fetchCache = new Map();
@@ -377,8 +378,8 @@ function getCachedFetch(key) {
 }
 
 function setCachedFetch(key, data) {
-    // Nettoyage simple : si le cache dépasse 100 entrées, on vide tout
-    if (fetchCache.size >= 100) fetchCache.clear();
+    // Nettoyage simple : si le cache dépasse 200 entrées, on vide tout
+    if (fetchCache.size >= 200) fetchCache.clear();
     fetchCache.set(key, { data, ts: Date.now() });
 }
 
@@ -1154,8 +1155,94 @@ export async function resolveUp4fun(url) {
     return null; // null = don't retry in generic fallback
 }
 
+// ─── resolveStream optimizations ────────────────────────────────────────────
+
+/**
+ * Cache partagé entre tous les appels resolveStream d'une même exécution.
+ * Évite de re-peeler le même iframe 10× quand 10 streams pointent vers la même URL.
+ */
+const peeledUrls = new Set();
+
+/**
+ * Domaines d'iframe connus pour être des pubs/analytics/trackers.
+ * On les ignore lors de la sélection de l'iframe à peeler.
+ */
+const AD_IFRAME_PATTERNS = [
+    'googleads', 'doubleclick', 'googlesyndication', 'googletagmanager',
+    'facebook.com/plugins', 'twitter.com/share',
+    'disqus.com', 'hotjar.com',
+    'analytics', 'tracking', 'pixel', 'gtag',
+    'adservice', 'adserver', 'ad.doubleclick',
+    'amazon-adsystem', 'criteo', 'taboola', 'outbrain',
+];
+
+/**
+ * Score de priorité pour les iframes vidéo.
+ * Plus le score est élevé, plus l'iframe a de chances d'être un lecteur vidéo.
+ */
+const VIDEO_IFRAME_SCORE = {
+    'sibnet': 3, 'vidmoly': 3, 'uqload': 3,
+    'voe': 3, 'dood': 3, 'streamtape': 3,
+    'sendvid': 2, 'younetu': 2, 'netu': 2,
+    'moonplayer': 2, 'filemoon': 2, 'vidoza': 2,
+    'myvi': 2, 'luluvid': 2, 'lulu': 2,
+    'embed': 2, 'player': 2, 'video': 2,
+    'cdn': 1, 'hls': 3, 'mp4': 3, 'm3u8': 3,
+};
+
+/**
+ * Extrait et sélectionne le meilleur iframe vidéo du HTML.
+ * - Ignore les iframes de pub/analytics
+ * - Priorise les iframes vers des hébergeurs vidéo connus
+ * - Évite de re-peeler des URLs déjà visitées
+ *
+ * @param {string} html - Contenu HTML de la page
+ * @param {string} pageUrl - URL de la page (pour résoudre les URLs relatives)
+ * @returns {string|null} URL du meilleur iframe, ou null si aucun trouvé
+ */
+function findBestVideoIframe(html, pageUrl) {
+    const iframeRegex = /<iframe\s+[^>]*src=["']([^"']+)["']/gi;
+    const candidates = [];
+    let match;
+
+    while ((match = iframeRegex.exec(html)) !== null) {
+        let iframeUrl = match[1];
+
+        // Résoudre les URLs relatives
+        if (iframeUrl.startsWith('//')) iframeUrl = 'https:' + iframeUrl;
+        if (iframeUrl.startsWith('/')) {
+            const origin = pageUrl.match(/^https?:\/\/[^\/]+/)?.[0];
+            if (origin) iframeUrl = origin + iframeUrl;
+        }
+
+        if (!iframeUrl.startsWith('http')) continue;
+        if (iframeUrl === pageUrl) continue;
+
+        const lower = iframeUrl.toLowerCase();
+
+        // Ignorer les iframes de pub/analytics
+        const isAd = AD_IFRAME_PATTERNS.some(p => lower.includes(p));
+        if (isAd) continue;
+
+        // Calculer le score vidéo
+        let score = 0;
+        for (const [keyword, pts] of Object.entries(VIDEO_IFRAME_SCORE)) {
+            if (lower.includes(keyword)) score += pts;
+        }
+
+        candidates.push({ url: iframeUrl, score });
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Trier par score décroissant, prendre le meilleur
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0].url;
+}
+
 export async function resolveStream(stream, depth = 0) {
     if (depth > 1) return { ...stream, isDirect: false }; // Max 1 recursive peel for TV timeouts
+    if (depth === 0) peeledUrls.clear(); // Fresh cache per top-level call
 
     const originalUrl = stream.url;
     const urlLower = originalUrl.toLowerCase();
@@ -1183,7 +1270,7 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('vidoza.')) result = await resolveVidoza(originalUrl);
         else if (urlLower.includes('sendvid.') || urlLower.includes('daisukianime')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
-        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live') || urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.')) result = await resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live') || urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.') || urlLower.includes('vidhsareup.')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulustream.') ||
@@ -1209,58 +1296,60 @@ export async function resolveStream(stream, depth = 0) {
 
         // 3. Generic Fallback & Recursive Peeling
         // Skip generic fallback for known slow or dead hosts (already tried in specific resolver)
-        const knownSlowHost = urlLower.includes('up4fun.') || urlLower.includes('down-paradise.') || urlLower.includes('getvid.club');
+        const knownSlowHost = urlLower.includes('up4fun.') || urlLower.includes('down-paradise.') || urlLower.includes('getvid.club') || urlLower.includes('vidhsareup.');
         if (!result || result.url === originalUrl) {
             if (knownSlowHost) {
                 return { ...stream, isDirect: false };
             }
+
+            // Si un résolveur spécifique a déjà traité cette URL (depth 0) et a échoué,
+            // on saute la recherche de direct URL (déjà faite par le résolveur) et on va
+            // directement à la détection d'iframe. Évite un safeFetch + unpack + 6 regex.
+            const skipDirectScan = (result && result.url === originalUrl && depth === 0);
+
             const res = await safeFetch(originalUrl, { headers: stream.headers });
             if (res) {
                 let html = await res.text();
                 if (html.includes('p,a,c,k,e,d')) html = unpack(html);
 
-                // Follow JS window.location redirects
-                const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
-                if (jsRedirect && jsRedirect[1] !== originalUrl) {
-                    const res2 = await safeFetch(jsRedirect[1], { headers: stream.headers });
-                    if (res2) {
-                        html = await res2.text();
-                        if (html.includes('p,a,c,k,e,d')) html = unpack(html);
+                if (!skipDirectScan) {
+                    // Follow JS window.location redirects
+                    const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
+                    if (jsRedirect && jsRedirect[1] !== originalUrl) {
+                        const res2 = await safeFetch(jsRedirect[1], { headers: stream.headers });
+                        if (res2) {
+                            html = await res2.text();
+                            if (html.includes('p,a,c,k,e,d')) html = unpack(html);
+                        }
                     }
-                }
 
-                const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) ||
-                                 html.match(/https?:\/\/[^"']+\.mp4[^"']*/) ||
-                                 html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
-                                 html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
-                                 html.match(/'hls'\s*:\s*'([^']+)'/) ||
-                                 html.match(/"hls"\s*:\s*"([^"]+)"/);
+                    const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) ||
+                                     html.match(/https?:\/\/[^"']+\.mp4[^"']*/) ||
+                                     html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                                     html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
+                                     html.match(/'hls'\s*:\s*'([^']+)'/) ||
+                                     html.match(/"hls"\s*:\s*"([^"]+)"/);
 
-                if (directUrl) {
-                    let extractedUrl = directUrl[1] || directUrl[0];
-                    if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
-                    
-                    const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
-                    
-                    if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
-                        result = { url: extractedUrl };
+                    if (directUrl) {
+                        let extractedUrl = directUrl[1] || directUrl[0];
+                        if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
+
+                        const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
+
+                        if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
+                            result = { url: extractedUrl };
+                        }
                     }
                 }
 
                 if (!result) {
-                    const iframeMatch = html.match(/<iframe\s+[^>]*src=["']([^"']+)["']/i);
-                    if (iframeMatch) {
-                        let iframeUrl = iframeMatch[1];
-                        if (iframeUrl.startsWith('//')) iframeUrl = "https:" + iframeUrl;
-                        if (iframeUrl.startsWith('/')) {
-                            const origin = originalUrl.match(/^https?:\/\/[^\/]+/)?.[0];
-                            if (origin) iframeUrl = origin + iframeUrl;
-                        }
-                        
-                        if (iframeUrl.startsWith('http') && iframeUrl !== originalUrl) {
-                            console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
-                            return await resolveStream({ ...stream, url: iframeUrl }, depth + 1);
-                        }
+                    // Smart iframe detection: ignore les pubs, priorise les vidéos
+                    const iframeUrl = findBestVideoIframe(html, originalUrl);
+
+                    if (iframeUrl && !peeledUrls.has(iframeUrl)) {
+                        peeledUrls.add(iframeUrl);
+                        console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
+                        return await resolveStream({ ...stream, url: iframeUrl }, depth + 1);
                     }
                 }
             }

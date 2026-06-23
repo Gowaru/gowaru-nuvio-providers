@@ -78,6 +78,7 @@ skills-lock.json
 # Temporary files
 tmp/
 temp/
+benchmark*
 
 # Test files (if any)
 test/

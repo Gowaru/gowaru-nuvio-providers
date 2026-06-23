@@ -5,6 +5,7 @@ import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://sekai.one";
 const BUDGET_MS = 40000;
+const CACHE_TTL = 300000; // 5 min pour le cache des séries
 
 
 function normalizeTitle(s) {
@@ -25,9 +26,16 @@ function scoreMatch(searchTerm, candidate) {
     return 0;
 }
 
-
+// Cache pour getSeriesData (évite de re-fetcher la homepage à chaque appel)
+let seriesCache = null;
+let seriesCacheTs = 0;
 
 async function getSeriesData() {
+    const now = Date.now();
+    if (seriesCache && now - seriesCacheTs < CACHE_TTL) {
+        console.log(`[Sekai] Using cached seriesData (${Math.round((now - seriesCacheTs) / 1000)}s old)`);
+        return seriesCache;
+    }
     const html = await fetchText(`${BASE_URL}/`);
     
     const startStr = "var seriesData = [";
@@ -61,6 +69,8 @@ async function getSeriesData() {
     } catch(e) {
         console.error("[Sekai] Regex parsing error on seriesData", e);
     }
+    seriesCache = results;
+    seriesCacheTs = Date.now();
     return results;
 }
 
@@ -208,7 +218,9 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
                 const resolved = await getAbsoluteEpisode(imdbId, season, episodeNum);
                 if (resolved) absEp = resolved;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn(`[Sekai] ArmSync failed: ${e?.message}`);
+        }
     }
 
     console.log(`[Sekai] Checking ${mediaType} S${season} E${episodeNum} -> Absolute: ${absEp}`);
@@ -221,11 +233,13 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     let targetScore = 0;
 
     for (const t of titles) {
-        if (!t) continue;
+        if (!t || targetScore >= 100) continue;
+        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
         const nt = normalizeTitle(t);
         if (!nt || nt.length < 2) continue;
 
         for (const s of allSeries) {
+            if (targetScore >= 100) break;
             // Score against main title
             let score = scoreMatch(nt, normalizeTitle(s.title));
             if (score > targetScore) {
@@ -234,6 +248,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
             }
             // Score against aliases (slightly penalized vs title)
             for (const a of s.aliases) {
+                if (targetScore >= 100) break;
                 const na = normalizeTitle(a);
                 score = scoreMatch(nt, na);
                 if (score > 0 && score - 5 > targetScore) {
@@ -263,19 +278,21 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     }
 
     // 3. Otherwise, fetch all related Arcs! (limited to 3 for TV budget)
-    let arcsUrls = extractArcsUrls(mainHtml, targetSeries.url).slice(0, 3);
+    const arcsUrls = extractArcsUrls(mainHtml, targetSeries.url).slice(0, 3);
     console.log(`[Sekai] Found ${arcsUrls.length} arcs. Fetching...`);
-    
-    // fetch all arcs in parallel to find the episode map
-    const arcsHtmls = await Promise.all(arcsUrls.map(u => fetchText(u).catch(() => "")));
-    
-    for(const html of arcsHtmls) {
-         if(!html) continue;
-         const arcMap = buildEpisodeMap(html);
-         if(arcMap[absEp] && Object.keys(arcMap[absEp]).length > 0) {
-              mainEpMap = arcMap;
-              break;
-         }
+
+    // fetch all arcs in parallel to find the episode map (avec budget check)
+    if (!isBudgetExhausted(startTime, BUDGET_MS) && arcsUrls.length > 0) {
+        const arcsHtmls = await Promise.all(arcsUrls.map(u => fetchText(u).catch(() => "")));
+
+        for(const html of arcsHtmls) {
+             if(!html || isBudgetExhausted(startTime, BUDGET_MS)) continue;
+             const arcMap = buildEpisodeMap(html);
+             if(arcMap[absEp] && Object.keys(arcMap[absEp]).length > 0) {
+                  mainEpMap = arcMap;
+                  break;
+             }
+        }
     }
 
     if(mainEpMap[absEp] && Object.keys(mainEpMap[absEp]).length > 0) {

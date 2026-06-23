@@ -1,6 +1,6 @@
 /**
  * animevostfr - Built from src/animevostfr/
- * Generated: 2026-06-15T00:10:22.927222863Z
+ * Generated: 2026-06-23T17:53:10.285190119Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12022,7 +12022,7 @@ var __provider = (() => {
     return null;
   }
   function setCachedFetch(key, data) {
-    if (fetchCache.size >= 100) fetchCache.clear();
+    if (fetchCache.size >= 200) fetchCache.clear();
     fetchCache.set(key, { data, ts: Date.now() });
   }
   function qualityRank(value) {
@@ -12735,10 +12735,37 @@ var __provider = (() => {
       return null;
     });
   }
+  function findBestVideoIframe(html, pageUrl) {
+    var _a;
+    const iframeRegex = /<iframe\s+[^>]*src=["']([^"']+)["']/gi;
+    const candidates = [];
+    let match;
+    while ((match = iframeRegex.exec(html)) !== null) {
+      let iframeUrl = match[1];
+      if (iframeUrl.startsWith("//")) iframeUrl = "https:" + iframeUrl;
+      if (iframeUrl.startsWith("/")) {
+        const origin = (_a = pageUrl.match(/^https?:\/\/[^\/]+/)) == null ? void 0 : _a[0];
+        if (origin) iframeUrl = origin + iframeUrl;
+      }
+      if (!iframeUrl.startsWith("http")) continue;
+      if (iframeUrl === pageUrl) continue;
+      const lower = iframeUrl.toLowerCase();
+      const isAd = AD_IFRAME_PATTERNS.some((p) => lower.includes(p));
+      if (isAd) continue;
+      let score = 0;
+      for (const [keyword, pts] of Object.entries(VIDEO_IFRAME_SCORE)) {
+        if (lower.includes(keyword)) score += pts;
+      }
+      candidates.push({ url: iframeUrl, score });
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0].url;
+  }
   function resolveStream(stream, depth = 0) {
     return __async(this, null, function* () {
-      var _a;
       if (depth > 1) return __spreadProps(__spreadValues({}, stream), { isDirect: false });
+      if (depth === 0) peeledUrls.clear();
       const originalUrl = stream.url;
       const urlLower = originalUrl.toLowerCase();
       if (!originalUrl || originalUrl.includes("google-analytics") || originalUrl.includes("doubleclick")) return null;
@@ -12758,7 +12785,7 @@ var __provider = (() => {
         else if (urlLower.includes("vidoza.")) result = yield resolveVidoza(originalUrl);
         else if (urlLower.includes("sendvid.") || urlLower.includes("daisukianime")) result = yield resolveSendvid(originalUrl);
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
-        else if (urlLower.includes("fsvid.lol") || urlLower.includes("vidzy.live") || urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.")) result = yield resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes("fsvid.lol") || urlLower.includes("vidzy.live") || urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("hgcloud.") || urlLower.includes("savefiles.")) result = yield resolveHGCloud(originalUrl);
@@ -12772,45 +12799,41 @@ var __provider = (() => {
             originalUrl
           });
         }
-        const knownSlowHost = urlLower.includes("up4fun.") || urlLower.includes("down-paradise.") || urlLower.includes("getvid.club");
+        const knownSlowHost = urlLower.includes("up4fun.") || urlLower.includes("down-paradise.") || urlLower.includes("getvid.club") || urlLower.includes("vidhsareup.");
         if (!result || result.url === originalUrl) {
           if (knownSlowHost) {
             return __spreadProps(__spreadValues({}, stream), { isDirect: false });
           }
+          const skipDirectScan = result && result.url === originalUrl && depth === 0;
           const res = yield safeFetch(originalUrl, { headers: stream.headers });
           if (res) {
             let html = yield res.text();
             if (html.includes("p,a,c,k,e,d")) html = unpack(html);
-            const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
-            if (jsRedirect && jsRedirect[1] !== originalUrl) {
-              const res2 = yield safeFetch(jsRedirect[1], { headers: stream.headers });
-              if (res2) {
-                html = yield res2.text();
-                if (html.includes("p,a,c,k,e,d")) html = unpack(html);
+            if (!skipDirectScan) {
+              const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
+              if (jsRedirect && jsRedirect[1] !== originalUrl) {
+                const res2 = yield safeFetch(jsRedirect[1], { headers: stream.headers });
+                if (res2) {
+                  html = yield res2.text();
+                  if (html.includes("p,a,c,k,e,d")) html = unpack(html);
+                }
               }
-            }
-            const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || html.match(/https?:\/\/[^"']+\.mp4[^"']*/) || html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
-            if (directUrl) {
-              let extractedUrl = directUrl[1] || directUrl[0];
-              if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
-              const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
-              if (extractedUrl.startsWith("http") && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
-                result = { url: extractedUrl };
+              const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || html.match(/https?:\/\/[^"']+\.mp4[^"']*/) || html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
+              if (directUrl) {
+                let extractedUrl = directUrl[1] || directUrl[0];
+                if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
+                const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
+                if (extractedUrl.startsWith("http") && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
+                  result = { url: extractedUrl };
+                }
               }
             }
             if (!result) {
-              const iframeMatch = html.match(/<iframe\s+[^>]*src=["']([^"']+)["']/i);
-              if (iframeMatch) {
-                let iframeUrl = iframeMatch[1];
-                if (iframeUrl.startsWith("//")) iframeUrl = "https:" + iframeUrl;
-                if (iframeUrl.startsWith("/")) {
-                  const origin = (_a = originalUrl.match(/^https?:\/\/[^\/]+/)) == null ? void 0 : _a[0];
-                  if (origin) iframeUrl = origin + iframeUrl;
-                }
-                if (iframeUrl.startsWith("http") && iframeUrl !== originalUrl) {
-                  console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
-                  return yield resolveStream(__spreadProps(__spreadValues({}, stream), { url: iframeUrl }), depth + 1);
-                }
+              const iframeUrl = findBestVideoIframe(html, originalUrl);
+              if (iframeUrl && !peeledUrls.has(iframeUrl)) {
+                peeledUrls.add(iframeUrl);
+                console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
+                return yield resolveStream(__spreadProps(__spreadValues({}, stream), { url: iframeUrl }), depth + 1);
               }
             }
           }
@@ -12828,7 +12851,7 @@ var __provider = (() => {
       return __spreadProps(__spreadValues({}, stream), { isDirect: false });
     });
   }
-  var PROVIDER_BUDGET_MS, HEADERS, _atob, CODEC_PREFERENCE, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, BASE_URL_FORBIDDEN_PATTERN;
+  var PROVIDER_BUDGET_MS, HEADERS, _atob, CODEC_PREFERENCE, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
@@ -12863,8 +12886,54 @@ var __provider = (() => {
       };
       manifestCache = /* @__PURE__ */ new Map();
       MANIFEST_CACHE_TTL = 12e4;
-      FETCH_CACHE_TTL = 5e3;
+      FETCH_CACHE_TTL = 3e4;
       fetchCache = /* @__PURE__ */ new Map();
+      peeledUrls = /* @__PURE__ */ new Set();
+      AD_IFRAME_PATTERNS = [
+        "googleads",
+        "doubleclick",
+        "googlesyndication",
+        "googletagmanager",
+        "facebook.com/plugins",
+        "twitter.com/share",
+        "disqus.com",
+        "hotjar.com",
+        "analytics",
+        "tracking",
+        "pixel",
+        "gtag",
+        "adservice",
+        "adserver",
+        "ad.doubleclick",
+        "amazon-adsystem",
+        "criteo",
+        "taboola",
+        "outbrain"
+      ];
+      VIDEO_IFRAME_SCORE = {
+        "sibnet": 3,
+        "vidmoly": 3,
+        "uqload": 3,
+        "voe": 3,
+        "dood": 3,
+        "streamtape": 3,
+        "sendvid": 2,
+        "younetu": 2,
+        "netu": 2,
+        "moonplayer": 2,
+        "filemoon": 2,
+        "vidoza": 2,
+        "myvi": 2,
+        "luluvid": 2,
+        "lulu": 2,
+        "embed": 2,
+        "player": 2,
+        "video": 2,
+        "cdn": 1,
+        "hls": 3,
+        "mp4": 3,
+        "m3u8": 3
+      };
       BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";
     }
   });
@@ -12938,6 +13007,7 @@ var __provider = (() => {
           const entry = Array.isArray(data) ? data[0] : data;
           if (entry && entry.imdb) return entry.imdb;
         } catch (e) {
+          console.warn(`[ArmSync] JSON parse failed for getImdbId: ${e == null ? void 0 : e.message}`);
         }
       }
       return null;

@@ -334,11 +334,33 @@ function toStream(name, url, quality, language) {
 
 async function resolveWithTimeout(stream) {
   try {
+    const start = Date.now();
     const resolved = await resolveStream(stream)
-    if (resolved && resolved.url && resolved.isDirect) return resolved
-    if (resolved && resolved.url && !resolved.isDirect) return { ...resolved, isDirect: true }
+    const elapsed = Date.now() - start;
+
+    if (resolved && resolved.url && resolved.isDirect) {
+      if (resolved.url !== stream.url) {
+        console.log(`[FrenchManga] Resolved OK (${elapsed}ms): ${stream.url.slice(0, 60)}... → ${resolved.url.slice(0, 60)}...`);
+      } else {
+        console.log(`[FrenchManga] Direct OK (${elapsed}ms): ${stream.url.slice(0, 70)}...`);
+      }
+      return resolved
+    }
+
+    if (resolved && resolved.url && !resolved.isDirect) {
+      console.log(`[FrenchManga] ✗ Resolve FAILED (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, skipping`)
+      return null
+    }
+
+    if (resolved && resolved.url) {
+      console.log(`[FrenchManga] ✗ Resolve UNCERTAIN (${elapsed}ms): ${stream.url.slice(0, 80)} - no resolution, skipping`)
+      return null
+    }
+
+    console.log(`[FrenchManga] ✗ Resolve null: ${(stream.url || '').slice(0, 80)}`)
     return null
-  } catch {
+  } catch (e) {
+    console.log(`[FrenchManga] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message}`)
     return null
   }
 }

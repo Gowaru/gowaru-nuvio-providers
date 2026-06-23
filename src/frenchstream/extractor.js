@@ -1,6 +1,6 @@
 import { stripSeasonSuffix } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
-import { safeFetch, resolveStream } from '../utils/resolvers.js';
+import { safeFetch, resolveStream, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { getImdbId, getAbsoluteEpisode } from '../utils/armsync.js';
 import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
@@ -224,7 +224,9 @@ async function detectSubType(tmdbId, mediaType, titles) {
         const tm = titles.some(t => ANIME_KEYWORDS.test(t));
         if (isAnim && (jap || tm)) return 'anime';
         if (isAnim && mediaType === 'tv') return 'cartoon';
-    } catch (e) {}
+    } catch (e) {
+        console.warn(`[Frenchstream] detectSubType failed: ${e?.message}`);
+    }
     return null;
 }
 
@@ -425,7 +427,9 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
                 // First query returned 0 cards — DLE search is broken for this film, skip remaining
                 break;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn(`[Frenchstream] Movie search query failed: ${e?.message}`);
+        }
     }
 
     // Step 2: fetch category pages, starting with TMDB genre relevance
@@ -515,6 +519,8 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
 /* ---------- MAIN EXPORT ---------- */
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {
+    const startTime = Date.now();
+    const BUDGET_MS = 45000;
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 
@@ -522,6 +528,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     const subType = await detectSubType(tmdbId, mediaType, titles);
     if (subType) console.log('[Frenchstream] subType: ' + subType);
+
+    if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
 
     if (mediaType === 'tv') {
         // --- ARMSYNC Metadata Resolution ---

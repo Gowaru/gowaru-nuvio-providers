@@ -6,7 +6,7 @@
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.47",
+      "version": "1.1.48",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -78,7 +78,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.13",
+      "version": "1.2.14",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -103,7 +103,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.46",
+      "version": "1.1.47",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -127,7 +127,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -199,7 +199,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.29",
+      "version": "1.0.30",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -223,7 +223,7 @@
       "id": "jetanimes",
       "name": "JetAnimes",
       "description": "Regarder vos animes en streaming sur JetAnimes.",
-      "version": "1.0.21",
+      "version": "1.0.22",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -247,7 +247,7 @@
       "id": "sekai",
       "name": "Sekai",
       "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.17",
+      "version": "1.0.18",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -271,7 +271,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "1.0.32",
+      "version": "1.0.33",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -321,7 +321,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (séries site-native, films par catégories).",
-      "version": "2.0.9",
+      "version": "2.0.10",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -346,7 +346,7 @@
       "id": "dulourd",
       "name": "DuLourd",
       "description": "Séries, animes et cartoons en streaming VF et VOSTFR.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": ["tv"],
       "filename": "providers/dulourd.js",
@@ -361,7 +361,7 @@
     {
       "id": "coflix",
       "name": "Coflix",
-      "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki (DoodStream, LuluVid).",
+      "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki.",
       "version": "1.0.5",
       "author": "Gowaru",
       "supportedTypes": [
@@ -431,10 +431,33 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "otakufr",
+      "name": "Otakufr",
+      "description": "Animes VF et VOSTFR en streaming sur Otakufr (WordPress).",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/otakufr.js",
+      "enabled": true,
+      "logo": "https://otakufr.beer/imghd/otakufr-icon.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "french-manga",
       "name": "French-Manga",
       "description": "Animes VF et VOSTFR en streaming sur French-Manga.net",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

@@ -1,6 +1,6 @@
 /**
  * anime-sama - Built from src/anime-sama/
- * Generated: 2026-06-15T00:10:22.528222392Z
+ * Generated: 2026-06-23T17:53:08.711188571Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -242,7 +242,7 @@ var __provider = (() => {
     return null;
   }
   function setCachedFetch(key, data) {
-    if (fetchCache.size >= 100) fetchCache.clear();
+    if (fetchCache.size >= 200) fetchCache.clear();
     fetchCache.set(key, { data, ts: Date.now() });
   }
   function qualityRank(value) {
@@ -955,10 +955,37 @@ var __provider = (() => {
       return null;
     });
   }
+  function findBestVideoIframe(html, pageUrl) {
+    var _a;
+    const iframeRegex = /<iframe\s+[^>]*src=["']([^"']+)["']/gi;
+    const candidates = [];
+    let match;
+    while ((match = iframeRegex.exec(html)) !== null) {
+      let iframeUrl = match[1];
+      if (iframeUrl.startsWith("//")) iframeUrl = "https:" + iframeUrl;
+      if (iframeUrl.startsWith("/")) {
+        const origin = (_a = pageUrl.match(/^https?:\/\/[^\/]+/)) == null ? void 0 : _a[0];
+        if (origin) iframeUrl = origin + iframeUrl;
+      }
+      if (!iframeUrl.startsWith("http")) continue;
+      if (iframeUrl === pageUrl) continue;
+      const lower = iframeUrl.toLowerCase();
+      const isAd = AD_IFRAME_PATTERNS.some((p) => lower.includes(p));
+      if (isAd) continue;
+      let score = 0;
+      for (const [keyword, pts] of Object.entries(VIDEO_IFRAME_SCORE)) {
+        if (lower.includes(keyword)) score += pts;
+      }
+      candidates.push({ url: iframeUrl, score });
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0].url;
+  }
   function resolveStream(stream, depth = 0) {
     return __async(this, null, function* () {
-      var _a;
       if (depth > 1) return __spreadProps(__spreadValues({}, stream), { isDirect: false });
+      if (depth === 0) peeledUrls.clear();
       const originalUrl = stream.url;
       const urlLower = originalUrl.toLowerCase();
       if (!originalUrl || originalUrl.includes("google-analytics") || originalUrl.includes("doubleclick")) return null;
@@ -978,7 +1005,7 @@ var __provider = (() => {
         else if (urlLower.includes("vidoza.")) result = yield resolveVidoza(originalUrl);
         else if (urlLower.includes("sendvid.") || urlLower.includes("daisukianime")) result = yield resolveSendvid(originalUrl);
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
-        else if (urlLower.includes("fsvid.lol") || urlLower.includes("vidzy.live") || urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.")) result = yield resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes("fsvid.lol") || urlLower.includes("vidzy.live") || urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("hgcloud.") || urlLower.includes("savefiles.")) result = yield resolveHGCloud(originalUrl);
@@ -992,45 +1019,41 @@ var __provider = (() => {
             originalUrl
           });
         }
-        const knownSlowHost = urlLower.includes("up4fun.") || urlLower.includes("down-paradise.") || urlLower.includes("getvid.club");
+        const knownSlowHost = urlLower.includes("up4fun.") || urlLower.includes("down-paradise.") || urlLower.includes("getvid.club") || urlLower.includes("vidhsareup.");
         if (!result || result.url === originalUrl) {
           if (knownSlowHost) {
             return __spreadProps(__spreadValues({}, stream), { isDirect: false });
           }
+          const skipDirectScan = result && result.url === originalUrl && depth === 0;
           const res = yield safeFetch(originalUrl, { headers: stream.headers });
           if (res) {
             let html = yield res.text();
             if (html.includes("p,a,c,k,e,d")) html = unpack(html);
-            const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
-            if (jsRedirect && jsRedirect[1] !== originalUrl) {
-              const res2 = yield safeFetch(jsRedirect[1], { headers: stream.headers });
-              if (res2) {
-                html = yield res2.text();
-                if (html.includes("p,a,c,k,e,d")) html = unpack(html);
+            if (!skipDirectScan) {
+              const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
+              if (jsRedirect && jsRedirect[1] !== originalUrl) {
+                const res2 = yield safeFetch(jsRedirect[1], { headers: stream.headers });
+                if (res2) {
+                  html = yield res2.text();
+                  if (html.includes("p,a,c,k,e,d")) html = unpack(html);
+                }
               }
-            }
-            const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || html.match(/https?:\/\/[^"']+\.mp4[^"']*/) || html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
-            if (directUrl) {
-              let extractedUrl = directUrl[1] || directUrl[0];
-              if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
-              const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
-              if (extractedUrl.startsWith("http") && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
-                result = { url: extractedUrl };
+              const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) || html.match(/https?:\/\/[^"']+\.mp4[^"']*/) || html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
+              if (directUrl) {
+                let extractedUrl = directUrl[1] || directUrl[0];
+                if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
+                const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
+                if (extractedUrl.startsWith("http") && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
+                  result = { url: extractedUrl };
+                }
               }
             }
             if (!result) {
-              const iframeMatch = html.match(/<iframe\s+[^>]*src=["']([^"']+)["']/i);
-              if (iframeMatch) {
-                let iframeUrl = iframeMatch[1];
-                if (iframeUrl.startsWith("//")) iframeUrl = "https:" + iframeUrl;
-                if (iframeUrl.startsWith("/")) {
-                  const origin = (_a = originalUrl.match(/^https?:\/\/[^\/]+/)) == null ? void 0 : _a[0];
-                  if (origin) iframeUrl = origin + iframeUrl;
-                }
-                if (iframeUrl.startsWith("http") && iframeUrl !== originalUrl) {
-                  console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
-                  return yield resolveStream(__spreadProps(__spreadValues({}, stream), { url: iframeUrl }), depth + 1);
-                }
+              const iframeUrl = findBestVideoIframe(html, originalUrl);
+              if (iframeUrl && !peeledUrls.has(iframeUrl)) {
+                peeledUrls.add(iframeUrl);
+                console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
+                return yield resolveStream(__spreadProps(__spreadValues({}, stream), { url: iframeUrl }), depth + 1);
               }
             }
           }
@@ -1048,7 +1071,7 @@ var __provider = (() => {
       return __spreadProps(__spreadValues({}, stream), { isDirect: false });
     });
   }
-  var PROVIDER_BUDGET_MS, HEADERS, _atob, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, BASE_URL_FORBIDDEN_PATTERN;
+  var PROVIDER_BUDGET_MS, HEADERS, _atob, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
@@ -1084,8 +1107,54 @@ var __provider = (() => {
       };
       manifestCache = /* @__PURE__ */ new Map();
       MANIFEST_CACHE_TTL = 12e4;
-      FETCH_CACHE_TTL = 5e3;
+      FETCH_CACHE_TTL = 3e4;
       fetchCache = /* @__PURE__ */ new Map();
+      peeledUrls = /* @__PURE__ */ new Set();
+      AD_IFRAME_PATTERNS = [
+        "googleads",
+        "doubleclick",
+        "googlesyndication",
+        "googletagmanager",
+        "facebook.com/plugins",
+        "twitter.com/share",
+        "disqus.com",
+        "hotjar.com",
+        "analytics",
+        "tracking",
+        "pixel",
+        "gtag",
+        "adservice",
+        "adserver",
+        "ad.doubleclick",
+        "amazon-adsystem",
+        "criteo",
+        "taboola",
+        "outbrain"
+      ];
+      VIDEO_IFRAME_SCORE = {
+        "sibnet": 3,
+        "vidmoly": 3,
+        "uqload": 3,
+        "voe": 3,
+        "dood": 3,
+        "streamtape": 3,
+        "sendvid": 2,
+        "younetu": 2,
+        "netu": 2,
+        "moonplayer": 2,
+        "filemoon": 2,
+        "vidoza": 2,
+        "myvi": 2,
+        "luluvid": 2,
+        "lulu": 2,
+        "embed": 2,
+        "player": 2,
+        "video": 2,
+        "cdn": 1,
+        "hls": 3,
+        "mp4": 3,
+        "m3u8": 3
+      };
       BASE_URL_FORBIDDEN_PATTERN = "googletagmanager";
     }
   });
@@ -13221,6 +13290,7 @@ var __provider = (() => {
           const entry = Array.isArray(data) ? data[0] : data;
           if (entry && entry.imdb) return entry.imdb;
         } catch (e) {
+          console.warn(`[ArmSync] JSON parse failed for getImdbId: ${e == null ? void 0 : e.message}`);
         }
       }
       return null;
@@ -13389,12 +13459,8 @@ var __provider = (() => {
   }
   function tryFetchEpisode(slug, lang, season, episode) {
     return __async(this, null, function* () {
-      const [mainJs, sub2, sub3, sub4, sub5, rootJs] = yield Promise.all([
+      const [mainJs, rootJs] = yield Promise.all([
         fetchJs(slug, `saison${season}`, lang),
-        fetchJs(slug, `saison${season}-2`, lang),
-        fetchJs(slug, `saison${season}-3`, lang),
-        fetchJs(slug, `saison${season}-4`, lang),
-        fetchJs(slug, `saison${season}-5`, lang),
         fetchJs(slug, "", lang)
       ]);
       if (mainJs) {
@@ -13405,9 +13471,9 @@ var __provider = (() => {
             return buildStreams(parsed, lang, episode, episode - 1);
           }
           let cumulativeEps = totalEps;
-          const subJss = [sub2, sub3, sub4, sub5];
-          for (let i = 0; i < subJss.length; i++) {
-            const subJs = subJss[i];
+          const subSeasons = ["2", "3", "4", "5"];
+          for (const subNum of subSeasons) {
+            const subJs = yield fetchJs(slug, `saison${season}-${subNum}`, lang);
             if (!subJs) continue;
             const subParsed = parseUrls(subJs);
             if (subParsed.length === 0) continue;
@@ -13456,15 +13522,17 @@ var __provider = (() => {
       const slug = toSlug(title);
       const languages = ["vostfr", "vf"];
       const streams = [];
-      const primaryPromises = [];
-      for (const lang of languages) {
-        primaryPromises.push(fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes));
+      if (!isBudgetExhausted(startTime, BUDGET_MS)) {
+        const primaryPromises = [];
+        for (const lang of languages) {
+          primaryPromises.push(fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes));
+        }
+        const primaryResults = yield Promise.all(primaryPromises);
+        for (const result of primaryResults) {
+          streams.push(...result);
+        }
       }
-      const primaryResults = yield Promise.all(primaryPromises);
-      for (const result of primaryResults) {
-        streams.push(...result);
-      }
-      if (streams.length === 0 && effectiveSeason > 1) {
+      if (streams.length === 0 && effectiveSeason > 1 && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const seasonSlug = `${slug}-saison-${effectiveSeason}`;
         const seasonPromises = [];
         for (const lang of languages) {
@@ -13475,7 +13543,7 @@ var __provider = (() => {
           streams.push(...result);
         }
       }
-      if (streams.length === 0 && effectiveSeason > 1) {
+      if (streams.length === 0 && effectiveSeason > 1 && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const numSlug = `${slug}-${effectiveSeason}`;
         const numPromises = [];
         for (const lang of languages) {
@@ -13490,12 +13558,13 @@ var __provider = (() => {
         const triedSlugs = /* @__PURE__ */ new Set([slug]);
         const altSlugTasks = [];
         const seasonSuffixRe = /-(?:saison|season|s)\d+$/i;
-        for (let i = 1; i < titles.length; i++) {
+        let slugsAdded = 0;
+        for (let i = 1; i < titles.length && slugsAdded < 5; i++) {
           const altSlug = toSlug(titles[i]);
           if (!altSlug || triedSlugs.has(altSlug)) continue;
           triedSlugs.add(altSlug);
           if (altSlug.replace(seasonSuffixRe, "") === slug) continue;
-          if (altSlugTasks.length >= 20) break;
+          slugsAdded++;
           for (const lang of languages) {
             const task = withTimeout(
               fetchAndGetUrl(altSlug, lang, effectiveSeason, episode, mediaType, altEpisodes),
@@ -13506,10 +13575,18 @@ var __provider = (() => {
           }
         }
         if (altSlugTasks.length > 0) {
-          console.log(`[Anime-Sama] Trying ${altSlugTasks.length} alt slug probes`);
-          const altResults = yield Promise.all(altSlugTasks);
-          for (const result of altResults) {
-            streams.push(...result);
+          console.log(`[Anime-Sama] Trying ${altSlugTasks.length} alt slug probes (max 5 slugs)`);
+          let resolvedCount = 0;
+          while (resolvedCount < altSlugTasks.length && !isBudgetExhausted(startTime, BUDGET_MS)) {
+            const batch = altSlugTasks.slice(resolvedCount, resolvedCount + 3);
+            const batchResults = yield Promise.allSettled(batch);
+            for (const r of batchResults) {
+              if (r.status === "fulfilled" && Array.isArray(r.value)) {
+                streams.push(...r.value);
+              }
+            }
+            if (streams.length > 0) break;
+            resolvedCount += 3;
           }
         }
       }
@@ -13532,9 +13609,11 @@ var __provider = (() => {
             fallbackPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
           }
         }
-        const fallbackResults = yield Promise.all(fallbackPromises);
-        for (const result of fallbackResults) {
-          streams.push(...result);
+        if (fallbackPromises.length > 0) {
+          const fallbackResults = yield Promise.all(fallbackPromises);
+          for (const result of fallbackResults) {
+            streams.push(...result);
+          }
         }
       }
       const validStreams = streams.filter((s) => s && s.isDirect);
