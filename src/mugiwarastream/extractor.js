@@ -224,7 +224,7 @@ async function resolveStreams(streams) {
         )
     );
     const resolved = results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
-    return resolved.length > 0 ? resolved : streams;
+    return resolved.length > 0 ? resolved : streams.filter(s => s && s.isDirect);
 }
 
 function collectSourceUrls(episodeSourceUrls) {

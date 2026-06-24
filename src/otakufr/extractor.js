@@ -140,29 +140,6 @@ function extractIframeUrl(html) {
   return null
 }
 
-/**
- * Extrait tous les serveurs / lecteurs disponibles depuis le HTML de la page épisode
- */
-function extractServers(html) {
-  const servers = new Set()
-
-  // Options de selecteur de serveur (<option value="...">)
-  const optionRegex = /<option[^>]+value="([^"]+)"[^>]*>/gi
-  let m
-  while ((m = optionRegex.exec(html)) !== null) {
-    const val = m[1]
-    if (val && val !== 'Choisir un lecteur') servers.add(val)
-  }
-
-  // Liens de serveur alternatifs
-  const serverRegex = /href=["']([^"']*server[^"']*)["']/gi
-  while ((m = serverRegex.exec(html)) !== null) {
-    if (m[1].startsWith('http')) servers.add(m[1])
-  }
-
-  return [...servers]
-}
-
 // ─── Phase 1: Recherche ──────────────────────────────────────
 
 /**
@@ -560,73 +537,80 @@ function generateEpisodeUrls(slug, episode, lang = 'vostfr') {
 
 /**
  * Extrait les streams d'une page épisode
+ * 
+ * Stratégie :
+ *   1. Extrait l'URL de l'iframe du player vidéo (conteneur #embed_holder > #pembed > iframe)
+ *   2. Passe l'URL à resolveStream qui gère le peeling récursif
+ *
+ * Note : extractServers() était utilisé avant mais extrayait les options <select>
+ * qui sont des RAPPORTS D'ERREUR (wrong_episode, no_audio, desync_audio),
+ * pas de vrais serveurs de streaming.
  */
 async function extractStreamsFromEpisode(episodeUrl, lang, startTime) {
   try {
     const html = await fetchText(episodeUrl, { timeout: 10000 })
     if (!html || html.length < 100) return []
 
-    // Essayer d'abord les serveurs alternatifs (sélecteur <option>)
-    const servers = extractServers(html)
-    const streamPromises = []
+    // Méthode 1: Iframe du player via regex (rapide, fonctionne sans cheerio)
+    const iframeUrl = extractIframeUrl(html)
+    
+    if (iframeUrl) {
+      console.log(`[Otakufr] Player iframe: ${iframeUrl.slice(0, 100)}`)
+      
+      const resolved = await resolveStream({
+        name: `Otakufr (${lang})`,
+        title: `Player - ${lang}`,
+        url: iframeUrl,
+        quality: 'HD',
+        language: lang,
+        headers: {
+          Referer: `${episodeUrl}`,
+          Origin: BASE_URL,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      }).catch(() => null)
 
-    if (servers.length > 0) {
-      for (const server of servers) {
-        if (isBudgetExhausted(startTime, BUDGET_MS)) break
+      if (resolved && resolved.url && resolved.isDirect) {
+        console.log(`[Otakufr] Stream resolved: ${resolved.url.slice(0, 80)} (isDirect: ${resolved.isDirect})`)
+        return [resolved]
+      }
+    }
 
-        let serverUrl
-        if (server.startsWith('http')) {
-          serverUrl = server
-        } else {
-          serverUrl = `${episodeUrl}${episodeUrl.includes('?') ? '&' : '?'}host=${encodeURIComponent(server)}`
-        }
-
-        streamPromises.push(
-          resolveStream({
+    // Méthode 2: Chercher le player via cheerio dans #embed_holder
+    if (!iframeUrl) {
+      try {
+        const $ = cheerio.load(html)
+        const playerIframe = $('#embed_holder iframe, #pembed iframe, .player-embed iframe').first()
+        const src = playerIframe.attr('src')
+        if (src) {
+          const fullUrl = src.startsWith('http') ? src : `${BASE_URL}${src.startsWith('/') ? '' : '/'}${src}`
+          console.log(`[Otakufr] Player iframe (cheerio): ${fullUrl.slice(0, 100)}`)
+          
+          const resolved = await resolveStream({
             name: `Otakufr (${lang})`,
-            title: `${server} - ${lang}`,
-            url: serverUrl,
+            title: `Player - ${lang}`,
+            url: fullUrl,
             quality: 'HD',
             language: lang,
             headers: {
-              Referer: `${BASE_URL}/`,
+              Referer: `${episodeUrl}`,
               Origin: BASE_URL,
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             },
           }).catch(() => null)
-        )
+
+          if (resolved && resolved.url && resolved.isDirect) {
+            console.log(`[Otakufr] Stream resolved (cheerio): ${resolved.url.slice(0, 80)} (isDirect: ${resolved.isDirect})`)
+            return [resolved]
+          }
+        }
+      } catch (e) {
+        console.warn(`[Otakufr] Cheerio iframe extraction failed: ${e?.message}`)
       }
     }
 
-    // Fallback: iframe direct
-    const iframeUrl = extractIframeUrl(html)
-    if (iframeUrl && streamPromises.length === 0) {
-      streamPromises.push(
-        resolveStream({
-          name: `Otakufr (${lang})`,
-          title: `Default Player - ${lang}`,
-          url: iframeUrl,
-          quality: 'HD',
-          language: lang,
-          headers: {
-            Referer: `${BASE_URL}/`,
-            Origin: BASE_URL,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-        }).catch(() => null)
-      )
-    }
-
-    if (streamPromises.length === 0) return []
-
-    // Résoudre les streams en parallèle (limité à 4 pour le budget)
-    const batch = streamPromises.slice(0, 4)
-    const resolved = await Promise.allSettled(batch)
-    const streams = resolved
-      .filter(r => r.status === 'fulfilled' && r.value && r.value.url)
-      .map(r => r.value)
-
-    return streams
+    console.log(`[Otakufr] No player iframe found in episode page`)
+    return []
   } catch (e) {
     console.warn(`[Otakufr] Episode stream extraction failed: ${e?.message}`)
     return []
@@ -771,7 +755,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
   const detectedLang = episodeUrl.includes('-vf') ? 'VF' : 'VOSTFR'
   const streams = await extractStreamsFromEpisode(episodeUrl, detectedLang, startTime)
 
-  const validStreams = streams.filter(s => s && s.url)
+  const validStreams = streams.filter(s => s && s.isDirect)
   console.log(`[Otakufr] Total streams: ${validStreams.length}`)
 
   return sortStreamsByLanguage(validStreams)

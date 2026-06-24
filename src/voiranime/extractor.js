@@ -269,8 +269,109 @@ async function searchAnime(title, season = 1) {
     if (results.length > 0) return results;
   }
 
+  // --- STEP 1.5: Alternative slugs (short keywords, compacted Japanese) ---
+  // Certains sites utilisent des slugs radicalement différents du titre TMDB.
+  // On essaie des variantes plus courtes basées sur les mots-clés distinctifs.
+  if (results.length === 0 && !isProbeBudgetExhausted()) {
+    const words = title.split(/\s+/).filter(w => w.length > 2)
+    const altSlugs = []
+    
+    // Variante 1: Enlever les mots trop génériques du début
+    const skipPrefixes = ['dealing', 'with', 'the', 'my', 'that', 'this', 'dans', 'and', 'of', 'a', 'an']
+    const filtered = words.filter(w => !skipPrefixes.includes(w.toLowerCase()))
+    if (filtered.length >= 2 && filtered.length < words.length) {
+      altSlugs.push(filtered.join('-'))
+    }
+    
+    // Variante 2: Dernier mot long + avant-dernier mot long
+    const longWords = words.filter(w => w.length >= 4)
+    if (longWords.length >= 2) {
+      altSlugs.push(longWords.slice(0, 3).join('-'))
+    }
+    
+    // Variante 3: Juste les mots distinctifs (2-3 mots longs)
+    if (longWords.length >= 2) {
+      altSlugs.push(longWords.slice(-2).join('-'))
+    }
+    
+    // Variante 4: Version compactée pour les titres japonais
+    // Ex: "Mikadono San Shimai wa Angai Choroi" → "mikadono-sanshimai-wa-angai-choroi"
+    // Certains sites écrivent les composés japonais en un seul mot ("sanshimai")
+    // alors que TMDB les sépare ("san shimai"). On génère plusieurs variantes :
+    // - chaque mot court collé individuellement au mot suivant
+    // - tous les mots courts collés en une fois
+    const compactWords = title.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[':!.,?()\[\]]/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+    
+    if (compactWords.length >= 3) {
+      // Trouver les positions des mots courts (≤3 lettres, pas le dernier)
+      const shortPos = []
+      for (let i = 0; i < compactWords.length - 1; i++) {
+        if (compactWords[i].length <= 3) shortPos.push(i)
+      }
+      
+      if (shortPos.length > 0) {
+        const compactVariants = []
+        
+        // Variante: coller chaque mot court individuellement
+        for (const pos of shortPos) {
+          const parts = [...compactWords]
+          parts[pos] = parts[pos] + parts[pos + 1]
+          parts.splice(pos + 1, 1)
+          compactVariants.push(parts.join('-'))
+        }
+        
+        // Variante: coller TOUS les mots courts
+        if (shortPos.length > 1) {
+          const parts = [...compactWords]
+          let offset = 0
+          for (const pos of shortPos) {
+            const actualPos = pos - offset
+            parts[actualPos] = parts[actualPos] + parts[actualPos + 1]
+            parts.splice(actualPos + 1, 1)
+            offset++
+          }
+          compactVariants.push(parts.join('-'))
+        }
+        
+        // Ajouter les variantes uniques et différentes du slug normal
+        for (const v of [...new Set(compactVariants)]) {
+          if (v !== baseSlug && v.length > 5) {
+            altSlugs.push(v)
+            altSlugs.push(v + '-vf')
+          }
+        }
+      }
+    }
+    
+    // Prober les slugs alternatifs uniques
+    const uniqueAltSlugs = [...new Set(altSlugs.filter(s => s && s.length > 3))]
+    if (uniqueAltSlugs.length > 0) {
+      console.log(`[VoirAnime] Trying ${uniqueAltSlugs.length} alt slug(s): ${uniqueAltSlugs.slice(0, 3).join(', ')}...`)
+      const altUrls = uniqueAltSlugs.flatMap(s => [
+        `${BASE_URL}/anime/${s}/`,
+        `${BASE_URL}/anime/${s}-vf/`,
+      ])
+      const validAltUrls = await batchProbe(altUrls, 2, 200)
+      
+      if (validAltUrls.length > 0) {
+        console.log(`[VoirAnime] Alt slugs found: ${validAltUrls}`)
+        validAltUrls.forEach(url => {
+          const lang = url.includes('-vf') ? 'VF' : 'VOSTFR'
+          results.push({ title: `${title} [alt]`, url })
+        })
+        return results
+      }
+    }
+  }
+
   // --- STEP 2: WordPress search (15s timeout) ---
-  if (!isProbeBudgetExhausted()) {
+  if (results.length === 0 && !isProbeBudgetExhausted()) {
     const searchResults = await wordpressSearch(title, season);
     for (const r of searchResults) {
       const lang = r.url.includes('-vf') ? 'VF' : 'VOSTFR';
@@ -279,6 +380,38 @@ async function searchAnime(title, season = 1) {
       }
     }
     if (results.length > 0) return results;
+  }
+
+  // --- STEP 3: WordPress search with short keywords ---
+  // Si la recherche avec le titre complet n'a rien donné, essayer avec
+  // des mots-clés courts (le moteur de recherche WP est parfois meilleur
+  // avec des termes précis qu'avec des titres longs).
+  if (results.length === 0 && !isProbeBudgetExhausted()) {
+    const longWords = title.split(/\s+/).filter(w => w.length > 2)
+    const keywordQueries = [
+      longWords.slice(-2).join(' '),  // 2 derniers mots longs
+      longWords.slice(0, 2).join(' '), // 2 premiers mots longs
+      longWords.filter(w => w.length >= 4).slice(0, 2).join(' '), // mots très distinctifs
+    ]
+    
+    const seenQueries = new Set()
+    for (const query of keywordQueries) {
+      if (!query || seenQueries.has(query.toLowerCase()) || isProbeBudgetExhausted()) continue
+      seenQueries.add(query.toLowerCase())
+      
+      console.log(`[VoirAnime] Keyword WP search: "${query}"`)
+      const searchResults = await wordpressSearch(query, season)
+      for (const r of searchResults) {
+        const lang = r.url.includes('-vf') ? 'VF' : 'VOSTFR'
+        if (!results.some(ex => ex.url === r.url)) {
+          results.push({ ...r, title: `${r.title}` })
+        }
+      }
+      if (results.length > 0) {
+        console.log(`[VoirAnime] Keyword WP search "${query}" found ${results.length} result(s)`)
+        return results
+      }
+    }
   }
 
   return [];

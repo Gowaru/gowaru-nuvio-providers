@@ -1134,6 +1134,46 @@ export async function resolvePackedPlayer(url) {
     return { url };
 }
 
+export async function resolveLecteurVideo(url) {
+    // lecteurvideo.com: embed player WordPress/WP theme.
+    // Format: /embed.php?id={id}&tp={type}&url={referrer}
+    // Le paramètre `url` est le nom du site référant (ex: wookafr.tel).
+    // La page contient généralement un player JS avec l'URL vidéo encodée.
+    try {
+        const origin = url.match(/^https?:\/\/[^/]+/)?.[0] || 'https://lecteurvideo.com';
+        const res = await safeFetch(url, { headers: { 'Referer': origin + '/', 'Origin': origin } });
+        if (!res) return { url };
+        let html = await res.text();
+        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
+
+        // Recherche dans l'ordre : file:, sources:, src:, puis URLs directes m3u8/mp4
+        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
+                      html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                      html.match(/['"]?url['"]?\s*[:=]\s*['"]([^"']+\/videos\/[^"']+\.[^"']+)['"]/i) ||
+                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+
+        if (match) {
+            let videoUrl = match[1] || match[0];
+            if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
+            if (!isKnownFakeDirectUrl(videoUrl)) {
+                return { url: videoUrl, headers: { 'Referer': origin + '/' } };
+            }
+        }
+
+        // Chercher un iframe vers un autre hébergeur (sibnet, sendvid, etc.)
+        const iframeMatch = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
+        if (iframeMatch) {
+            const iframeSrc = iframeMatch[1];
+            if (!iframeSrc.includes('lecteurvideo.com') && !iframeSrc.includes('youtube.com') && !iframeSrc.includes('googlevideo.com')) {
+                return { url: iframeSrc, headers: { 'Referer': origin + '/' } };
+            }
+        }
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveDownParadise(url) {
     // down-paradise.com: Parked domain with multi-level anti-bot redirect chain
     // (parklogic -> ww1.down-paradise -> tratobid.com). Unresolvable without a browser.
@@ -1153,6 +1193,155 @@ export async function resolveUp4fun(url) {
         if (videoMatch) return { url: videoMatch[1], headers: { 'Referer': 'https://up4fun.top/' } };
     } catch (e) {}
     return null; // null = don't retry in generic fallback
+}
+
+// ─── Deformed Domain Correction ──────────────────────────────────────────────
+// Certains sites (notamment VoirAnime) déforment délibérément les noms de
+// domaine des hébergeurs vidéo dans les iframes retournés par leur player PHP,
+// afin de contourner les bloqueurs de pub / adblock.
+//
+// Exemples observés :
+//   streamtape.com  → stredamtape.com, streamtapde.com, streamtape.cdom
+//   get_video       → get_viddeo
+//
+// Le principe de détection : pour chaque hôte connu, on vérifie si les
+// caractères du nom de base (sans TLD) apparaissent dans le même ordre dans
+// le domaine déformé (séquence croissante). Si le ratio de correspondance
+// dépasse 75 % et que la longueur est proche, on considère que c'est une
+// déformation et on remplace par le domaine correct.
+
+const KNOWN_HOST_NAMES = [
+    { name: 'streamtape', domain: 'streamtape.com' },
+    { name: 'sibnet', domain: 'sibnet.ru' },
+    { name: 'vidmoly', domain: 'vidmoly.biz' },
+    { name: 'uqload', domain: 'uqload.co' },
+    { name: 'voe', domain: 'voe.sx' },
+    { name: 'dood', domain: 'dood.to' },
+    { name: 'younetu', domain: 'younetu.org' },
+    { name: 'netu', domain: 'netu.tv' },
+    { name: 'vidoza', domain: 'vidoza.net' },
+    { name: 'sendvid', domain: 'sendvid.com' },
+    { name: 'myvi', domain: 'myvi.ru' },
+    { name: 'moon', domain: 'filemoon.sx' },
+    { name: 'luluvid', domain: 'luluvid.com' },
+    { name: 'fsvid', domain: 'fsvid.lol' },
+    { name: 'vidzy', domain: 'vidzy.live' },
+    { name: 'lecteurvideo', domain: 'lecteurvideo.com' },
+    { name: 'vidhsareup', domain: 'vidhsareup.fun' },
+    { name: 'hgcloud', domain: 'hgcloud.xyz' },
+    { name: 'up4fun', domain: 'up4fun.top' },
+    { name: 'lulu', domain: 'luluvdo.com' },
+];
+
+/**
+ * Corrige les domaines déformés dans une URL.
+ * Détecte les déformations par séquence de caractères et patterns connus.
+ *
+ * @param {string} url - URL potentiellement déformée
+ * @returns {string} URL corrigée (inchangée si aucune déformation détectée)
+ */
+function correctDeformedVideoUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+
+    const urlMatch = url.match(/^https?:\/\/([^\/]+)(.*)/);
+    if (!urlMatch) return url;
+
+    const fullDeformedDomain = urlMatch[1].toLowerCase();
+
+    // Extraire le nom d'hôte principal (ex: "stredamtape" depuis "cdn.stredamtape.com")
+    // On prend l'avant-dernière partie du domaine séparé par points
+    const domainParts = fullDeformedDomain.split('.');
+    const deformedBase = domainParts.length >= 2
+        ? domainParts[domainParts.length - 2]
+        : domainParts[0];
+
+    // Vérifier si le domaine est déjà un sous-domaine valide d'un hôte connu
+    // Ex: "cdn.streamtape.com" → ne PAS corriger le domaine (préserver le sous-domaine)
+    const isKnownSubdomain = KNOWN_HOST_NAMES.some(h =>
+        fullDeformedDomain.endsWith('.' + h.domain)
+    );
+
+    let correctedUrl = url;
+    let domainCorrected = isKnownSubdomain; // skip domain correction if already valid subdomain
+
+    // 1. Vérifier si le nom de base (sans TLD) est déjà présent en substring
+    // Ex: "streamtape.cdom" → deformedBase="streamtape", qui contient "streamtape"
+    if (!domainCorrected) {
+        for (const host of KNOWN_HOST_NAMES) {
+            if (deformedBase.includes(host.name)) {
+                const lenDiff = Math.abs(deformedBase.length - host.name.length);
+                if (lenDiff <= 4) {
+                    console.log(`[Resolver] Domain corrected (direct): ${fullDeformedDomain} → ${host.domain}`);
+                    correctedUrl = correctedUrl.replace(fullDeformedDomain, host.domain);
+                    domainCorrected = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 2. Vérifier par séquence de caractères (match fuzzy)
+    // Parcourt chaque caractère du nom connu dans l'ordre, et le cherche
+    // dans le domaine déformé en avançant. Permet de détecter les
+    // insertions/substitutions comme stredamtape → streamtape.
+    if (!domainCorrected) {
+        for (const host of KNOWN_HOST_NAMES) {
+            const knownBase = host.name;
+            if (knownBase.length < 5) continue;
+
+            let matches = 0;
+            let j = 0;
+            for (let i = 0; i < knownBase.length; i++) {
+                const target = knownBase[i];
+                while (j < deformedBase.length && deformedBase[j] !== target) {
+                    j++;
+                }
+                if (j < deformedBase.length) {
+                    matches++;
+                    j++;
+                } else {
+                    break;
+                }
+            }
+
+            const ratio = matches / knownBase.length;
+            if (ratio >= 0.75) {
+                const lenDiff = Math.abs(deformedBase.length - knownBase.length);
+                if (lenDiff <= 4) {
+                    console.log(`[Resolver] Domain corrected (fuzzy ${Math.round(ratio * 100)}%): ${fullDeformedDomain} → ${host.domain}`);
+                    correctedUrl = correctedUrl.replace(fullDeformedDomain, host.domain);
+                    domainCorrected = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 3. TOUJOURS corriger les patterns de chemin connus (ex: get_viddeo → get_video)
+    // Indépendamment de la correction domaine, car même avec le bon domaine,
+    // le chemin peut être déformé (ex: /gdet_video/, /get_viddeo/).
+    const PATH_CORRECTIONS = [
+        [/get_viddeo/gi, 'get_video'],
+        [/get_videeo/gi, 'get_video'],
+        [/getv_video/gi, 'get_video'],
+        [/gdet_video/gi, 'get_video'],
+        [/gett_video/gi, 'get_video'],
+        [/get_vvdo/gi, 'get_video'],
+        [/get_vide0/gi, 'get_video'],
+    ];
+
+    const beforePath = correctedUrl;
+    for (const [pattern, replacement] of PATH_CORRECTIONS) {
+        correctedUrl = correctedUrl.replace(pattern, replacement);
+    }
+
+    if (domainCorrected) {
+        console.log(`[Resolver] Result: ${url.slice(0, 80)} → ${correctedUrl.slice(0, 80)}`);
+    } else if (correctedUrl !== url) {
+        console.log(`[Resolver] Path corrected: ${url.slice(0, 60)}`);
+    }
+
+    return correctedUrl;
 }
 
 // ─── resolveStream optimizations ────────────────────────────────────────────
@@ -1244,6 +1433,12 @@ export async function resolveStream(stream, depth = 0) {
     if (depth > 1) return { ...stream, isDirect: false }; // Max 1 recursive peel for TV timeouts
     if (depth === 0) peeledUrls.clear(); // Fresh cache per top-level call
 
+    // Corriger les domaines déformés AVANT le routage vers les résolveurs
+    // Certains sites (VoirAnime, French-Manga) déforment les noms de domaine
+    // pour contourner les bloqueurs. Voir correctDeformedVideoUrl() ci-dessus.
+    // On remplace stream.url par la version corrigée pour que tout le routage
+    // utilise le bon domaine.
+    stream.url = correctDeformedVideoUrl(stream.url);
     const originalUrl = stream.url;
     const urlLower = originalUrl.toLowerCase();
     
@@ -1279,15 +1474,23 @@ export async function resolveStream(stream, depth = 0) {
             urlLower.includes('veev.')
         ) result = await resolvePackedPlayer(originalUrl);
         else if (urlLower.includes('lulu.')) result = await resolveLuluvid(originalUrl);
+        else if (urlLower.includes('lecteurvideo.')) result = await resolveLecteurVideo(originalUrl);
         else if (urlLower.includes('hgcloud.') || urlLower.includes('savefiles.')) result = await resolveHGCloud(originalUrl);
         else if (urlLower.includes('down-paradise.') || urlLower.includes('ww1.down-paradise.')) result = await resolveDownParadise(originalUrl);
         else if (urlLower.includes('up4fun.')) result = await resolveUp4fun(originalUrl);
         
         // If a specific resolver found a different URL, it's the final direct link
         if (result && result.url !== originalUrl && !isKnownFakeDirectUrl(result.url)) {
+            // Appliquer aussi la correction de domaine à l'URL de sortie du résolveur
+            // Car même avec le bon domaine d'entrée, la page peut servir la vidéo
+            // depuis un domaine déformé (ex: streamtape.com → streamtape.dcom)
+            const finalUrl = correctDeformedVideoUrl(result.url);
+            if (finalUrl !== result.url) {
+                console.log(`[Resolver] Resolver output corrected: ${result.url.slice(0, 60)} → ${finalUrl.slice(0, 60)}`);
+            }
             return {
                 ...stream,
-                url: result.url,
+                url: finalUrl,
                 headers: { ...stream.headers, ...(result.headers || {}) },
                 isDirect: true,
                 originalUrl: originalUrl
@@ -1312,8 +1515,8 @@ export async function resolveStream(stream, depth = 0) {
                 let html = await res.text();
                 if (html.includes('p,a,c,k,e,d')) html = unpack(html);
 
+                // Suivre les redirections JS window.location
                 if (!skipDirectScan) {
-                    // Follow JS window.location redirects
                     const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
                     if (jsRedirect && jsRedirect[1] !== originalUrl) {
                         const res2 = await safeFetch(jsRedirect[1], { headers: stream.headers });
@@ -1322,16 +1525,39 @@ export async function resolveStream(stream, depth = 0) {
                             if (html.includes('p,a,c,k,e,d')) html = unpack(html);
                         }
                     }
+                }
 
-                    const directUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) ||
-                                     html.match(/https?:\/\/[^"']+\.mp4[^"']*/) ||
-                                     html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+                // ÉTAPE 1: Toujours essayer le peeling d'iframe en premier (plus fiable)
+                // Les iframes vidéo sont plus fiables que les regex qui peuvent matcher
+                // des URLs dans des pubs, analytics, ou JSON configs non-liés à la vidéo.
+                // On ne revient du peeling que si l'iframe a été résolu ou qu'on a depth > 1.
+                // Dans ce dernier cas, on continue vers les regex strictes qui peuvent
+                // parfois extraire l'URL directe manquée par le peeling.
+                const iframeUrl = findBestVideoIframe(html, originalUrl);
+
+                if (iframeUrl && !peeledUrls.has(iframeUrl)) {
+                    peeledUrls.add(iframeUrl);
+                    console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
+                    const peeledResult = await resolveStream({ ...stream, url: iframeUrl }, depth + 1);
+                    // Si le peeling a réussi (isDirect: true) ou si on a depth=1,
+                    // on retourne le résultat. Si depth>1 et isDirect: false, on continue
+                    // vers les regex comme fallback.
+                    if (peeledResult && peeledResult.isDirect) return peeledResult;
+                    if (depth > 0) return peeledResult;
+                    // depth=0 et peeling a échoué → continuer vers les regex
+                }
+
+                // ÉTAPE 2: Patterns stricts avec contexte vidéo (file:, sources:, hls:)
+                // Ces patterns ne matchent que quand l'URL est dans un contexte vidéo,
+                // pas de faux positifs avec pubs/analytics.
+                if (!skipDirectScan) {
+                    const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                                      html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                                      html.match(/'hls'\s*:\s*'([^']+)'/) ||
                                      html.match(/"hls"\s*:\s*"([^"]+)"/);
 
-                    if (directUrl) {
-                        let extractedUrl = directUrl[1] || directUrl[0];
+                    if (strictUrl) {
+                        let extractedUrl = strictUrl[1] || strictUrl[0];
                         if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
 
                         const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
@@ -1342,23 +1568,38 @@ export async function resolveStream(stream, depth = 0) {
                     }
                 }
 
-                if (!result) {
-                    // Smart iframe detection: ignore les pubs, priorise les vidéos
-                    const iframeUrl = findBestVideoIframe(html, originalUrl);
+                // ÉTAPE 3: Dernier recours — regex larges .m3u8/.mp4
+                // Uniquement si les étapes 1 et 2 n'ont rien trouvé.
+                // Ces patterns sont dangereux car ils matchent N'IMPORTE QUELLE URL
+                // contenant .m3u8 ou .mp4, y compris dans les pubs/analytics.
+                if (!result && !skipDirectScan) {
+                    const looseUrl = html.match(/https?:\/\/[^"']+\.m3u8[^"']*/) ||
+                                    html.match(/https?:\/\/[^"']+\.mp4[^"']*/);
 
-                    if (iframeUrl && !peeledUrls.has(iframeUrl)) {
-                        peeledUrls.add(iframeUrl);
-                        console.log(`[Resolver] Peeling: Found nested iframe -> ${iframeUrl}`);
-                        return await resolveStream({ ...stream, url: iframeUrl }, depth + 1);
+                    if (looseUrl) {
+                        let extractedUrl = looseUrl[0];
+                        if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
+
+                        const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
+
+                        if (extractedUrl.startsWith('http') && !extractedUrl.includes(BASE_URL_FORBIDDEN_PATTERN) && !isInvalidExtension && !isKnownFakeDirectUrl(extractedUrl)) {
+                            console.log(`[Resolver] Loose URL match (last resort): ${extractedUrl.slice(0, 80)}`);
+                            result = { url: extractedUrl };
+                        }
                     }
                 }
             }
         }
 
         if (result && result.url !== originalUrl && result.url.startsWith('http') && !isKnownFakeDirectUrl(result.url)) {
+            // Appliquer aussi la correction de domaine à l'URL de sortie du fallback
+            const finalUrl = correctDeformedVideoUrl(result.url);
+            if (finalUrl !== result.url) {
+                console.log(`[Resolver] Generic fallback output corrected: ${result.url.slice(0, 60)} → ${finalUrl.slice(0, 60)}`);
+            }
             return {
                 ...stream,
-                url: result.url,
+                url: finalUrl,
                 headers: { ...stream.headers, ...(result.headers || {}) },
                 isDirect: true,
                 originalUrl: originalUrl

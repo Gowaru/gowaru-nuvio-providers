@@ -54,7 +54,7 @@
       "id": "flemmix",
       "name": "Flemmix",
       "description": "Films et séries en streaming VF/VOSTFR sur Flemmix.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -296,7 +296,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -386,7 +386,7 @@
       "id": "animesama-co",
       "name": "AnimeSama.co (DLE Mirror)",
       "description": "Animes VF et VOSTFR en streaming sur AnimeSama.co (miroir DLE).",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -410,7 +410,7 @@
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -434,7 +434,7 @@
       "id": "otakufr",
       "name": "Otakufr",
       "description": "Animes VF et VOSTFR en streaming sur Otakufr (WordPress).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "Gowaru",
       "supportedTypes": [
         "tv"

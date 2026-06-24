@@ -191,7 +191,6 @@ async function resolveWithTimeout(stream) {
   try {
     const resolved = await resolveStream(stream)
     if (resolved && resolved.url && resolved.isDirect) return resolved
-    if (resolved && resolved.url && !resolved.isDirect) return { ...resolved, isDirect: true }
     return null
   } catch {
     return null
@@ -209,7 +208,7 @@ async function createStreamsFromServers(servers, name, subType) {
       return { ...stream, provider: 'flemmix' }
     })
   )
-  return results.filter(r => r.status === 'fulfilled').map(r => r.value)
+  return results.filter(r => r.status === 'fulfilled').map(r => r.value).filter(s => s && s.isDirect)
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode) {

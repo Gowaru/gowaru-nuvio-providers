@@ -201,6 +201,97 @@ async function searchAnime(titles) {
     }
   }
 
+  // Step 3: Direct slug probing with compacted Japanese variants
+  // Les titres japonais de TMDB séparent souvent les mots ("San Shimai")
+  // alors que les sites les écrivent en un seul bloc ("Sanshimai").
+  // On essaie des slugs générés avec des mots compacts.
+  const firstTitle = titles[0]
+  if (firstTitle) {
+    // Générer des slugs compactés (coller les mots de ≤3 lettres au mot suivant)
+    const compactedSlugs = []
+    const normalizeForSlug = (t) => t
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[':!.,?()\[\]]/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+    
+    for (const t of titles.slice(0, 3)) {
+      const normalized = normalizeForSlug(t)
+      if (!normalized) continue
+      
+      // Slug normal: avec tirets standards
+      const normalSlug = normalized.replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+      
+      // Slug compacté: générer plusieurs variantes de fusion
+      // Ex: "Mikadono San Shimai wa Angai Choroi" → plusieurs slugs candidats
+      // dont "mikadono-sanshimai-wa-angai-choroi" (un mot court collé au suivant)
+      const words = normalized.split(/\s+/).filter(Boolean)
+      if (words.length >= 3) {
+        // Trouver les positions des mots courts (≤3 lettres, pas le dernier)
+        const shortPos = []
+        for (let i = 0; i < words.length - 1; i++) {
+          if (words[i].length <= 3) shortPos.push(i)
+        }
+        
+        if (shortPos.length > 0) {
+          const variants = []
+          
+          // Variante: coller chaque mot court individuellement au suivant
+          for (const pos of shortPos) {
+            const parts = [...words]
+            parts[pos] = parts[pos] + parts[pos + 1]
+            parts.splice(pos + 1, 1)
+            variants.push(parts.join('-'))
+          }
+          
+          // Variante: coller TOUS les mots courts
+          if (shortPos.length > 1) {
+            const parts = [...words]
+            let offset = 0
+            for (const pos of shortPos) {
+              const actualPos = pos - offset
+              parts[actualPos] = parts[actualPos] + parts[actualPos + 1]
+              parts.splice(actualPos + 1, 1)
+              offset++
+            }
+            variants.push(parts.join('-'))
+          }
+          
+          // Ajouter les variantes uniques et différentes du slug normal
+          for (const v of [...new Set(variants)]) {
+            if (v && v !== normalSlug && v.length > 3) {
+              compactedSlugs.push(v)
+            }
+          }
+        }
+      }
+    }
+    
+    if (compactedSlugs.length > 0) {
+      const uniqueSlugs = [...new Set(compactedSlugs)]
+      console.log(`[VoiranimeRip] Trying ${uniqueSlugs.length} compacted slug(s): ${uniqueSlugs.slice(0, 3).join(', ')}...`)
+      
+      for (const slug of uniqueSlugs) {
+        try {
+          const url = `${SITE.BASE_URL}/${slug}/`
+          const html = await fetchText(url, { timeout: 3000 })
+          if (html && html.length > 200) {
+            console.log(`[VoiranimeRip] Compacted slug match: /${slug}/`)
+            return [{
+              url,
+              slug,
+              title: slug.replace(/-/g, ' '),
+              score: 100,
+            }]
+          }
+        } catch (e) {
+          console.log(`[VoiranimeRip] Compacted slug /${slug}/ → not found`)
+        }
+      }
+    }
+  }
+
   return []
 }
 
@@ -339,8 +430,8 @@ async function extractMoviePageStreams(match, subType) {
       }
     }
 
-    console.log(`[VoiranimeRip] Movie: ${streams.length} streams`)
-    return streams
+    console.log(`[VoiranimeRip] Movie: ${streams.length} streams (${streams.filter(s => s && s.isDirect).length} direct)`)
+    return streams.filter(s => s && s.isDirect)
   } catch (e) {
     console.warn(`[VoiranimeRip] Movie extraction failed: ${e.message}`)
   }
@@ -480,8 +571,8 @@ async function extractEpisodeStreams(match, season, episode, subType) {
       }
     }
 
-    console.log(`[VoiranimeRip] Episode S${season}E${episode}: ${streams.length} streams`)
-    return streams
+    console.log(`[VoiranimeRip] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter(s => s && s.isDirect).length} direct)`)
+    return streams.filter(s => s && s.isDirect)
   } catch (e) {
     console.warn(`[VoiranimeRip] Episode extraction failed: ${e.message}`)
   }

@@ -348,8 +348,8 @@ async function extractEpisodeStreams(match, season, episode, subType) {
       }
     }
 
-    console.log(`[AnimeSamaCo] Episode S${season}E${episode}: ${streams.length} streams`)
-    return streams
+    console.log(`[AnimeSamaCo] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter(s => s.isDirect).length} direct)`)
+    return streams.filter(s => s && s.isDirect)
   } catch (e) {
     console.warn(`[AnimeSamaCo] Episode extraction failed: ${e.message}`)
   }
