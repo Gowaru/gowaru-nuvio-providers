@@ -1267,6 +1267,24 @@ function correctDeformedVideoUrl(url) {
         fullDeformedDomain.endsWith('.' + h.domain)
     );
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Vérification 2 : Si le domaine a PLUS DE 2 parties (ex: u14.vidzy.cc),
+    // c'est un sous-domaine potentiellement valide. On ne corrige que si le
+    // nom de base (avant-dernière partie) ressemble à une déformation
+    // (caractères supplémentaires évidents), PAS si c'est un hostname standard.
+    //
+    // Exemples de vrais sous-domaines à NE PAS corriger :
+    //   u14.vidzy.cc       → skip (c'est un CDN subdomain, "u14" est un préfixe)
+    //   cdn.streamtape.com → skip (déjà détecté par isKnownSubdomain)
+    //
+    // Exemples de vrais domaines déformés à corriger :
+    //   stredamtape.com    → "stredamtape" a 11 chars vs "streamtape" 10 → corriger
+    //   streamtapde.com    → "streamtapde" a 11 chars vs "streamtape" 10 → corriger
+    //   vidzy.cdom         → "vidzy" = "vidzy" exact → corriger
+    //   vidhsareup.fun     → "vidhsareup" = "vidhsareup" exact → corriger
+    // ═══════════════════════════════════════════════════════════════════════
+    const isSubdomain = domainParts.length > 2
+
     let correctedUrl = url;
     let domainCorrected = isKnownSubdomain; // skip domain correction if already valid subdomain
 
@@ -1277,6 +1295,27 @@ function correctDeformedVideoUrl(url) {
             if (deformedBase.includes(host.name)) {
                 const lenDiff = Math.abs(deformedBase.length - host.name.length);
                 if (lenDiff <= 4) {
+                    // Si c'est un sous-domaine (ex: u14.vidzy.cc), ne corriger QUE si
+                    // le sous-domaine lui-même ressemble à une déformation
+                    // (ex: "uhd.vidzy.cc" n'est pas une déformation mais "stredamtape.example.com" oui)
+                    if (isSubdomain) {
+                        // Pour un sous-domaine, le nom de base doit être une déformation CLAIRE.
+                        // "vidzy" dans "u14.vidzy.cc" n'est pas une déformation car "vidzy" est
+                        // le nom exact. On skip si deformedBase === host.name (pas de déformation)
+                        if (deformedBase === host.name) {
+                            // Skip: c'est probablement un vrai sous-domaine CDN valide
+                            continue
+                        }
+                        // Vérification supplémentaire: le préfixe (première partie) ne doit pas
+                        // ressembler à un identifiant CDN (chiffres, lettres courtes)
+                        const prefix = domainParts[domainParts.length - 3]
+                        if (/^[a-z0-9]{1,6}$/i.test(prefix)) {
+                            // Ex: "u14" dans "u14.vidzy.cc" → préfixe CDN, skip
+                            // Ex: "cdn" dans "cdn.vidmoly.com" → préfixe CDN, skip
+                            console.log(`[Resolver] Subdomain skip (CDN prefix "${prefix}"): ${fullDeformedDomain} → NOT corrected`)
+                            continue
+                        }
+                    }
                     console.log(`[Resolver] Domain corrected (direct): ${fullDeformedDomain} → ${host.domain}`);
                     correctedUrl = correctedUrl.replace(fullDeformedDomain, host.domain);
                     domainCorrected = true;
@@ -1290,7 +1329,9 @@ function correctDeformedVideoUrl(url) {
     // Parcourt chaque caractère du nom connu dans l'ordre, et le cherche
     // dans le domaine déformé en avançant. Permet de détecter les
     // insertions/substitutions comme stredamtape → streamtape.
-    if (!domainCorrected) {
+    // ⚠ Ne s'applique PAS aux sous-domaines (ex: u14.vidzy.cc) pour éviter
+    //    les faux positifs avec des CDNs valides.
+    if (!domainCorrected && !isSubdomain) {
         for (const host of KNOWN_HOST_NAMES) {
             const knownBase = host.name;
             if (knownBase.length < 5) continue;

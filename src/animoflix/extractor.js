@@ -426,8 +426,14 @@ async function extractMovieStreams(slug, seasonHref) {
         );
         for (const r of langResults) {
             if (r.status === 'fulfilled' && r.value) {
-                streams.push(...r.value);
-                break;
+                // ⚠ Filtrer UNIQUEMENT les streams réellement résolus (isDirect: true)
+                // Les streams non-résolus (isDirect: false) ont des URLs d'embed
+                // qui ne peuvent pas être lues par ExoPlayer
+                const validStreams = (r.value || []).filter(s => s && s.isDirect)
+                if (validStreams.length > 0) {
+                    streams.push(...validStreams);
+                    break;
+                }
             }
         }
     }

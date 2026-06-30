@@ -41,7 +41,14 @@ function scoreMatch(resultTitle, searchTitle) {
   const words = cleanNt.split(/\s+/).filter(w => w.length > 2)
   const rWords = new Set(cleanNr.split(/\s+/))
   const matched = words.filter(w => rWords.has(w)).length
-  if (words.length > 0) return Math.round((matched / words.length) * 50)
+  if (words.length > 0) {
+    // Anti-false-positive: si la recherche a ≥2 mots significatifs mais que
+    // le résultat en partage < 2, c'est probablement une série différente
+    // Ex: "Law & Order" → mots=["law","order"] cherche "Police in a Pod" → matched=0 → reject
+    // Ex: "One Piece" → mots=["one","piece"] cherche "One Piece Saison 2" → matched=2 → OK
+    if (words.length >= 2 && matched < 2) return 0
+    return Math.round((matched / words.length) * 50)
+  }
   return 0
 }
 
@@ -62,8 +69,15 @@ function bestMatch(items, title, targetSeason) {
       const ts = parseInt(targetSeason)
       const rs = item.season
       if (rs === ts) score += 40
-      else if (rs && Math.abs(rs - ts) === 1) score += 10
-      else if (rs && rs !== ts) score -= 20
+      else if (rs && Math.abs(rs - ts) === 1) {
+        // Adjacent seasons: only slight bonus if within 1, but heavy penalty if wrong
+        // e.g. searching S1 but matching S2 → should NOT match if S1 exists
+        score -= 60
+      }
+      else if (rs && rs !== ts) {
+        // Wrong season: disqualifier-level penalty
+        score -= 80
+      }
     }
     if (score > bestScore) { bestScore = score; best = item }
   }
@@ -413,11 +427,56 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
   const targetSeasonNum = parseInt(effectiveSeason) || 1
   const targetEpisodeNums = await resolveTargetEpisodes(tmdbId, mediaType, season, episode)
 
-  const match = await trySearch(titles, targetSeasonNum)
+  let match = await trySearch(titles, targetSeasonNum)
   if (!match) {
     console.warn(`[FrenchManga] Series not found for TMDB ${tmdbId}`)
     return []
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Season verification & retry
+  // Si le match trouvé a une saison inconnue ou différente de celle demandée,
+  // on relance une recherche spécifique avec le titre de base + "Saison N"
+  // pour essayer de trouver la bonne page.
+  // Ex: "One Piece" S1 → match trouve "One Piece Film - Red" (season=null)
+  //   → retry avec "One Piece Saison 1"
+  // Ex: "One Piece" S1 → match trouve "One Piece Saison 2" (season=2 ≠ 1)
+  //   → retry avec "One Piece Saison 1"
+  // ═══════════════════════════════════════════════════════════════════════════
+  const needsSeasonRetry = targetSeasonNum >= 1 && (
+    match.season == null ||          // season inconnue (ex: "Film - Red")
+    match.season !== targetSeasonNum // saison différente (ex: S2 au lieu de S1)
+  )
+
+  if (needsSeasonRetry) {
+    console.log(`[FrenchManga] Season check: match.season=${match.season}, target=${targetSeasonNum}, searching specific...`)
+
+    // Une seule tentative suffit : tous les stripSeasonSuffix(title) donnent le même base
+    const baseTitle = stripSeasonSuffix(titles[0])
+    const seasonQuery = `${baseTitle} Saison ${targetSeasonNum}`
+    console.log(`[FrenchManga] Season search: "${seasonQuery}"`)
+
+    try {
+      const html = await ajaxSearch(seasonQuery, { timeout: TIMEOUTS.SEARCH })
+      if (html && html.length > 50) {
+        const results = parseSearchResults(html)
+        if (results.length > 0) {
+          const seasonMatch = bestMatch(results, titles[0], targetSeasonNum)
+          if (seasonMatch && seasonMatch.season === targetSeasonNum) {
+            console.log(`[FrenchManga] ✅ Season search matched: "${seasonMatch.title}" (S${seasonMatch.season})`)
+            match = seasonMatch
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[FrenchManga] Season search failed for "${seasonQuery}": ${e.message}`)
+    }
+
+    if (match.season !== targetSeasonNum) {
+      console.log(`[FrenchManga] ⚠ Season search didn't find S${targetSeasonNum}, using original match`)
+    }
+  }
+
   console.log(`[FrenchManga] Series match: ${match.title} -> ${match.url} (newsid: ${match.newsid})`)
 
   try {

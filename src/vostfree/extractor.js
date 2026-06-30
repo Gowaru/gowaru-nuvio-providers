@@ -127,44 +127,61 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     if (mediaType === 'tv' && targetEpisodes.length > 0 && !isBudgetExhausted(startTime, BUDGET_MS)) {
         targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
     }
+    // Fix #1: Mettre l'épisode absolu en PRIORITÉ dans la recherche au selecteur.
+    // Pour One Piece S2E1: targetEpisodes = [1, 9] → on essaie [9, 1] pour trouver l'épisode 9 d'abord
+    const episodeStrs = targetEpisodes.map(e => String(e));
+    if (episodeStrs.length > 1 && episodeStrs[0] !== episodeStrs[1]) {
+        // Swap: l'épisode absolu (index 1) devient prioritaire
+        episodeStrs.reverse();
+    }
     // ------------------------------------
 
     let allMatches = [];
     const seenUrls = new Set();
-    // Search all titles in parallel
-    const searchResults = await Promise.allSettled(
-        titlesOrdered.slice(0, MAX_SEARCH_TITLES).map(title => {
-            if (title.length > 60) return Promise.resolve([]);
-            if (title.length < MIN_QUERY_LENGTH) return Promise.resolve([]);
-            const n = normalize(title);
-            if (!n) return Promise.resolve([]);
-            return searchAnime(title).then(batch => batch || []);
-        })
-    );
-    for (const r of searchResults) {
-        if (r.status !== 'fulfilled' || r.value.length === 0) continue;
-        for (const m of r.value) {
-            if (!seenUrls.has(m.url)) {
-                seenUrls.add(m.url);
-                allMatches.push(m);
+    
+    // Fix #3: Limiter le parallélisme à 3 recherches à la fois avec early exit
+    const searchables = [];
+    for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
+        if (title.length > 60 || title.length < MIN_QUERY_LENGTH) continue;
+        const n = normalize(title);
+        if (!n) continue;
+        searchables.push(title);
+    }
+    
+    for (let i = 0; i < searchables.length && !isBudgetExhausted(startTime, BUDGET_MS); i += 3) {
+        const batch = searchables.slice(i, i + 3);
+        const batchResults = await Promise.allSettled(
+            batch.map(title => searchAnime(title).then(r => r || []))
+        );
+        for (const r of batchResults) {
+            if (r.status !== 'fulfilled' || r.value.length === 0) continue;
+            for (const m of r.value) {
+                if (!seenUrls.has(m.url)) {
+                    seenUrls.add(m.url);
+                    allMatches.push(m);
+                }
             }
+        }
+        // Early exit: si on a déjà des résultats, arrêter les recherches
+        if (allMatches.length > 0) {
+            console.log(`[Vostfree] Found ${allMatches.length} matches after ${i + batch.length}/${searchables.length} searches, stopping early`);
+            break;
         }
     }
     
-    // Fallback: if no match for the target season was found, try appending "Saison N"
-    const searchedNormalized = new Set();
-    if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
-        const hasSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
-        if (!hasSeasonMatch && allMatches.length > 0) {
-            console.log(`[Vostfree] ${allMatches.length} match(es) without explicit season — skipping fallback`);
-        } else if (!hasSeasonMatch) {
-            for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
-                if (title.length > 60) continue;
-                if (title.length < MIN_QUERY_LENGTH) continue;
-                const seasonQuery = `${title} Saison ${effectiveSeason}`;
-                const n = normalize(seasonQuery);
-                if (!n || searchedNormalized.has(n)) continue;
-                searchedNormalized.add(n);
+    // Fix #2: Fallback saison optimisé — 1 seule requête stratégique au lieu de 9+
+    if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
+        
+        if (!hasExplicitSeasonMatch) {
+            // Trouver le meilleur titre pour la recherche : 1er titre purement ASCII (ex: anglais/français)
+            // Évite les titres avec accents/signes diacritiques (ex: "Anh Hùng OnePunch")
+            const mainTitle = titlesOrdered.find(t => !/[^\x00-\x7F]/.test(t) && t.length >= MIN_QUERY_LENGTH) || 
+                              titlesOrdered.find(t => t.length >= MIN_QUERY_LENGTH) || 
+                              titlesOrdered[0];
+            if (mainTitle && mainTitle.length >= MIN_QUERY_LENGTH) {
+                const seasonQuery = `${mainTitle} Saison ${effectiveSeason}`;
+                console.log(`[Vostfree] Season fallback: "${seasonQuery}"`);
                 const batch = await searchAnime(seasonQuery);
                 if (batch && batch.length > 0) {
                     for (const m of batch) {
@@ -176,7 +193,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
                             }
                         }
                     }
-                    break;
                 }
             }
         }
@@ -245,10 +261,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
             if (mediaType === 'movie') {
                 buttonsId = 'buttons_1';
             } else {
-                // TV: find episode in selector
+                // TV: find episode in selector (Fix #1: utiliser episodeStrs avec l'absolu en priorité)
                 $('select.new_player_selector option').each((i, el) => {
                     const text = $(el).text().trim();
-                    for (const ep of targetEpisodes) {
+                    for (const ep of episodeStrs) {
                         const epNum = parseInt(ep, 10);
                         const numMatch = text.match(/[Ee]pisode\s*(0*)(\d+)/i);
                         if (numMatch) {

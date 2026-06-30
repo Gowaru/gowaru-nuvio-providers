@@ -102,7 +102,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -198,7 +198,7 @@
       "id": "french-manga",
       "name": "French-Manga",
       "description": "Animes VF et VOSTFR en streaming sur French-Manga.net",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -298,7 +298,7 @@
       "id": "sekai",
       "name": "Sekai",
       "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.19",
+      "version": "1.0.20",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -322,7 +322,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.16",
+      "version": "1.2.17",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -371,7 +371,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.48",
+      "version": "1.1.49",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
