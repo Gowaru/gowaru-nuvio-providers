@@ -1,3 +1,11 @@
+/**
+ * Extractor Logic for Sekai (sekai.one)
+ * Rewritten for the new site architecture:
+ * - Homepage (/) returns 301 redirect → n'utilise plus seriesData
+ * - episodesData.js contient les slugs actifs
+ * - Saga pages (/piece/saga-1) contiennent le JS inline avec atob() + episodeHD[N]
+ */
+
 import { fetchText } from './http.js';
 import { isBudgetExhausted } from '../utils/resolvers.js';
 import { resolveTargetEpisodes } from '../utils/dle-extractor.js';
@@ -7,11 +15,36 @@ const BASE_URL = "https://sekai.one";
 const BUDGET_MS = 40000;
 const CACHE_TTL = 300000; // 5 min pour le cache des séries
 
+// Slug alternatif pour les séries dont le slug sekai diffère du toSlug()
+const SLUG_OVERRIDES = {
+  'one-piece': 'piece',
+  'one piece': 'piece',
+  'dr-stone': 'drstone',
+  'dr stone': 'drstone',
+  're-zero': 'rezero',
+  're zero': 'rezero',
+  'jojos-bizarre-adventure': 'jojo',
+};
+
+function toSekaiSlug(title) {
+    if (!title) return '';
+    let slug = title.toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, '')
+        .replace(/[':!.,?'']/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .replace(/-+/g, '-');
+
+    // Appliquer les overrides pour les slugs sekai spécifiques
+    if (SLUG_OVERRIDES[slug]) return SLUG_OVERRIDES[slug];
+
+    return slug;
+}
 
 function normalizeTitle(s) {
     if(!s) return "";
     return s.toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, '')
         .replace(/[':!.,?]/g, '')
         .replace(/\b(the|season|part|cour)\b/ig, '')
         .replace(/\s+/g, ' ')
@@ -26,276 +59,312 @@ function scoreMatch(searchTerm, candidate) {
     return 0;
 }
 
-// Cache pour getSeriesData (évite de re-fetcher la homepage à chaque appel)
-let seriesCache = null;
-let seriesCacheTs = 0;
+let slugsCache = null;
+let slugsCacheTs = 0;
 
-async function getSeriesData() {
-    const now = Date.now();
-    if (seriesCache && now - seriesCacheTs < CACHE_TTL) {
-        console.log(`[Sekai] Using cached seriesData (${Math.round((now - seriesCacheTs) / 1000)}s old)`);
-        return seriesCache;
-    }
-    const html = await fetchText(`${BASE_URL}/`);
-    
-    const startStr = "var seriesData = [";
-    const startIdx = html.indexOf(startStr);
-    if (startIdx === -1) return [];
-
-    let inside = 1;
-    let endIdx = startIdx + startStr.length;
-    while(endIdx < html.length && inside > 0) {
-        if (html[endIdx] === '[') inside++;
-        else if (html[endIdx] === ']') inside--;
-        endIdx++;
+/**
+ * Parse episodesData.js pour obtenir les slugs de séries actifs.
+ * episodesData.js = window.episodesData = { op: {lastEpisode:1168,...}, drstone: {...}, ... }
+ */
+async function getSeriesSlugs() {
+    if (slugsCache && Date.now() - slugsCacheTs < CACHE_TTL) {
+        return slugsCache;
     }
 
-    const dataStr = html.substring(startIdx + startStr.length - 1, endIdx);
-    const results = [];
     try {
-        const matches = [...dataStr.matchAll(/\{\s*label:\s*"([^"]+)",\s*image:(?:[^,]+),\s*url:\s*"([^"]+)"(?:,\s*aliases:\s*\[([^\]]+)\])?/g)];
-        for (const m of matches) {
-            const label = m[1];
-            const url = m[2];
-            const aliasesRaw = m[3] || "";
-            const aliases = [...aliasesRaw.matchAll(/"([^"]+)"/g)].map(x => x[1]);
-            
+        const js = await fetchText(`${BASE_URL}/episodesData.js`);
+        // Extrait les clés de l'objet: { op: { ... }, drstone: { ... }, ... }
+        // Important: ne matcher que les clés dont la valeur est { (objet) pour éviter
+        // de capturer lastEpisode, date, time etc.
+        const slugKeys = [];
+        const slugRegex = /^\s*([a-zA-Z0-9_]+)\s*:\s*\{/gm;
+        let match;
+        while ((match = slugRegex.exec(js)) !== null) {
+            const key = match[1];
+            if (!slugKeys.includes(key)) slugKeys.push(key);
+        }
+
+        // Construire les données de séries (slug → URL)
+        const results = [];
+        for (const key of slugKeys) {
+            // "op" → "piece" (One Piece), autres slugs directement
+            const urlSlug = (key === 'op') ? 'piece' : key;
             results.push({
-                title: label,
-                url: `${BASE_URL}/${url}`,
-                aliases: aliases
+                title: key,          // nom interne (op, drstone)
+                url: `${BASE_URL}/${urlSlug}`,
+                slug: urlSlug,       // slug URL réel
             });
         }
-    } catch(e) {
-        console.error("[Sekai] Regex parsing error on seriesData", e);
+
+        slugsCache = results;
+        slugsCacheTs = Date.now();
+        console.log(`[Sekai] Loaded ${results.length} series slugs from episodesData.js`);
+        return results;
+    } catch (e) {
+        console.error(`[Sekai] Failed to parse episodesData.js: ${e.message}`);
+        return [];
     }
-    seriesCache = results;
-    seriesCacheTs = Date.now();
-    return results;
 }
 
+/**
+ * Construit un mapping épisodes complet à partir des saga pages.
+ * Chaque saga page contient:
+ *   var mu4 = atob("aHR0cHM6Ly80Lm11Z2l3YXJhLm9uZS8=")  → https://4.mugiwara.one/
+ *   episodeHD[1] = mu4 + "op/saga-1/hd/op-01.mp4"
+ */
+function parseEpisodeMapFromHtml(html) {
+    const epMap = {}; // { num: { episodeHD: url, episode?: url, episodeLow?: url } }
 
-function buildEpisodeMap(html) {
-    const epMap = {}; // { num: { sd, hd, low } }
-
-    // Step 1: Decode all atob constants and detect embed prefix
-    const b64Regex = /var\s+([a-zA-Z0-9_]+)\s*=\s*atob\("([^"]+)"\)/g;
+    // Étape 1: Décoder toutes les constantes atob()
+    const b64Regex = /var\s+([a-zA-Z0-9_]+)\s*=\s*atob\(\"([^\"]+)\"\)/g;
     const constants = {};
-    let embedPrefix = null;
-    let embedPrefixName = null;
     for (const match of html.matchAll(b64Regex)) {
-        const varName = match[1];
-        const decoded = atob(match[2]);
-        constants[varName] = decoded;
-        // Detect embed domain prefixes (vidmoly, mugiwara, etc.)
-        // Prefer the explicitly-named "mugiwara" variable; otherwise use the first mugiwara domain
-        if (/embed-?$/.test(decoded) || /mugiwara/.test(decoded)) {
-            if (!embedPrefix || varName === 'mugiwara') {
-                embedPrefix = decoded;
-                embedPrefixName = varName;
-            }
+        try {
+            constants[match[1]] = atob(match[2]);
+        } catch (e) {
+            // Ignorer les atob() invalides
         }
     }
 
-    // Step 2: Process ALL script blocks (episode data can be in any of them)
-    const scriptBlocks = html.match(/<script>[\s\S]*?<\/script>/g);
-    if (!scriptBlocks) return epMap;
-    const jsCode = scriptBlocks.join('\n');
-
-    // Step 3: Extract numeric constants (var lastXxx = N)
-    const numConstants = {};
-    const varLastRegex = /var\s+([a-zA-Z0-9_]+)\s*=\s*(\d+);/g;
-    for (const match of jsCode.matchAll(varLastRegex)) {
-        numConstants[match[1]] = parseInt(match[2]);
-    }
-
-    // Step 4: Hardcoded indices with .mp4: episodeHD[28] = mu5 + "path/" + 28 + "-2.mp4"
-    const hardcodeRegex = /(episode(?:HD|Low)?)\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*\+?\s*(\d+)?\s*\+\s*['"](\.mp4)['"]/g;
-    for (const match of jsCode.matchAll(hardcodeRegex)) {
-        const type = match[1];
-        const num = parseInt(match[2]);
-        const domain = constants[match[3]] || "";
-        const path = match[4];
-        const numStr = match[5] ? match[5] : "";
-        const ext = match[6];
+    // Étape 2: Extraire les assignations episodeHD[N]
+    // Pattern: episodeHD[1] = mu4 + "op/saga-1/hd/op-01.mp4"
+    const epHdRegex = /episodeHD\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*\"([^\"]+\.mp4)\"/g;
+    for (const match of html.matchAll(epHdRegex)) {
+        const num = parseInt(match[1]);
+        const domainVar = match[2];
+        const path = match[3];
+        const domain = constants[domainVar] || '';
         if (!epMap[num]) epMap[num] = {};
-        epMap[num][type] = domain + path + numStr + ext;
+        epMap[num].episodeHD = domain + path;
     }
 
-    // Step 5: Simple domain + path patterns (no .mp4 suffix in assignment)
-    // episode[N] = domain + "path/name"  OR  episode[N] = "path/name.mp4"
-    const simpleRegex = /(episode(?:HD|Low)?)\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*;/g;
-    for (const match of jsCode.matchAll(simpleRegex)) {
-        const type = match[1];
-        const num = parseInt(match[2]);
-        const domain = constants[match[3]] || "";
-        const path = match[4];
+    // Étape 3: Extraire les assignations episode[N] (SD)
+    const epSdRegex = /episode\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*\"([^\"]+\.mp4)\"/g;
+    for (const match of html.matchAll(epSdRegex)) {
+        const num = parseInt(match[1]);
+        const domainVar = match[2];
+        const path = match[3];
+        const domain = constants[domainVar] || '';
         if (!epMap[num]) epMap[num] = {};
-        if (!epMap[num][type] && path.endsWith('.mp4')) {
-            epMap[num][type] = domain + path;
-        }
+        epMap[num].episode = domain + path;
     }
 
-    // Step 6: Direct embed ID pattern: episode[N] = "id.html" (vidmoly style)
-    // The prefix domain is from the detected embedPrefix (e.g., mugiwara = atob("https://vidmoly.biz/embed-"))
-    const embedRegex = /(episode(?:HD|Low)?)\s*\[\s*(\d+)\s*\]\s*=\s*['"]([^'"]+\.html)['"]\s*;/g;
-    for (const match of jsCode.matchAll(embedRegex)) {
-        const type = match[1];
-        const num = parseInt(match[2]);
-        const embedId = match[3];
+    // Étape 4: Extraire les assignations episodeLow[N]
+    const epLowRegex = /episodeLow\s*\[\s*(\d+)\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*\"([^\"]+\.mp4)\"/g;
+    for (const match of html.matchAll(epLowRegex)) {
+        const num = parseInt(match[1]);
+        const domainVar = match[2];
+        const path = match[3];
+        const domain = constants[domainVar] || '';
         if (!epMap[num]) epMap[num] = {};
-        if (!epMap[num][type] && embedPrefix) {
-            epMap[num][type] = embedPrefix + embedId;
-        }
-    }
-
-    // Step 7: Loop-based construction: for(var num=start; num<=end; num++) { episode[num] = domain + "path/" + num + ".mp4"; }
-    const loopRegex = /for\s*\(\s*var\s+num\s*=\s*(\d+);\s*num\s*<=\s*([0-9a-zA-Z_]+);\s*num\+\+\s*\)\s*\{([^}]+)\}/g;
-    for (const match of jsCode.matchAll(loopRegex)) {
-        const start = parseInt(match[1]);
-        const endVar = match[2];
-        const end = isNaN(parseInt(endVar)) ? numConstants[endVar] || 1000 : parseInt(endVar);
-        const body = match[3];
-
-        const bodyRegex = /(episode(?:HD|Low)?)\s*\[\s*num\s*\]\s*=\s*([a-zA-Z0-9_]+)\s*\+\s*['"]([^'"]+)['"]\s*\+\s*(?:num)\s*\+\s*['"](\.mp4)['"]\s*;/g;
-        for(let n=start; n<=end; n++) {
-            if (!epMap[n]) epMap[n] = {};
-            for (const bMatch of body.matchAll(bodyRegex)) {
-                const type = bMatch[1];
-                const domain = constants[bMatch[2]] || "";
-                const path = bMatch[3];
-                const ext = bMatch[4];
-                if(!epMap[n][type]) {
-                    epMap[n][type] = domain + path + n + ext;
-                }
-            }
-        }
+        epMap[num].episodeLow = domain + path;
     }
 
     return epMap;
 }
 
+/**
+ * Extrait les URLs des saga pages à partir de la page série principale.
+ * Pattern: href="piece/saga-12" ou dans les attr-data
+ */
+function extractSagaUrls(html, slug) {
+    const sagas = new Set();
 
-function extractArcsUrls(html, baseUrl) {
-    const arcs = [];
-    
-    // Method 1: Find arc URLs from href attributes in JS string literals
-    // Pattern: href="series-slug-streaming/arc-N" (often in JS template strings)
-    const hrefRegex = /href="([^"]*arc[^"]*)"/gi;
-    for(const match of html.matchAll(hrefRegex)) {
-        let uri = match[1];
-        if(uri.includes('arc-') && !uri.includes('?') && !uri.startsWith('http') && !uri.startsWith('#')) {
-            const fullUrl = (baseUrl.replace(/\?.*$/, '') + '/' + uri).replace(/([^:]\/)\/+/g, "$1");
-            arcs.push(fullUrl);
+    // Pattern 1: href="slug/saga-N" (liens de navigation)
+    const hrefRegex = new RegExp(`href=["']${slug}/saga-(\\d+)["']`, 'gi');
+    for (const match of html.matchAll(hrefRegex)) {
+        sagas.add(`${BASE_URL}/${slug}/saga-${match[1]}`);
+    }
+
+    // Pattern 2: onclick ou href contenant saga-N (évite les CSS classes)
+    const attrRegex = new RegExp(`(?:href|onclick)=["'][^"']*saga-(\\d+)`, 'gi');
+    for (const match of html.matchAll(attrRegex)) {
+        const num = match[1];
+        if (num && !isNaN(num)) {
+            sagas.add(`${BASE_URL}/${slug}/saga-${num}`);
         }
     }
-    
-    // Method 2: Find arc URLs from redirectTo() calls
-    if(arcs.length === 0) {
-        const fallbackRegex = /redirectTo\(['"]([^'"]+)['"]\)/g;
-        for(const match of html.matchAll(fallbackRegex)) {
-            let uri = match[1];
-            if(uri.includes('arc-') && !uri.includes('?')) {
-                 arcs.push((BASE_URL + '/' + uri).replace(/([^:]\/)\/+/g, "$1"));
-            }
-        }
+
+    return [...sagas].sort((a, b) => {
+        const na = parseInt(a.match(/saga-(\d+)/)?.[1] || '0');
+        const nb = parseInt(b.match(/saga-(\d+)/)?.[1] || '0');
+        return na - nb;
+    });
+}
+
+/**
+ * Récupère les données de séries pour le title matching.
+ * Combine episodesData.js + titles from series pages.
+ */
+async function getSeriesData() {
+    const slugs = await getSeriesSlugs();
+    if (slugs.length === 0) return [];
+
+    return slugs.map(s => ({
+        title: s.slug,
+        url: s.url,
+        aliases: [s.title], // le nom interne comme alias
+    }));
+}
+
+/**
+ * Récupère la page d'une saga et parse les épisodes.
+ * Cache la page pour éviter de re-fetcher les mêmes sagas.
+ */
+const sagaPageCache = new Map();
+const sagaPageCacheTTL = 300000; // 5 min
+
+async function fetchSagaPage(sagaUrl) {
+    const cached = sagaPageCache.get(sagaUrl);
+    if (cached && Date.now() - cached.ts < sagaPageCacheTTL) {
+        return cached.html;
     }
-    return [...new Set(arcs)];
+
+    try {
+        const html = await fetchText(sagaUrl);
+        if (html && html.length > 1000) {
+            // Nettoyer le cache s'il devient trop grand
+            if (sagaPageCache.size > 50) sagaPageCache.clear();
+            sagaPageCache.set(sagaUrl, { html, ts: Date.now() });
+        }
+        return html || '';
+    } catch (e) {
+        return '';
+    }
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
     const startTime = Date.now();
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
-    
+
     const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
 
     const [ep, absoluteEp] = await resolveTargetEpisodes(tmdbId, mediaType, season, episodeNum, { startTime, budgetMs: BUDGET_MS });
     const absEp = absoluteEp || ep;
 
     console.log(`[Sekai] Checking ${mediaType} S${season} E${episodeNum} -> Absolute: ${absEp}`);
-    
-    // 1. Get Series Data
-    const allSeries = await getSeriesData();
-    if(allSeries.length === 0) return [];
 
-    let targetSeries = null;
-    let targetScore = 0;
+    // 1. Générer le slug sekai et construire l'URL de la série
+    const slug = toSekaiSlug(titles[0]);
+    const seriesUrl = `${BASE_URL}/${slug}`;
 
-    for (const t of titles) {
-        if (!t || targetScore >= 100) continue;
-        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-        const nt = normalizeTitle(t);
-        if (!nt || nt.length < 2) continue;
+    // 2. Fetch la page série pour trouver les sagas
+    let mainHtml = '';
+    try {
+        mainHtml = await fetchText(seriesUrl);
+    } catch (e) {
+        console.log(`[Sekai] Series page not found at ${seriesUrl}, trying slugs fallback...`);
+    }
 
+    // Fallback: si la page série n'est pas trouvée, essayer les slugs connus
+    if (mainHtml.length < 5000) {
+        const allSeries = await getSeriesData();
         for (const s of allSeries) {
-            if (targetScore >= 100) break;
-            // Score against main title
-            let score = scoreMatch(nt, normalizeTitle(s.title));
-            if (score > targetScore) {
-                targetScore = score;
-                targetSeries = s;
-            }
-            // Score against aliases (slightly penalized vs title)
-            for (const a of s.aliases) {
-                if (targetScore >= 100) break;
-                const na = normalizeTitle(a);
-                score = scoreMatch(nt, na);
-                if (score > 0 && score - 5 > targetScore) {
-                    targetScore = score - 5;
-                    targetSeries = s;
+            if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+
+            // Vérifier si le titre match avec un slug connu
+            for (const t of titles) {
+                if (!t) continue;
+                const nt = normalizeTitle(t);
+                const ns = normalizeTitle(s.slug);
+                const score = scoreMatch(nt, ns);
+                if (score >= 70) {
+                    try {
+                        mainHtml = await fetchText(s.url);
+                        console.log(`[Sekai] Fallback matched: ${s.url}`);
+                    } catch (e) { /* ignore */ }
+                    break;
                 }
             }
+
+            if (mainHtml.length >= 5000) break;
+        }
+
+        if (mainHtml.length < 5000) {
+            // Dernier recours: essayer tous les slugs connus
+            for (const s of allSeries) {
+                if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+                if (s.url === seriesUrl) continue;
+                try {
+                    mainHtml = await fetchText(s.url);
+                    if (mainHtml.length >= 5000) {
+                        console.log(`[Sekai] Fallback matched (all slugs): ${s.url}`);
+                        break;
+                    }
+                } catch (e) { /* ignore */ }
+            }
+        }
+
+        if (mainHtml.length < 5000) {
+            console.log(`[Sekai] No series page found for tmdbId ${tmdbId}`);
+            return [];
         }
     }
 
-    if(!targetSeries) {
-        console.log(`[Sekai] No series match found for tmdbId ${tmdbId}`);
+    console.log(`[Sekai] Series page: ${seriesUrl || 'fallback'}`);
+
+    // 3. Extraire le slug depuis l'URL effectivement utilisée (ou celle du fallback)
+    // L'URL réelle peut différer du slug original si le fallback a trouvé une autre série
+    const actualSeriesUrl = mainHtml.length >= 5000 && seriesUrl ? seriesUrl : null;
+    const effectiveSlug = actualSeriesUrl
+        ? actualSeriesUrl.split('/').pop().replace(/\?.*$/, '')
+        : slug;
+    
+    if (!effectiveSlug) {
+        console.log(`[Sekai] Could not determine slug for series page`);
         return [];
     }
+    const sagaUrls = extractSagaUrls(mainHtml, effectiveSlug);
+    console.log(`[Sekai] Found ${sagaUrls.length} sagas for slug "${effectiveSlug}"`);
 
-    console.log(`[Sekai] Matched Series: ${targetSeries.title} (${targetSeries.url})`);
+    // 4. Fetch les saga pages et construire le mapping des épisodes
+    let epMap = {};
 
-    // 2. Fetch main page
-    const mainHtml = await fetchText(targetSeries.url);
-    
-    // Parse episodes
-    let mainEpMap = buildEpisodeMap(mainHtml);
-    
-    // If our absolute episode is already here, great!
-    if(mainEpMap[absEp] && Object.keys(mainEpMap[absEp]).length > 0) {
-         return formatStreams(mainEpMap[absEp]);
-    }
+    // Limiter à 6 sagas max pour le budget
+    const sagasToFetch = sagaUrls.slice(0, 6);
+    if (!isBudgetExhausted(startTime, BUDGET_MS) && sagasToFetch.length > 0) {
+        // Fetch en parallèle avec limite de concurrence (3 à la fois)
+        let idx = 0;
+        while (idx < sagasToFetch.length && !isBudgetExhausted(startTime, BUDGET_MS)) {
+            const batch = sagasToFetch.slice(idx, idx + 3);
+            const batchHtmls = await Promise.all(
+                batch.map(url => fetchSagaPage(url).catch(() => ''))
+            );
 
-    // 3. Otherwise, fetch all related Arcs! (limited to 3 for TV budget)
-    const arcsUrls = extractArcsUrls(mainHtml, targetSeries.url).slice(0, 3);
-    console.log(`[Sekai] Found ${arcsUrls.length} arcs. Fetching...`);
+            for (const html of batchHtmls) {
+                if (!html || html.length < 1000) continue;
+                const sagaMap = parseEpisodeMapFromHtml(html);
+                // Merge dans epMap
+                for (const [num, sources] of Object.entries(sagaMap)) {
+                    if (!epMap[num]) epMap[num] = {};
+                    Object.assign(epMap[num], sources);
+                }
+            }
 
-    // fetch all arcs in parallel to find the episode map (avec budget check)
-    if (!isBudgetExhausted(startTime, BUDGET_MS) && arcsUrls.length > 0) {
-        const arcsHtmls = await Promise.all(arcsUrls.map(u => fetchText(u).catch(() => "")));
+            // Early exit: si l'épisode est trouvé, arrêter de fetcher les sagas
+            if (epMap[absEp] && Object.keys(epMap[absEp]).length > 0) {
+                console.log(`[Sekai] Found episode ${absEp} (early exit after batch)`);
+                break;
+            }
 
-        for(const html of arcsHtmls) {
-             if(!html || isBudgetExhausted(startTime, BUDGET_MS)) continue;
-             const arcMap = buildEpisodeMap(html);
-             if(arcMap[absEp] && Object.keys(arcMap[absEp]).length > 0) {
-                  mainEpMap = arcMap;
-                  break;
-             }
+            idx += 3;
         }
     }
 
-    if(mainEpMap[absEp] && Object.keys(mainEpMap[absEp]).length > 0) {
-         return formatStreams(mainEpMap[absEp]);
+    // 5. Vérifier si l'épisode demandé est dans le mapping
+    if (epMap[absEp] && Object.keys(epMap[absEp]).length > 0) {
+        console.log(`[Sekai] Found episode ${absEp} in saga pages`);
+        return formatStreams(epMap[absEp]);
     }
 
-    console.log(`[Sekai] Episode ${absEp} not found in parsed maps.`);
+    console.log(`[Sekai] Episode ${absEp} not found in ${Object.keys(epMap).length} parsed episodes across ${sagasToFetch.length} sagas`);
     return [];
 }
 
 function formatStreams(epSources) {
     const streams = [];
-    if(epSources.episodeHD) {
+    if (epSources.episodeHD) {
         streams.push({
              name: "Sekai (VOSTFR)",
              title: "Sekai-HD - VOSTFR",
@@ -305,7 +374,7 @@ function formatStreams(epSources) {
              headers: { "Referer": BASE_URL }
         });
     }
-    if(epSources.episode) {
+    if (epSources.episode) {
         streams.push({
              name: "Sekai (VOSTFR)",
              title: "Sekai-SD - VOSTFR",
@@ -315,7 +384,7 @@ function formatStreams(epSources) {
              headers: { "Referer": BASE_URL }
         });
     }
-    if(epSources.episodeLow) {
+    if (epSources.episodeLow) {
         streams.push({
              name: "Sekai (VOSTFR)",
              title: "Sekai-LOW - VOSTFR",

@@ -529,6 +529,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
   // ArmSync: resolve absolute episode (VoirAnime replaces, not pushes)
   const resolvedEps = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
+  let targetEpisodes = resolvedEps;
   if (resolvedEps.length > 1) {
     targetEpisodes = [resolvedEps[1]]; // Replace with absolute only
   }
