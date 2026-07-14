@@ -126,7 +126,7 @@
       "id": "coflix",
       "name": "Coflix",
       "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki.",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -273,7 +273,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.12",
+      "version": "1.0.13",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -395,7 +395,7 @@
       "id": "nakios",
       "name": "Nakios",
       "description": "Films et séries en streaming MP4 via Nakios (API REST, TMDB natif, CDN direct).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -419,7 +419,7 @@
       "id": "papadustream",
       "name": "Papadustream",
       "description": "Séries TV en streaming HLS via papadustream.club (multi-qualité 360p-1080p, multi-langue).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "Gowaru",
       "supportedTypes": [
         "tv"
@@ -466,7 +466,7 @@
       "id": "streamzo",
       "name": "StreamZo",
       "description": "Films et séries en streaming VF/VOSTFR sur Streamzo.fr (SPA, iframe injecté, multi-serveurs).",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

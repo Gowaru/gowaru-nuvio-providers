@@ -176,6 +176,31 @@ async function findContent(titles, mediaType, season) {
         slugCandidates.push(compacted)
       }
     }
+
+    // Variante sans article (the/a/an) en prefixe
+    // Ex: "the-worlds-strongest-rearguard" → "worlds-strongest-rearguard"
+    const withoutArticle = baseSlug.replace(/^(the|a|an)-/i, '')
+    if (withoutArticle !== baseSlug && !seenSlugs.has(withoutArticle)) {
+      seenSlugs.add(withoutArticle)
+      slugCandidates.push(withoutArticle)
+    }
+
+    // Variante tronquee pour les slugs longs (>4 mots)
+    // Ex: "the-worlds-strongest-rearguard-labyrinth" → "the-worlds-strongest-rearguard"
+    const slugParts = baseSlug.split('-')
+    if (slugParts.length > 4) {
+      const truncated = slugParts.slice(0, 4).join('-')
+      if (!seenSlugs.has(truncated)) {
+        seenSlugs.add(truncated)
+        slugCandidates.push(truncated)
+      }
+      // Aussi sans article si applicable
+      const strippedTrunc = truncated.replace(/^(the|a|an)-/i, '')
+      if (strippedTrunc !== truncated && !seenSlugs.has(strippedTrunc)) {
+        seenSlugs.add(strippedTrunc)
+        slugCandidates.push(strippedTrunc)
+      }
+    }
   }
 
   console.log(`[Streamzo] Generated ${slugCandidates.length} slug candidate(s)`)

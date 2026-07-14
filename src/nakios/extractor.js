@@ -20,8 +20,56 @@
 import { fetchApi, BASE_URL } from './http.js';
 import { createCache } from '../utils/cache.js';
 import { getTmdbTitle } from '../utils/search-fallback.js';
+import { safeConfig } from '../utils/resolvers.js';
 
 const withCache = createCache('nk', 'Nakios');
+
+// ─── Configuration ───────────────────────────────────────────────────────────
+// NUVIO_NAKIOS_EXCLUDE_PREMIUM=1 → exclut toutes les sources premium
+// Par defaut (0), les sources premium sont utilisees en fallback si aucune
+// source libre n'est disponible.
+const EXCLUDE_PREMIUM = safeConfig('NUVIO_NAKIOS_EXCLUDE_PREMIUM', 0) === 1;
+
+// ─── URL Filter ───────────────────────────────────────────────────────────────
+// Nakios utilise un CDN (sv.citron-edge.lol) qui necessite un header Referer.
+// Sans Referer, le CDN redirige vers cheksum.lol → Telegram (t.me/zenhsvr).
+// Ce filtre detecte et exclut les URLs invalides ou publicitaires des sources.
+
+/** Domaines bloques (pubs, redirections, anti-leech echoue) */
+const BLOCKED_URL_PATTERNS = [
+    't.me',
+    'telegram.me',
+    'telegram.org',
+    'cheksum.lol',
+    'doubleclick.net',
+    'googleadservices.com',
+    'googlesyndication.com',
+];
+
+/**
+ * Verifie si une URL de streaming est valide et jouable.
+ * - Rejette les domaines de pub/redirect (Telegram, cheksum, etc.)
+ * - Verifie que l'URL a un format valide
+ * - Verifie que le protocole est HTTPS
+ *
+ * @param {string} url - URL a valider
+ * @returns {boolean} true si l'URL est valide
+ */
+function isValidStreamUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const u = url.toLowerCase().trim();
+    if (!u.startsWith('https://')) return false;
+
+    // Rejeter les patterns bloques
+    for (const pattern of BLOCKED_URL_PATTERNS) {
+        if (u.includes(pattern)) {
+            console.log(`[Nakios] Filtered out blocked URL (${pattern}): ${u.slice(0, 80)}`);
+            return false;
+        }
+    }
+
+    return true;
+}
 
 // ─── TMDB Helpers ────────────────────────────────────────────────────────────
 // getTmdbTitle est maintenant importé depuis ../utils/search-fallback.js
@@ -38,10 +86,36 @@ async function fetchSource(path) {
         if (!result) return null;
 
         if (result.sources && Array.isArray(result.sources) && result.sources.length > 0) {
-            return result.sources[0];
+            // 1. Chercher une source non-premium (libre) en priorite
+            for (const source of result.sources) {
+                if (source.url && isValidStreamUrl(source.url) && source.isPremium !== true) {
+                    return source;
+                }
+            }
+
+            // 2. Si le flag EXCLUDE_PREMIUM est actif, ne PAS retourner de sources premium
+            if (EXCLUDE_PREMIUM) {
+                console.log(`[Nakios] Premium sources excluded (NUVIO_NAKIOS_EXCLUDE_PREMIUM=1)`);
+                return null;
+            }
+
+            // 3. Fallback: source premium si aucune libre trouvee
+            for (const source of result.sources) {
+                if (source.url && isValidStreamUrl(source.url)) {
+                    console.log(`[Nakios] Using premium source (${source.name || '?'}) - no free source available`);
+                    return source;
+                }
+            }
+            // Si aucune source valide trouvee, logger et retourner null
+            console.warn(`[Nakios] All ${result.sources.length} source(s) filtered out (invalid URLs)`);
+            return null;
         }
         if (result.url) {
-            return result;
+            if (isValidStreamUrl(result.url)) {
+                return result;
+            }
+            console.warn(`[Nakios] Source filtered out (invalid URL): ${(result.url || '').slice(0, 80)}`);
+            return null;
         }
         return null;
     });

@@ -68,6 +68,25 @@ This bundle integrates **21 providers** covering the French streaming landscape 
 - **Mobile Optimized**: "Embed" (HTML) links are transformed into direct video links (`.mp4`, `.m3u8`) for native compatibility with Android/iOS players.
 - **Security Check**: Regular dependency audits to ensure vulnerability-free code.
 
+### 🔧 Environment Variables
+
+Some providers support runtime configuration via environment variables. These can be set in your Nuvio environment or passed to the build/execution context.
+
+| Variable | Provider | Default | Description |
+| :--- | :--- | :-: | :--- |
+| `NUVIO_NAKIOS_EXCLUDE_PREMIUM` | Nakios | `0` | Set to `1` to exclude premium-only sources. When enabled, only free (non-premium) streams are returned. If no free source is available, the provider returns 0 streams. |
+
+---
+
+### 📱 User Configuration
+
+For NuvioApp/NuvioTV users, these variables can be configured via the app's plugin settings (refer to your app's documentation). For local testing:
+
+```bash
+# Example: Exclude premium Nakios sources
+NUVIO_NAKIOS_EXCLUDE_PREMIUM=1 node -e "const {getStreams} = require('./providers/nakios.js'); getStreams('114410', 'tv', 1, 1).then(s => console.log(s.length, 'stream(s)'));"
+```
+
 ---
 
 ## 👨‍💻 For Contributors

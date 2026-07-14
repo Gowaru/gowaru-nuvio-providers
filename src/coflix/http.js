@@ -9,7 +9,7 @@ import { safeFetch, fetchWithRetry, createProviderRateLimiter, sleep } from '../
 const rateLimit = createProviderRateLimiter();
 
 // Domaines Coflix actifs (ordonnés par fiabilité)
-const DOMAINS = ['coflix.cymru', 'coflix.boston', 'coflix.blog'];
+const DOMAINS = ['coflix.boston', 'coflix.to', 'coflix.fr', 'coflix.cymru', 'coflix.blog'];
 
 export const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
