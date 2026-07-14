@@ -28,7 +28,7 @@ bower_components
 
 # Compiled binary addons
 build/Release
-providers/*
+# providers/ - tracked intentionally (built artifacts needed by Nuvio app)
 
 # Dependency directories
 node_modules/
