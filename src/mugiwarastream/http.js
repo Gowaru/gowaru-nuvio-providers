@@ -1,4 +1,4 @@
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
 
 const BASE_URL = "https://www.mugiwara-no-streaming.com";
 
@@ -10,6 +10,10 @@ export const HEADERS = {
 };
 
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = 'mugiwara-no-streaming.com';
 const RETRY_DELAYS = [1000, 3000, 5000];
 
@@ -33,6 +37,9 @@ function isCloudflareBlock(text) {
  * Fetch text content from a URL avec retry Cloudflare et rate limiting.
  */
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     const { headers: customHeaders, method, timeout, retries, ...rest } = options;
     const resolvedMethod = method || 'GET';
     const maxRetries = retries ?? 2;
@@ -40,12 +47,20 @@ export async function fetchText(url, options = {}) {
 
     let lastError = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (isAborted(signal)) {
+            lastError = new Error('AbortError: Request aborted');
+            break;
+        }
         await rateLimit(DOMAIN);
 
         if (attempt > 0) {
             const delay = RETRY_DELAYS[attempt - 1] || 5000;
             console.log(`[Mugiwara] Retry ${attempt}/${maxRetries} after ${delay}ms: ${url.slice(0, 80)}`);
             await sleep(delay);
+            if (isAborted(signal)) {
+                lastError = new Error('AbortError: Request aborted');
+                break;
+            }
         }
 
         try {
@@ -53,6 +68,7 @@ export async function fetchText(url, options = {}) {
                 headers: mergedHeaders,
                 method: resolvedMethod,
                 timeout,
+                signal,
                 ...rest
             });
 
@@ -92,6 +108,7 @@ export async function fetchText(url, options = {}) {
 
             return await res.text();
         } catch (e) {
+            if (e.name === 'AbortError' || isAborted(signal)) throw e;
             lastError = e;
             if (attempt < maxRetries && (
                 e.message?.includes('fetch failed') ||

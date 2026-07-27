@@ -1,5 +1,8 @@
-import { safeFetch, sleep } from '../utils/resolvers.js';
+import { safeFetch, sleep, isAborted } from '../utils/resolvers.js';
 import { CONFIG } from './config.js';
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const RETRY_DELAYS = [1000, 2000, 4000];
 
@@ -19,6 +22,9 @@ function isCloudflareBlock(text) {
 }
 
 async function fetchFromDomain(domain, path, options = {}) {
+  const signal = options.signal || _currentSignal;
+  if (isAborted(signal)) return null;
+
   const url = (path && (path.startsWith('http://') || path.startsWith('https://')))
     ? path
     : `${domain}${path}`;
@@ -26,10 +32,12 @@ async function fetchFromDomain(domain, path, options = {}) {
   const retries = options.retries ?? 1;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    if (isAborted(signal)) return null;
     try {
       const res = await safeFetch(url, {
         headers: { ...HEADERS, ...(customHeaders || {}) },
         timeout: options.timeout ?? CONFIG.TIMEOUTS.PAGE,
+        signal,
         ...rest,
       });
 
@@ -73,9 +81,14 @@ export async function fetchText(urlOrPath, options = {}) {
   throw new Error(`[DuLourd] All domains failed for ${urlOrPath}`);
 }
 
-export async function fetchApi(id, xfield) {
+export async function fetchApi(id, xfield, options = {}) {
+  const signal = options.signal || _currentSignal;
+  if (isAborted(signal)) return null;
+
   const body = `id=${id}&xfield=${xfield}&action=playEpisode`;
   for (const domain of [CONFIG.BASE_URL, ...(CONFIG.DOMAINS || [])]) {
+    if (isAborted(signal)) return null;
+
     const url = `${domain}${CONFIG.ENDPOINTS.seasonApi}`;
     try {
       const res = await safeFetch(url, {
@@ -85,7 +98,8 @@ export async function fetchApi(id, xfield) {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body,
-        timeout: CONFIG.TIMEOUTS.API,
+        timeout: options.timeout ?? CONFIG.TIMEOUTS.API,
+        signal,
       });
       if (!res || !res.ok) continue;
       const text = await res.text();

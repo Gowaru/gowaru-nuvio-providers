@@ -1,7 +1,10 @@
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js'
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
 
 const rateLimit = createProviderRateLimiter()
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const RETRY_DELAYS = [1000, 2000, 4000]
 
@@ -29,6 +32,9 @@ function isCloudflareBlock(text) {
  * Tente de récupérer du contenu depuis un domaine, avec retry.
  */
 async function fetchFromDomain(domain, path, options = {}) {
+  const signal = options.signal || _currentSignal
+  if (isAborted(signal)) return null
+
   // Si path est déjà une URL absolue, l'utiliser directement (pas de préfixe domaine)
   const url = (path && (path.startsWith('http://') || path.startsWith('https://')))
     ? path
@@ -39,9 +45,10 @@ async function fetchFromDomain(domain, path, options = {}) {
   await rateLimit(new URL(domain).hostname)
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    if (isAborted(signal)) return null
     try {
       const timeout = options.timeout ?? TIMEOUTS.PAGE
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout })
+      const res = await safeFetch(url, { headers: mergedHeaders, timeout, signal })
 
       if (!res) {
         console.log(`[Wookafr] No response from ${domain} (attempt ${attempt + 1})`)
@@ -92,6 +99,9 @@ export async function fetchText(path, options = {}) {
  * POST form data avec fallback multi-domain pour l'URL de base.
  */
 export async function postForm(url, data, options = {}) {
+  const signal = options.signal || _currentSignal;
+  if (isAborted(signal)) return null;
+
   const body = Object.entries(data)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&')
@@ -99,6 +109,8 @@ export async function postForm(url, data, options = {}) {
   const domains = [...new Set([SITE.BASE_URL, ...SITE.DOMAINS])]
 
   for (const domain of domains) {
+    if (isAborted(signal)) return null;
+
     const ajaxUrl = `${domain}/wp-admin/admin-ajax.php`
     await rateLimit(new URL(domain).hostname)
 
@@ -115,6 +127,7 @@ export async function postForm(url, data, options = {}) {
         },
         body,
         timeout: options.timeout ?? TIMEOUTS.AJAX,
+        signal,
       })
 
       if (!res) continue

@@ -3,7 +3,7 @@
  * Avec détection Cloudflare et retry avec backoff pour réduire les timeouts.
  */
 
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -14,6 +14,10 @@ export const HEADERS = {
 };
 
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = 'voir-anime.to';
 
 /** Délais de retry pour Cloudflare (backoff progressif) */
@@ -43,6 +47,9 @@ function isCloudflareBlock(text) {
  * Les requêtes HEAD peuvent être bloquées par Cloudflare plus souvent que les GET.
  */
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     await rateLimit(DOMAIN);
 
     const { headers: customHeaders, method, timeout, ...rest } = options;
@@ -52,10 +59,19 @@ export async function fetchText(url, options = {}) {
 
     let lastError = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (isAborted(signal)) {
+            lastError = new Error('AbortError: Request aborted');
+            break;
+        }
+
         if (attempt > 0) {
             const delay = RETRY_DELAYS[attempt - 1] || 4000;
             console.log(`[VoirAnime] Retry ${attempt}/${maxRetries} after ${delay}ms: ${url.slice(0, 80)}`);
             await sleep(delay);
+            if (isAborted(signal)) {
+                lastError = new Error('AbortError: Request aborted');
+                break;
+            }
         }
 
         try {
@@ -63,6 +79,7 @@ export async function fetchText(url, options = {}) {
                 headers: mergedHeaders,
                 method: resolvedMethod,
                 timeout,
+                signal,
                 ...rest
             });
 
@@ -103,6 +120,7 @@ export async function fetchText(url, options = {}) {
             return await res.text();
         } catch (e) {
             lastError = e;
+            if (e.name === 'AbortError' || isAborted(signal)) throw e;
             // Retry sur les erreurs réseau/timeout (pas les 4xx sauf 429/Cloudflare)
             if (attempt < maxRetries && (
                 e.message?.includes('fetch failed') ||

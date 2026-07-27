@@ -1,5 +1,5 @@
-import { fetchJson } from './http.js';
-import { resolveStream, withTimeout, safeFetch, USER_AGENT } from '../utils/resolvers.js';
+import { fetchJson, setCurrentSignal } from './http.js';
+import { resolveStream, withTimeout, safeFetch, USER_AGENT, isAborted } from '../utils/resolvers.js';
 import { getUrlOrigin, normalizeLangTag } from '../utils/dle-extractor.js';
 import { getTmdbTitle } from '../utils/search-fallback.js';
 
@@ -234,7 +234,11 @@ async function searchFallback(baseUrl, tmdbId, mediaType, season, episode) {
 
 // ─── Fonction principale d'extraction ────────────────────────────────────────
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     if (!tmdbId) { console.log('[Movix] Missing tmdbId'); return []; }
 
     const isMovie = mediaType === 'movie';

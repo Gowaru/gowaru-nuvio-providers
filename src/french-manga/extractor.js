@@ -1,6 +1,6 @@
 import cheerio from 'cheerio-without-node-native'
-import { fetchText, fetchJson, ajaxSearch } from './http.js'
-import { resolveStream, safeFetch } from '../utils/resolvers.js'
+import { fetchText, fetchJson, ajaxSearch, setCurrentSignal } from './http.js'
+import { resolveStream, safeFetch, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { stripSeasonSuffix, resolveTargetEpisodes, toStream } from '../utils/dle-extractor.js'
 import {
@@ -374,12 +374,18 @@ async function detectSubType(tmdbId, mediaType, titles) {
   }
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null
+  if (isAborted(signal)) return []
+  setCurrentSignal(signal)
+
   const titles = await getTmdbTitles(tmdbId, mediaType, { season })
   if (!titles || titles.length === 0) return []
 
   const subType = await detectSubType(tmdbId, mediaType, titles)
   if (subType) console.log(`[FrenchManga] Detected subtype: ${subType}`)
+
+  if (isAborted(signal)) return []
 
   if (mediaType === 'movie') {
     return extractMovie(tmdbId, titles, subType)

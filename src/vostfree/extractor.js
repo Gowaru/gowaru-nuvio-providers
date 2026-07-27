@@ -2,9 +2,9 @@
  * Extractor Logic for Vostfree
  */
 
-import { fetchText } from './http.js';
+import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
+import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { resolveTargetEpisodes } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -49,8 +49,16 @@ function titleMatches(resultTitle, searchTitle) {
 /**
  * Search for the anime on Vostfree
  * Returns array of { title, url, genre? }
+ * @param {string} title
+ * @param {object} [opts]
+ * @param {AbortSignal} [opts.signal] - Signal d'annulation
  */
-async function searchAnime(title) {
+async function searchAnime(title, opts = {}) {
+    const signal = opts.signal || null;
+    if (isAborted(signal)) {
+        console.log(`[Vostfree] Aborted before search: "${title}"`);
+        return [];
+    }
     try {
         const results = [];
         const seen = new Set();
@@ -73,7 +81,8 @@ async function searchAnime(title) {
                     'Referer': BASE_URL,
                     'Origin': BASE_URL,
                 },
-                body: `do=search&subaction=search&story=${encodeURIComponent(title)}`
+                body: `do=search&subaction=search&story=${encodeURIComponent(title)}`,
+                signal
             });
             const $ = cheerio.load(postHtml);
             $('.search-result').each((i, block) => {
@@ -107,152 +116,143 @@ async function searchAnime(title) {
     }
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
-  const startTime = Date.now();
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null;
+  if (isAborted(signal)) return [];
+  setCurrentSignal(signal);
+
   const titles = await getTmdbTitles(tmdbId, mediaType, { season });
-    if (titles.length === 0) return [];
+  if (!titles || titles.length === 0) return [];
 
-    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+  const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+  const startTime = Date.now();
 
-    // Vostfree is French — try romaji/Japanese-derived titles first (Shingeki, not Attack on Titan),
-    // then French, then English. Sort: non-ASCII/romaji first, then FR, then EN.
-    const titlesOrdered = [...titles].sort((a, b) => {
-        const aJp = /[^\x00-\x7F]/.test(a) ? -1 : (/[àâéèêëîïôùûüç'L']/i.test(a) ? 0 : 1);
-        const bJp = /[^\x00-\x7F]/.test(b) ? -1 : (/[àâéèêëîïôùûüç'L']/i.test(b) ? 0 : 1);
-        return aJp - bJp;
-    });
+  // Trier les titres : français d'abord (Vostfree est FR)
+  const isFrenchTitle = (t) => /[àâéèêëîïôùûüçœæ']/i.test(t);
+  const titlesOrdered = [
+      ...titles.filter(isFrenchTitle),
+      ...titles.filter(t => !isFrenchTitle(t))
+  ];
 
-    // --- ArmSync: resolve absolute episode for TV series ---
-    let targetEpisodes = episode !== undefined && episode !== null ? [episode] : [];
-    if (mediaType === 'tv' && targetEpisodes.length > 0 && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
-    }
-    // Fix #1: Mettre l'épisode absolu en PRIORITÉ dans la recherche au selecteur.
-    // Pour One Piece S2E1: targetEpisodes = [1, 9] → on essaie [9, 1] pour trouver l'épisode 9 d'abord
-    const episodeStrs = targetEpisodes.map(e => String(e));
-    if (episodeStrs.length > 1 && episodeStrs[0] !== episodeStrs[1]) {
-        // Swap: l'épisode absolu (index 1) devient prioritaire
-        episodeStrs.reverse();
-    }
-    // ------------------------------------
+  // Résoudre les épisodes cibles via ArmSync
+  const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
+  const episodeStrs = targetEpisodes.map(String);
 
-    let allMatches = [];
-    const seenUrls = new Set();
-    
-    // Fix #3: Limiter le parallélisme à 3 recherches à la fois avec early exit
-    const searchables = [];
-    for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
-        if (title.length > 60 || title.length < MIN_QUERY_LENGTH) continue;
-        const n = normalize(title);
-        if (!n) continue;
-        searchables.push(title);
-    }
-    
-    for (let i = 0; i < searchables.length && !isBudgetExhausted(startTime, BUDGET_MS); i += 3) {
-        const batch = searchables.slice(i, i + 3);
-        const batchResults = await Promise.allSettled(
-            batch.map(title => searchAnime(title).then(r => r || []))
-        );
-        for (const r of batchResults) {
-            if (r.status !== 'fulfilled' || r.value.length === 0) continue;
-            for (const m of r.value) {
-                if (!seenUrls.has(m.url)) {
-                    seenUrls.add(m.url);
-                    allMatches.push(m);
-                }
-            }
-        }
-        // Early exit: si on a déjà des résultats, arrêter les recherches
-        if (allMatches.length > 0) {
-            console.log(`[Vostfree] Found ${allMatches.length} matches after ${i + batch.length}/${searchables.length} searches, stopping early`);
-            break;
-        }
-    }
-    
-    // Fix #2: Fallback saison optimisé — 1 seule requête stratégique au lieu de 9+
-    if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
-        
-        if (!hasExplicitSeasonMatch) {
-            // Trouver le meilleur titre pour la recherche : 1er titre purement ASCII (ex: anglais/français)
-            // Évite les titres avec accents/signes diacritiques (ex: "Anh Hùng OnePunch")
-            const mainTitle = titlesOrdered.find(t => !/[^\x00-\x7F]/.test(t) && t.length >= MIN_QUERY_LENGTH) || 
-                              titlesOrdered.find(t => t.length >= MIN_QUERY_LENGTH) || 
-                              titlesOrdered[0];
-            if (mainTitle && mainTitle.length >= MIN_QUERY_LENGTH) {
-                const seasonQuery = `${mainTitle} Saison ${effectiveSeason}`;
-                console.log(`[Vostfree] Season fallback: "${seasonQuery}"`);
-                const batch = await searchAnime(seasonQuery);
-                if (batch && batch.length > 0) {
-                    for (const m of batch) {
-                        if (!seenUrls.has(m.url)) {
-                            seenUrls.add(m.url);
-                            const mSn = getSeasonNumber(m.title + ' ' + m.url);
-                            if (mSn === null || mSn === effectiveSeason) {
-                                allMatches.push(m);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    if (allMatches.length === 0) return [];
+  let allMatches = [];
+  const seenUrls = new Set();
 
-    // Prioritize results that match the season if explicitly mentioned
-    if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
-        allMatches = allMatches.sort((a, b) => {
-            const aSn = getSeasonNumber(a.title + ' ' + a.url);
-            const bSn = getSeasonNumber(b.title + ' ' + b.url);
-            const hasA = aSn === effectiveSeason;
-            const hasB = bSn === effectiveSeason;
-            if (hasA && !hasB) return -1;
-            if (!hasA && hasB) return 1;
-            return 0;
-        });
-    }
+  const searchables = [];
+  for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
+      if (title.length > 60 || title.length < MIN_QUERY_LENGTH) continue;
+      const n = normalize(title);
+      if (!n) continue;
+      searchables.push(title);
+  }
+  
+  for (let i = 0; i < searchables.length && !isBudgetExhausted(startTime, BUDGET_MS) && !isAborted(signal); i += 3) {
+      const batch = searchables.slice(i, i + 3);
+      const batchResults = await Promise.allSettled(
+          batch.map(title => searchAnime(title, { signal }).then(r => r || []))
+      );
+      for (const r of batchResults) {
+          if (r.status !== 'fulfilled' || r.value.length === 0) continue;
+          for (const m of r.value) {
+              if (!seenUrls.has(m.url)) {
+                  seenUrls.add(m.url);
+                  allMatches.push(m);
+              }
+          }
+      }
+      // Early exit: si on a déjà des résultats, arrêter les recherches
+      if (allMatches.length > 0) {
+          console.log(`[Vostfree] Found ${allMatches.length} matches after ${i + batch.length}/${searchables.length} searches, stopping early`);
+          break;
+      }
+  }
+  
+  // Fix #2: Fallback saison optimisé — 1 seule requête stratégique au lieu de 9+
+  if (!isAborted(signal) && mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
+      const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
+      
+      if (!hasExplicitSeasonMatch) {
+          // Trouver le meilleur titre pour la recherche : 1er titre purement ASCII (ex: anglais/français)
+          const mainTitle = titlesOrdered.find(t => !/[^\x00-\x7F]/.test(t) && t.length >= MIN_QUERY_LENGTH) || 
+                            titlesOrdered.find(t => t.length >= MIN_QUERY_LENGTH) || 
+                            titlesOrdered[0];
+          if (mainTitle && mainTitle.length >= MIN_QUERY_LENGTH) {
+              const seasonQuery = `${mainTitle} Saison ${effectiveSeason}`;
+              console.log(`[Vostfree] Season fallback: "${seasonQuery}"`);
+              const batch = await searchAnime(seasonQuery, { signal });
+              if (batch && batch.length > 0) {
+                  for (const m of batch) {
+                      if (!seenUrls.has(m.url)) {
+                          seenUrls.add(m.url);
+                          const mSn = getSeasonNumber(m.title + ' ' + m.url);
+                          if (mSn === null || mSn === effectiveSeason) {
+                              allMatches.push(m);
+                          }
+                      }
+                  }
+              }
+          }
+      }
+  }
+  
+  if (allMatches.length === 0) return [];
 
-    const streams = [];
-    const checkedUrls = new Set();
-    const MAX_MATCHES_TO_PROCESS = 2;
-    let processedCount = 0;
+  // Prioritize results that match the season if explicitly mentioned
+  if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
+      allMatches = allMatches.sort((a, b) => {
+          const aSn = getSeasonNumber(a.title + ' ' + a.url);
+          const bSn = getSeasonNumber(b.title + ' ' + b.url);
+          const hasA = aSn === effectiveSeason;
+          const hasB = bSn === effectiveSeason;
+          if (hasA && !hasB) return -1;
+          if (!hasA && hasB) return 1;
+          return 0;
+      });
+  }
 
-    for (const match of allMatches) {
-        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-        if (checkedUrls.has(match.url)) continue;
-        checkedUrls.add(match.url);
-        if (processedCount >= MAX_MATCHES_TO_PROCESS) break;
+  const streams = [];
+  const checkedUrls = new Set();
+  const MAX_MATCHES_TO_PROCESS = 2;
+  let processedCount = 0;
 
-        const matchLower = match.title.toLowerCase();
-        const matchUrlLower = match.url.toLowerCase();
-        const animeUrl = match.url;
-        const lang = (match.title.toUpperCase().includes(' VF') || match.url.includes('/vf/')) ? 'VF' : 'VOSTFR';
+  for (const match of allMatches) {
+      if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+      if (checkedUrls.has(match.url)) continue;
+      checkedUrls.add(match.url);
+      if (processedCount >= MAX_MATCHES_TO_PROCESS) break;
 
-        // Skip OAV/OVA/FILM/Movie/Special results for TV series (non-film entries)
-        if (mediaType === 'tv') {
-            const skipKeywords = /\b(oav|ova|film|movie)\b/;
-            if (match.genre === 'FILM' || match.genre === 'OAV' ||
-                skipKeywords.test(matchLower) || skipKeywords.test(matchUrlLower)) {
-                continue;
-            }
-        }
+      const matchLower = match.title.toLowerCase();
+      const matchUrlLower = match.url.toLowerCase();
+      const animeUrl = match.url;
+      const lang = (match.title.toUpperCase().includes(' VF') || match.url.includes('/vf/')) ? 'VF' : 'VOSTFR';
 
-        // Skip results explicitly for a different season, unless no match has the target season
-        if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
-            const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-            if (matchSn !== null && matchSn !== effectiveSeason) {
-                const hasCorrectSeason = allMatches.some(m => {
-                    const sn = getSeasonNumber(m.title + ' ' + m.url);
-                    return sn !== null && sn === effectiveSeason;
-                });
-                if (hasCorrectSeason) continue;
-            }
-        }
+      // Skip OAV/OVA/FILM/Movie/Special results for TV series (non-film entries)
+      if (mediaType === 'tv') {
+          const skipKeywords = /\b(oav|ova|film|movie)\b/;
+          if (match.genre === 'FILM' || match.genre === 'OAV' ||
+              skipKeywords.test(matchLower) || skipKeywords.test(matchUrlLower)) {
+              continue;
+          }
+      }
 
-        processedCount++;
-        try {
-            const html = await fetchText(animeUrl);
+      // Skip results explicitly for a different season, unless no match has the target season
+      if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
+          const matchSn = getSeasonNumber(match.title + ' ' + match.url);
+          if (matchSn !== null && matchSn !== effectiveSeason) {
+              const hasCorrectSeason = allMatches.some(m => {
+                  const sn = getSeasonNumber(m.title + ' ' + m.url);
+                  return sn !== null && sn === effectiveSeason;
+              });
+              if (hasCorrectSeason) continue;
+          }
+      }
+
+      processedCount++;
+      try {
+          const html = await fetchText(animeUrl, { signal });
             const $ = cheerio.load(html);
 
             let buttonsId = null;

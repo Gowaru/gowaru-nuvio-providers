@@ -3,9 +3,9 @@
  * Optimisé : réduit le slug probing, fetchJs séquentiel, budget check renforcé
  */
 
-import { fetchText } from './http.js';
+import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
+import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { toSlug, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 
@@ -193,12 +193,15 @@ async function tryFetchEpisode(slug, lang, season, episode) {
     return [];
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const startTime = Date.now();
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
     const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+    const startTime = Date.now();
 
     // --- ArmSync: resolve absolute episode for TV series ---
     const episodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
@@ -211,7 +214,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const streams = [];
 
     // Primary: try the generated slug for each language
-    if (!isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const primaryPromises = [];
         for (const lang of languages) {
             primaryPromises.push(fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes));
@@ -223,7 +226,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // If primary failed, try slug with season suffix (e.g., "overlord-saison-3")
-    if (streams.length === 0 && effectiveSeason > 1 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const seasonSlug = `${slug}-saison-${effectiveSeason}`;
         const seasonPromises = [];
         for (const lang of languages) {
@@ -236,7 +239,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // If still empty, try season numeric slug (e.g., "overlord-3")
-    if (streams.length === 0 && effectiveSeason > 1 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const numSlug = `${slug}-${effectiveSeason}`;
         const numPromises = [];
         for (const lang of languages) {
@@ -249,7 +252,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // Multi-title slug fallback: limité à 5 slugs vraiment uniques (pas juste des variantes de saison)
-    if (streams.length === 0 && titles.length > 1 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (streams.length === 0 && titles.length > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const triedSlugs = new Set([slug]);
         const altSlugTasks = [];
         const seasonSuffixRe = /-(?:saison|season|s)\d+$/i;
@@ -292,7 +295,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // Fallback search
-    if (streams.length === 0 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const foundSlugs = [];
         for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
             const slugs = await searchSlugsScored(t);

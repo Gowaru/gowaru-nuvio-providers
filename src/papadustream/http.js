@@ -4,9 +4,12 @@
  * - Rate limiting intégré
  */
 
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 // Domaines Papadustream actifs (ordonnés par fiabilité)
 const DOMAINS = ['papadustream.club', 'papadustream.fr', 'papadustream.net'];
@@ -50,6 +53,9 @@ function buildUrl(domain, originalUrl) {
  * Tente de récupérer du contenu sur un domaine spécifique.
  */
 async function fetchFromDomain(domain, originalUrl, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) return null;
+
     const url = buildUrl(domain, originalUrl);
     const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
     const mergedHeaders = {
@@ -62,8 +68,9 @@ async function fetchFromDomain(domain, originalUrl, options = {}) {
     await rateLimit(domain);
 
     for (let attempt = 0; attempt <= (options.retries ?? 1); attempt++) {
+        if (isAborted(signal)) return null;
         try {
-            const res = await safeFetch(url, { headers: mergedHeaders, timeout });
+            const res = await safeFetch(url, { headers: mergedHeaders, timeout, signal });
 
             if (!res) {
                 console.log(`[Papadustream] No response from ${domain} (attempt ${attempt + 1})`);

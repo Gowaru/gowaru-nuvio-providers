@@ -3,9 +3,9 @@
  * Optimisé : batchProbe plus rapide, slugs ciblés, fallback WordPress réactivé
  */
 
-import { fetchText } from "./http.js";
+import { fetchText, setCurrentSignal } from "./http.js";
 import cheerio from "cheerio-without-node-native";
-import { resolveStream, isBudgetExhausted, sanitizeSearchQuery, sortStreamsByLanguage, sleep, fetchWithRetry } from "../utils/resolvers.js";
+import { resolveStream, isBudgetExhausted, sanitizeSearchQuery, sortStreamsByLanguage, sleep, fetchWithRetry, isAborted, safeFetch } from "../utils/resolvers.js";
 import { toSlug, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from "../utils/metadata.js";
 
@@ -94,14 +94,19 @@ function extractSeasonFromEpisodeLink(text, url) {
 
 /**
  * Generate season-aware slug variants for fallback probing.
- * Optimisé : essaie d'abord les plus probables, limite à 3.
+ * Ajoute des variantes avec année pour les slugs (ex: spirited-away-2001).
  */
-function generateFallbackSlugs(baseSlug, season) {
-  return [
+function generateFallbackSlugs(baseSlug, season, year) {
+  const slugs = [
     `${baseSlug}-${season}`,
     `${baseSlug}-${season}-vf`,
     `${baseSlug}-saison-${season}`,
-  ].filter(Boolean);
+  ]
+  if (year) {
+    slugs.push(`${baseSlug}-${year}`)
+    slugs.push(`${baseSlug}-${year}-vf`)
+  }
+  return slugs.filter(Boolean)
 }
 
 function cleanSlug(slug) {
@@ -115,18 +120,20 @@ function cleanSlug(slug) {
 }
 
 /**
- * HEAD probe avec cache et délai réduit (300ms au lieu de 800ms).
+ * Probe une URL pour vérifier si la page existe.
+ * Utilise safeFetch (GET) au lieu de HEAD car fetchText avec HEAD
+ * ne permet pas de distinguer 200 (succès) de 404 (pas trouvé)
+ * — les deux retournent '' dans le runtime QuickJS.
+ *
+ * GET avec un timeout court (~1.6s) et vérification du status code.
  */
 async function probeUrl(url) {
   if (slugProbeCache.has(url)) return slugProbeCache.get(url);
-  try {
-    await fetchText(url, { method: "HEAD", timeout: HEAD_TIMEOUT });
-    slugProbeCache.set(url, true);
-    return true;
-  } catch (e) {
-    slugProbeCache.set(url, false);
-    return false;
-  }
+  // safeFetch ne throw jamais (catch interne → retourne null) donc pas de try/catch nécessaire
+  const res = await safeFetch(url, { method: "GET", timeout: HEAD_TIMEOUT * 4 });
+  const exists = res && res.ok;
+  slugProbeCache.set(url, exists);
+  return exists;
 }
 
 async function batchProbe(urls, batchSize = 5, delayMs = 0) {
@@ -202,7 +209,7 @@ async function wordpressSearch(query, season) {    try {
  * Search for anime on VoirAnime
  * Priority: 1) Season-specific slug probing, 2) Generic slug, 3) WordPress search
  */
-async function searchAnime(title, season = 1) {
+async function searchAnime(title, season = 1, year) {
   const baseSlug = toSlug(title);
   const results = [];
   const searchStartTime = Date.now();
@@ -213,7 +220,7 @@ async function searchAnime(title, season = 1) {
 
   // --- STEP 0: Season-specific slugs for S2+ ---
   if (season > 1 && baseSlug.length > 3 && !isProbeBudgetExhausted()) {
-    const seasonSlugs = generateFallbackSlugs(baseSlug, season);
+    const seasonSlugs = generateFallbackSlugs(baseSlug, season, year);
     const seasonUrls = seasonSlugs.map(s => `${BASE_URL}/anime/${s}/`);
     const validSeasonUrls = await batchProbe(seasonUrls, 2, 300);
 
@@ -229,7 +236,7 @@ async function searchAnime(title, season = 1) {
     // Try with cleaned slug
     const cleanBaseSlug = cleanSlug(baseSlug);
     if (cleanBaseSlug !== baseSlug && cleanBaseSlug.length > 3 && !isProbeBudgetExhausted()) {
-      const cleanSlugs = generateFallbackSlugs(cleanBaseSlug, season);
+      const cleanSlugs = generateFallbackSlugs(cleanBaseSlug, season, year);
       const cleanUrls = cleanSlugs.map(s => `${BASE_URL}/anime/${s}/`);
       const validCleanUrls = await batchProbe(cleanUrls, 2, 300);
 
@@ -525,7 +532,11 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
   }
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null;
+  if (isAborted(signal)) return [];
+  setCurrentSignal(signal);
+
   const titles = await getTmdbTitles(tmdbId, mediaType, { season });
   if (titles.length === 0) return [];
 
@@ -553,15 +564,64 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const baseTitles = searchTitles.filter(t => !/\bS(?:eason|aison)?\s*\d/i.test(t));
     const seasonTitles = searchTitles.filter(t => /\bS(?:eason|aison)?\s*\d/i.test(t));
 
-    // Essayer d'abord les titres sans suffixe de saison, puis avec
-    for (const title of [...baseTitles, ...seasonTitles]) {
-      if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-      const result = await searchAnime(title, effectiveSeason);
-      if (result && result.length > 0) {
-        matches = result;
-        break;
+    // --- OPTIMISATION : Prober tous les slugs en parallèle ---
+    // Avant de faire la boucle linéaire (qui peut prendre 15s par titre
+    // avec WordPress search), on probe TOUS les slugs de TOUS les titres
+    // simultanément. Si l'un d'eux match, on évite WordPress complètement.
+    const allTitles = [...baseTitles, ...seasonTitles];
+    if (allTitles.length > 0 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+      const uniqueSlugs = [...new Set(
+        allTitles.map(t => toSlug(t)).filter(s => s && s.length > 3)
+      )];
+
+      // Ajouter les variantes avec année (ex: spirited-away-2001)
+      const year = titles._metadata?.year
+      if (year) {
+        const yearVariants = uniqueSlugs.map(s => `${s}-${year}`)
+        for (const v of yearVariants) {
+          if (!uniqueSlugs.includes(v)) uniqueSlugs.push(v)
+        }
+      }
+
+      // Construire les URLs (VOSTFR + VF) pour tous les slugs
+      const allUrls = uniqueSlugs.flatMap(slug => [
+        `${BASE_URL}/anime/${slug}/`,
+        `${BASE_URL}/anime/${slug}-vf/`,
+      ]);
+
+      console.log(`[VoirAnime] Parallel probe: ${uniqueSlugs.length} unique slugs`);
+      const validUrls = await batchProbe(allUrls, 5, 0);
+
+      if (validUrls.length > 0) {
+        // Associer les URLs valides aux titres correspondants
+        for (const url of validUrls) {
+          const urlSlug = url.match(/\/anime\/([^/]+)\/$/)?.[1]?.replace(/-vf$/, '');
+          const matchingTitle = allTitles.find(t => toSlug(t) === urlSlug);
+          const detectedLang = url.includes('-vf') ? 'VF' : 'VOSTFR';
+          // Convention : VOSTFR n'a pas de suffixe dans le titre (compatible
+          // avec la détection de langue plus bas qui utilise includes("VF"))
+          const baseName = matchingTitle || `[slug:${urlSlug}]`;
+          matches.push({
+            title: detectedLang === 'VF' ? `${baseName} VF` : baseName,
+            url,
+          });
+        }
+        console.log(`[VoirAnime] Parallel probe found ${matches.length} match(es): ${validUrls.join(', ')}`);
       }
     }
+
+    // Fallback: boucle linéaire avec WordPress search si le probe parallèle n'a rien trouvé
+    if (matches.length === 0) {
+      for (const title of allTitles) {
+        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+        const result = await searchAnime(title, effectiveSeason, titles._metadata?.year);
+        if (result && result.length > 0) {
+          matches = result;
+          break;
+        }
+      }
+    }
+
     if (matches.length > 0) {
       SEARCH_CACHE.set(cacheKey, { ts: Date.now(), matches });
     }

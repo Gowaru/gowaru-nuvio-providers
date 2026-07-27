@@ -2,9 +2,13 @@
  * HTTP Utilities for Frenchstream
  */
 
-import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = 'french-stream.one';
 
 export const BASE_URLS = ['https://french-stream.one'];
@@ -21,6 +25,9 @@ export const HEADERS = {
 };
 
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     await rateLimit(DOMAIN);
     console.log(`[Frenchstream] Fetching: ${url}`);
     const base = options.baseUrl || (() => { try { return new URL(url).origin; } catch (e) { return BASE_URL; } })();
@@ -33,7 +40,7 @@ export async function fetchText(url, options = {}) {
     };
 
     const { baseUrl, headers, ...restOptions } = options;
-    const res = await safeFetch(url, { headers: mergedHeaders, ...restOptions, timeout });
+    const res = await safeFetch(url, { headers: mergedHeaders, ...restOptions, timeout, signal });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

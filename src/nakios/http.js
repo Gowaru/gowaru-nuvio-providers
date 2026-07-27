@@ -2,9 +2,13 @@
  * HTTP Utilities for Nakios
  */
 
-import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = 'api.nakios.store';
 
 export const BASE_URL = 'https://nakios.store';
@@ -26,6 +30,9 @@ export const HEADERS = {
  * @returns {Promise<object|null>}
  */
 export async function fetchApi(path, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) return null;
+
     const url = `${API_BASE}${path}`;
     await rateLimit(DOMAIN);
     console.log(`[Nakios] API: ${url}`);
@@ -38,6 +45,7 @@ export async function fetchApi(path, options = {}) {
     const res = await safeFetch(url, {
         headers: mergedHeaders,
         timeout: options.timeout || GLOBAL_TIMEOUT_MS,
+        signal,
     });
 
     if (!res || !res.ok) {

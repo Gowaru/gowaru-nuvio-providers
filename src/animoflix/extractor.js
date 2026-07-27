@@ -1,6 +1,6 @@
-import { fetchText, fetchJson } from './http.js';
+import { fetchText, fetchJson, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, sortStreamsByLanguage, sleep, fetchWithRetry } from '../utils/resolvers.js';
+import { resolveStream, sortStreamsByLanguage, sleep, fetchWithRetry, isAborted } from '../utils/resolvers.js';
 import { resolveTargetEpisodes, toSlug } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { createCache } from '../utils/cache.js';
@@ -159,11 +159,16 @@ function parseSeasonNumber(seasonSlug) {
     return null;
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
-    return _extractStreams(tmdbId, mediaType, season, episode);
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
+    return _extractStreams(tmdbId, mediaType, season, episode, options);
 }
 
-async function _extractStreams(tmdbId, mediaType, season, episode) {
+async function _extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options && options.signal ? options.signal : null;
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 

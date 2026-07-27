@@ -6,8 +6,8 @@
  * - Saga pages (/piece/saga-1) contiennent le JS inline avec atob() + episodeHD[N]
  */
 
-import { fetchText } from './http.js';
-import { isBudgetExhausted } from '../utils/resolvers.js';
+import { fetchText, setCurrentSignal } from './http.js';
+import { isBudgetExhausted, isAborted } from '../utils/resolvers.js';
 import { resolveTargetEpisodes } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { createCache } from '../utils/cache.js';
@@ -226,7 +226,11 @@ async function fetchSagaPage(sagaUrl) {
     }, { successTtl: CACHE_TTL });
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
+export async function extractStreams(tmdbId, mediaType, season, episodeNum, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     const startTime = Date.now();
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];

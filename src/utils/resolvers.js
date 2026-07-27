@@ -140,33 +140,63 @@ export function safeJson(data) {
  * @param {object} [opts]
  * @param {number} [opts.timeout=45000] - Timeout en ms
  * @param {object} [opts.quality] - Options pour expandStreamQualities
- * @returns {Function} getStreams(tmdbId, mediaType, season, episode) → Promise<Array>
+ * @returns {Function} getStreams(tmdbId, mediaType, season, episode, options) → Promise<Array>
+ *   Le 5e paramètre `options` peut contenir `{ signal }` pour l'annulation externe.
  */
 export function createProvider(name, extractFn, opts = {}) {
   const PROVIDER_TIMEOUT = safeConfig(`NUVIO_TIMEOUT_${name.toUpperCase().replace(/[^a-z0-9]/g, '_')}`, opts.timeout || PROVIDER_BUDGET_MS);
   const qualityOpts = opts.quality || { includeCodec: true, includeFps: false };
 
-  return async function getStreams(tmdbId, mediaType, season, episode) {
+  return async function getStreams(tmdbId, mediaType, season, episode, options = {}) {
     const se = mediaType === 'movie' ? '' : ` S${season}E${episode}`;
     const label = `${name} ${mediaType} ${tmdbId}${se}`;
+    const externalSignal = options && options.signal ? options.signal : null;
+    const { signal } = setupAbortSignal(externalSignal);
+    if (isAborted(signal)) return [];
+
     console.log(`[${name}] Request: ${label}`);
 
     try {
       const streams = await withTimeout(
-        extractFn(tmdbId, mediaType, season, episode),
+        extractFn(tmdbId, mediaType, season, episode, { signal }),
         PROVIDER_TIMEOUT,
         label
       );
       return await expandStreamQualities(streams, qualityOpts);
     } catch (error) {
-      if (error.message && error.message.includes('[Timeout]')) {
+      if (error && error.message && error.message.includes('[Timeout]')) {
         console.warn(`[${name}] ${error.message}`);
+      } else if (error && error.name === 'AbortError') {
+        console.warn(`[${name}] Request aborted: ${label}`);
       } else {
         console.error(`[${name}] Error:`, error && error.message || error);
       }
       return [];
     }
   };
+}
+
+/**
+ * Crée un AbortController, connecte un signal externe (si fourni),
+ * et retourne le signal à utiliser.
+ *
+ * Factorise le boilerplate dupliqué dans tous les extracteurs.
+ *
+ * @param {AbortSignal|null} externalSignal - Signal externe optionnel
+ * @returns {{ signal: AbortSignal|null, controller: AbortController|null }}
+ */
+export function setupAbortSignal(externalSignal) {
+  const controller = createAbortController();
+  const signal = controller ? controller.signal : externalSignal;
+  if (controller && externalSignal && !externalSignal.aborted) {
+    try {
+      if (typeof externalSignal.addEventListener === 'function') {
+        externalSignal.addEventListener('abort', function() {
+          try { controller.abort(); } catch (e) {} });
+      }
+    } catch (e) {}
+  }
+  return { signal, controller };
 }
 
 // ─── Existing Code ──────────────────────────────────────────────────────────
@@ -222,6 +252,37 @@ export function isBudgetExhausted(startTime, budgetMs) {
     const elapsed = Date.now() - (startTime || 0);
     return elapsed > (budgetMs || TV_BUDGET_MS);
 }
+
+/**
+ * Crée un AbortController de manière sécurisée.
+ * Fonctionne à la fois dans Node.js et dans le runtime QuickJS (NuvioTV)
+ * où AbortController est polyfillé.
+ * Retourne null si AbortController n'est pas disponible.
+ */
+export function createAbortController() {
+  try {
+    if (typeof AbortController !== 'undefined') {
+      return new AbortController();
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Vérifie si un AbortSignal est déjà aborted.
+ * Fonctionne avec le polyfill QuickJS ou l'AbortSignal natif.
+ */
+export function isAborted(signal) {
+  return signal && (typeof signal.aborted === 'boolean' ? signal.aborted : false);
+}
+
+/**
+ * Crée un AbortController, connecte un signal externe (si fourni),
+ * et retourne le signal à utiliser.
+ *
+ * Factorise le boilerplate dupliqué dans tous les extracteurs.
+ *
+ * @param {AbortSignal|null} externalSignal - Signal externe optionnel
 
 /**
  * Safely reads a numeric config value from process.env (Node.js)
@@ -614,15 +675,44 @@ export async function safeFetch(url, options = {}) {
     }
 
     try {
-        const { timeout, ...rest } = options;
+        const { timeout, signal: externalSignal, ...rest } = options;
+        
+        if (isAborted(externalSignal)) {
+            return null;
+        }
+
         const fetchOpts = {
             ...rest,
             headers: { ...HEADERS, ...rest.headers },
             redirect: 'follow'
         };
+
+        // Construire le signal combiné : timeout + signal externe
         if (timeout > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'undefined') {
-            fetchOpts.signal = AbortSignal.timeout(timeout);
+            // Node.js: AbortSignal.timeout natif
+            const timeoutSignal = AbortSignal.timeout(timeout);
+            if (externalSignal) {
+                // Avec les deux signaux, on crée un AbortController qui relaye
+                const controller = createAbortController();
+                if (controller) {
+                    fetchOpts.signal = controller.signal;
+                    const onAbort = () => { controller.abort() };
+                    // On ne peut pas addEventListener dans le polyfill QuickJS
+                    // mais on peut attacher des listeners sur le signal externe
+                    try { externalSignal.addEventListener('abort', onAbort); } catch (_) {}
+                    try { timeoutSignal.addEventListener('abort', onAbort); } catch (_) {}
+                } else {
+                    // Fallback: juste le signal externe
+                    fetchOpts.signal = externalSignal;
+                }
+            } else {
+                fetchOpts.signal = timeoutSignal;
+            }
+        } else if (externalSignal) {
+            // Pas de timeout, juste un signal externe
+            fetchOpts.signal = externalSignal;
         }
+
         const response = await fetch(url, fetchOpts);
         const elapsed = Date.now() - start;
         if (elapsed > SLOW_THRESHOLD) {

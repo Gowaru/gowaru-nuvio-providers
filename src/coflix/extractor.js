@@ -8,15 +8,20 @@
  */
 
 import { stripSeasonSuffix, toStream, resolveTargetEpisodes } from '../utils/dle-extractor.js'
-import { fetchText, fetchJson } from './http.js'
-import { resolveStream } from '../utils/resolvers.js'
+import { fetchText, fetchJson, setCurrentSignal } from './http.js'
+import { resolveStream, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { createCache } from '../utils/cache.js'
 
 // ─── Cache intelligent partagé ──────────────────────────────────────────────
 const withCache = createCache('cf', 'Coflix');
 
-const PAGE_TIMEOUT = 8000;
+const PAGE_TIMEOUT = 5000;
+
+// Limiter le nombre de titres/slugs à tester pour éviter le timeout budget
+const MAX_MOVIE_TITLES = 2;
+const MAX_SERIES_TITLES = 2;
+const MAX_SLUG_CANDIDATES = 4;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -251,7 +256,11 @@ async function probeEpisode(slug, season, episode) {
 
 // ─── Fonction principale ────────────────────────────────────────────────────
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null
+  if (isAborted(signal)) return []
+  setCurrentSignal(signal)
+
   const titles = await getTmdbTitles(tmdbId, mediaType, { season })
   if (!titles || titles.length === 0) return []
 
@@ -261,8 +270,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
   // ─── FILMS ───────────────────────────────────────────────────────────────
   if (mediaType === 'movie') {
-    for (const title of titles.slice(0, 3)) {
-      const candidates = generateSlugCandidates(title, null, null)
+    for (const title of titles.slice(0, MAX_MOVIE_TITLES)) {
+      const candidates = generateSlugCandidates(title, null, titles._metadata?.year).slice(0, MAX_SLUG_CANDIDATES)
       for (const slug of [...new Set(candidates)]) {
         const result = await probeMovie(slug)
         if (result) {
@@ -293,8 +302,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
   const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, targetSeason, targetEpisode)
 
   for (const ep of targetEpisodes) {
-    for (const title of titles.slice(0, 4)) {
-      const candidates = generateSlugCandidates(title, targetSeason, null)
+    for (const title of titles.slice(0, MAX_SERIES_TITLES)) {
+      const candidates = generateSlugCandidates(title, targetSeason, titles._metadata?.year).slice(0, MAX_SLUG_CANDIDATES)
       for (const slug of [...new Set(candidates)]) {
         const result = await probeEpisode(slug, targetSeason, ep)
         if (result) {
@@ -308,8 +317,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
     // Fallback : chercher avec l'épisode original si le numéro absolu diffère
     if (ep !== targetEpisode) {
-      for (const title of titles.slice(0, 2)) {
-        const candidates = generateSlugCandidates(title, targetSeason, null)
+      for (const title of titles.slice(0, MAX_SERIES_TITLES)) {
+        const candidates = generateSlugCandidates(title, targetSeason, null).slice(0, MAX_SLUG_CANDIDATES)
         for (const slug of [...new Set(candidates)]) {
           const result = await probeEpisode(slug, targetSeason, targetEpisode)
           if (result) {

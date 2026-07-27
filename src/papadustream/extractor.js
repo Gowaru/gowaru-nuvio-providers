@@ -18,8 +18,8 @@
  * 7. Les playlists HLS contiennent multi-qualité (360p→1080p) et multi-audio
  */
 
-import { fetchText, BASE_URL } from './http.js';
-import { safeFetch } from '../utils/resolvers.js';
+import { fetchText, BASE_URL, setCurrentSignal } from './http.js';
+import { safeFetch, isAborted } from '../utils/resolvers.js';
 import { toStream, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
@@ -156,7 +156,11 @@ function extractHlsUrls(html, season, episode) {
 /**
  * Point d'entrée principal — séries TV uniquement.
  */
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     if (mediaType !== 'tv') {
         console.log(`[Papadustream] Unsupported: ${mediaType} (TV series only)`);
         return [];

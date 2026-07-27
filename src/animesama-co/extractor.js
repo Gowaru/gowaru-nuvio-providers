@@ -1,6 +1,7 @@
 import cheerio from 'cheerio-without-node-native'
-import { fetchText, postSearch } from './http.js'
+import { fetchText, postSearch, setCurrentSignal } from './http.js'
 import { getTmdbTitles } from '../utils/metadata.js'
+import { isAborted } from '../utils/resolvers.js'
 import {
   normalize, scoreMatch, resolveWithTimeout, detectSubType, toStream, parseAvailableSeasons, stripSeasonSuffix, resolveTargetEpisodes,
 } from '../utils/dle-extractor.js'
@@ -214,7 +215,11 @@ async function detectSubTypeCached(tmdbId, mediaType) {
 
 const SEASON_PATTERN = /\/saison-(\d+)\.html/g
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null
+  if (isAborted(signal)) return []
+  setCurrentSignal(signal)
+
   const titles = await getTmdbTitles(tmdbId, mediaType, { season })
   if (!titles || titles.length === 0) return []
 

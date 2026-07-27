@@ -1,7 +1,11 @@
-import { safeFetch, sanitizeSearchQuery, fetchWithRetry, createProviderRateLimiter } from '../utils/resolvers.js'
+import { safeFetch, sanitizeSearchQuery, fetchWithRetry, createProviderRateLimiter, isAborted } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
 
 const rateLimit = createProviderRateLimiter()
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = SITE.DOMAIN
 
 export const HEADERS = {
@@ -20,13 +24,17 @@ export const AJAX_HEADERS = {
 }
 
 export async function fetchText(url, options = {}) {
+  const signal = options.signal || _currentSignal
+  if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+
   await rateLimit(DOMAIN)
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
   const retries = options.retries ?? 2
 
   return fetchWithRetry(async () => {
-    const res = await safeFetch(url, { headers: mergedHeaders, timeout })
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout, signal })
     if (!res) throw new Error(`No response from ${url}`)
     if (!res.ok) {
       const status = typeof res.status === 'number' ? res.status : 'no-response'
