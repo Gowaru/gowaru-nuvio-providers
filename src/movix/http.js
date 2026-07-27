@@ -3,7 +3,10 @@
  * - Retry avec backoff pour gérer l'instabilité Cloudflare
  * - Timeout adapté (20s)
  */
-import { safeFetch, sleep } from '../utils/resolvers.js';
+import { safeFetch, sleep, isAborted } from '../utils/resolvers.js';
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
@@ -74,9 +77,13 @@ export async function fetchJson(url, options = {}) {
 }
 
 async function attemptFetch(url, customHeaders, rest) {
+    const signal = rest?.signal || _currentSignal;
+    if (isAborted(signal)) return null;
+
     const res = await safeFetch(url, {
         timeout: 20000,
         headers: { ...HEADERS, ...(customHeaders || {}) },
+        signal,
         ...rest
     });
 

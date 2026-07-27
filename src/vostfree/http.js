@@ -2,10 +2,13 @@
  * HTTP Utilities for Vostfree
  */
 
-import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
 
 const DOMAIN = 'ipv4.vostfree.ws';
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -19,12 +22,34 @@ const HTTP_SKIP_CODES = [403, 404, 429, 500, 502, 503, 504, 522, 523, 524];
 
 /**
  * Fetch text content from a URL
+ *
+ * @param {string} url - URL to fetch
+ * @param {object} [options] - Options de fetch
+ * @param {object} [options.headers] - Headers additionnels
+ * @param {AbortSignal} [options.signal] - Signal d'annulation
+ * @returns {Promise<string>}
  */
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+
+    // Abort immédiat si le signal est déjà avorté
+    if (isAborted(signal)) {
+        throw new Error('AbortError: Request aborted');
+    }
+
     console.log(`[Vostfree] Fetching: ${url}`);
     const { headers: customHeaders, ...rest } = options;
     await rateLimit(DOMAIN);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
+
+    // Vérifier après rate limiting
+    if (isAborted(signal)) {
+        throw new Error('AbortError: Request aborted after rate limit');
+    }
+
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest, signal });
+    if (isAborted(signal)) {
+        throw new Error('AbortError: Request aborted after fetch');
+    }
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         if (HTTP_SKIP_CODES.includes(status)) throw new Error(`HTTP_SKIP ${status}`);

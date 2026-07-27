@@ -4,9 +4,9 @@
  */
 
 import { stripSeasonSuffix, resolveTargetEpisodes } from '../utils/dle-extractor.js';
-import { fetchText } from './http.js';
+import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, sortStreamsByLanguage } from '../utils/resolvers.js';
+import { resolveStream, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://v2.animevostfr.org";
@@ -365,7 +365,11 @@ function getPlayerName(url) {
     return 'Player';
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 

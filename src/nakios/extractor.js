@@ -17,10 +17,10 @@
  * - Titre descriptif incluant le provider et la qualité
  */
 
-import { fetchApi, BASE_URL } from './http.js';
+import { fetchApi, BASE_URL, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
 import { getTmdbTitle } from '../utils/search-fallback.js';
-import { safeConfig } from '../utils/resolvers.js';
+import { safeConfig, isAborted } from '../utils/resolvers.js';
 
 const withCache = createCache('nk', 'Nakios');
 
@@ -292,7 +292,11 @@ function createStream(source) {
  * @param {number} episode
  * @returns {Promise<Array>}
  */
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     console.log(`[Nakios] Looking up ${mediaType} ${tmdbId}`);
 
     // Étape 1: Construire le chemin API direct

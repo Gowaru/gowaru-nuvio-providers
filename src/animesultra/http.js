@@ -2,7 +2,10 @@
  * HTTP Utilities for AnimesUltra
  */
 
-import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const rateLimit = createProviderRateLimiter();
 const DOMAIN = 'ww.animesultra.org';
@@ -19,10 +22,13 @@ export const HEADERS = {
  * Fetch text content from a URL
  */
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     console.log(`[AnimesUltra] Fetching: ${url}`);
     await rateLimit(DOMAIN);
     const { headers: customHeaders, ...rest } = options;
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest, signal });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

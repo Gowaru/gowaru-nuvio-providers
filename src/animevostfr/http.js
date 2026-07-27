@@ -13,7 +13,10 @@ export const HEADERS = {
     "Connection": "keep-alive",
 };
 
-import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 /**
  * Fetch text content from a URL
@@ -21,10 +24,13 @@ import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
 const HTTP_SKIP_CODES = [403, 404, 429, 500, 502, 503, 504, 522, 523, 524];
 
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     await rateLimit(DOMAIN);
     console.log(`[AnimeVOSTFR] Fetching: ${url}`);
     const { headers: customHeaders, ...rest } = options;
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest, signal });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         if (HTTP_SKIP_CODES.includes(status)) throw new Error(`HTTP_SKIP ${status}`);

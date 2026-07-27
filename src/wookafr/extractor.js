@@ -1,6 +1,6 @@
-import { fetchText, postForm, fetchJson } from './http.js'
+import { fetchText, postForm, fetchJson, setCurrentSignal } from './http.js'
 import cheerio from 'cheerio-without-node-native'
-import { resolveStream, safeFetch, withTimeout } from '../utils/resolvers.js'
+import { resolveStream, safeFetch, withTimeout, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { toStream, toSlug, normalize, resolveTargetEpisodes } from '../utils/dle-extractor.js'
 import {
@@ -186,7 +186,7 @@ async function trySearch(titles) {
   for (const r of settled) {
     if (r.status === 'fulfilled' && r.value) return r.value
   }
-  const slugMatch = await trySlugFallback(titles[0], 'movie')
+  const slugMatch = await trySlugFallback(titles[0], 'movie', undefined, titles._metadata?.year)
   if (slugMatch) { console.log(`[Wookafr] Found via slug: ${slugMatch.url}`); return slugMatch }
 
   // Dernier recours : WP REST API
@@ -230,7 +230,7 @@ async function trySearchSeries(titles) {
     if (r.status === 'fulfilled' && r.value) return r.value
   }
   // Try slug fallback before using general results (which may be wrong movies)
-  const slugMatch = await trySlugFallback(titles[0], 'series', 0)
+  const slugMatch = await trySlugFallback(titles[0], 'series', 0, titles._metadata?.year)
   if (slugMatch) { console.log(`[Wookafr] Found series via slug: ${slugMatch.url}`); return slugMatch }
 
   // Dernier recours : WP REST API
@@ -308,7 +308,7 @@ function cleanSlug(slug) {
     .replace(/^-|-$/g, '');
 }
 
-async function trySlugFallback(title, type, season) {
+async function trySlugFallback(title, type, season, year) {
   const slug = toSlug(title)
   const candidates = [slug]
   
@@ -326,6 +326,12 @@ async function trySlugFallback(title, type, season) {
     candidates.push(`${slug}-${season}`)
   }
   
+  // Ajouter les variantes avec année (ex: le-voyage-de-chihiro-2001)
+  if (year) {
+    candidates.push(`${slug}-${year}`)
+    if (cleaned !== slug) candidates.push(`${cleaned}-${year}`)
+  }
+  
   const uniqueCandidates = [...new Set(candidates.filter(c => c && c.length > 3))]
   const domains = [...new Set([SITE.BASE_URL, ...SITE.DOMAINS])]
   
@@ -341,7 +347,11 @@ async function trySlugFallback(title, type, season) {
 }
 
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null
+  if (isAborted(signal)) return []
+  setCurrentSignal(signal)
+
   const startTime = Date.now()
   const BUDGET_MS = 45000
   const titles = await getTmdbTitles(tmdbId, mediaType, { season })
@@ -349,6 +359,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
 
   const subType = await detectSubType(tmdbId, mediaType, titles)
   if (subType) console.log(`[Wookafr] Detected subtype: ${subType}`)
+
+  if (isAborted(signal)) return []
 
   if (mediaType === 'movie') {
     return extractMovie(tmdbId, titles, subType)

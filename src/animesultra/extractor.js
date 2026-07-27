@@ -1,7 +1,7 @@
 import { stripSeasonSuffix, normalize, resolveTargetEpisodes, toStream } from '../utils/dle-extractor.js';
-import { fetchText } from './http.js';
+import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://ww.animesultra.org";
@@ -112,20 +112,17 @@ async function searchAnime(title) {
     }
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
-    const startTime = Date.now();
-    const titles = await getTmdbTitles(tmdbId, mediaType, { season });
-    if (titles.length === 0) return [];
-
-    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
-
-    const titlesOrdered = [...titles].sort((a, b) => {
-        const score = t => /[àâéèêëîïôùûüç]/i.test(t) ? 0 : (/[\x20-\x7F]/.test(t) ? 1 : 2);
-        return score(a) - score(b);
-    });
-
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
     const BUDGET_MS = 45000;
+    const startTime = Date.now();
     const epNum = episode || 1;
+    const titles = await getTmdbTitles(tmdbId, mediaType, { season });
+    if (!titles || titles.length === 0) return [];
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
+    const titlesOrdered = [...titles];
     const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, epNum, { startTime, budgetMs: BUDGET_MS })
 
     let matches = [];
@@ -290,7 +287,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const spinoffCandidates = [];
 
     for (const match of matches) {
-        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
         if (!match.url) continue;
         if (processedCount >= 8) break;
 
@@ -346,7 +343,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     }
 
     // Fallback: if no non-spinoff match produced streams, try spinoffs
-    if (streams.length === 0 && spinoffCandidates.length > 0 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (streams.length === 0 && spinoffCandidates.length > 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         for (const match of spinoffCandidates) {
             if (processedCount >= 6) break;
 
@@ -395,7 +392,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
         }
     }
 
-    if (streams.length === 0 && effectiveSeason && matches.length > 1 && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (streams.length === 0 && effectiveSeason && matches.length > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const byPart = {};
         for (const m of matches) {
             const sNum = detectSeason(m.title, m.url);

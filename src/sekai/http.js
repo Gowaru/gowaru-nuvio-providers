@@ -1,6 +1,10 @@
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = 'sekai.one';
 const RETRY_DELAYS = [1000, 3000, 5000];
 
@@ -22,6 +26,9 @@ function isCloudflareBlock(text) {
 }
 
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     await rateLimit(DOMAIN);
 
     const { headers: customHeaders, retries = 2, ...rest } = options;
@@ -33,14 +40,22 @@ export async function fetchText(url, options = {}) {
 
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
+        if (isAborted(signal)) {
+            lastError = new Error('AbortError: Request aborted');
+            break;
+        }
         if (attempt > 0) {
             const delay = RETRY_DELAYS[attempt - 1] || 5000;
             console.log(`[Sekai] Retry ${attempt}/${retries} in ${delay}ms: ${url}`);
             await sleep(delay);
+            if (isAborted(signal)) {
+                lastError = new Error('AbortError: Request aborted');
+                break;
+            }
         }
 
         try {
-            const res = await safeFetch(url, mergedOpts);
+            const res = await safeFetch(url, { ...mergedOpts, signal });
             if (!res) {
                 lastError = new Error(`No response for ${url}`);
                 continue;
@@ -73,6 +88,7 @@ export async function fetchText(url, options = {}) {
 
             return await res.text();
         } catch (e) {
+            if (e.name === 'AbortError' || isAborted(signal)) throw e;
             lastError = e;
             if (attempt < retries && (
                 e.message?.includes('fetch failed') ||

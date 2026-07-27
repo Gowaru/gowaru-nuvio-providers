@@ -1,5 +1,8 @@
-import { safeFetch, fetchWithRetry, sleep } from '../utils/resolvers.js'
+import { safeFetch, fetchWithRetry, sleep, isAborted } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 export const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -17,12 +20,16 @@ export const AJAX_HEADERS = {
 }
 
 export async function fetchText(url, options = {}) {
+  const signal = options.signal || _currentSignal
+  if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
   const retries = options.retries ?? 2
 
   return fetchWithRetry(async () => {
-    const res = await safeFetch(url, { headers: mergedHeaders, timeout })
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout, signal })
     if (!res) throw new Error(`No response from ${url}`)
     if (!res.ok) {
       const status = typeof res.status === 'number' ? res.status : 'no-response'
@@ -34,10 +41,12 @@ export async function fetchText(url, options = {}) {
 }
 
 export async function fetchJson(url, options = {}) {
+  const signal = options.signal || _currentSignal
   const mergedHeaders = { ...AJAX_HEADERS, ...(options.headers || {}) }
 
   return fetchWithRetry(async () => {
-    const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? TIMEOUTS.SEARCH })
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+    const res = await safeFetch(url, { headers: mergedHeaders, timeout: options.timeout ?? TIMEOUTS.SEARCH, signal })
     if (!res) throw new Error(`No response from ${url}`)
     const text = await res.text()
     if (!text || text === '[]') return []

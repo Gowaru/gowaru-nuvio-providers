@@ -1,8 +1,8 @@
 import { stripSeasonSuffix, toStream, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
-import { safeFetch, resolveStream, isBudgetExhausted } from '../utils/resolvers.js';
+import { safeFetch, resolveStream, isBudgetExhausted, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { fetchText, fetchJson, BASE_URL, BASE_URLS } from './http.js';
+import { fetchText, fetchJson, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
 
 const withCache = createCache('fs', 'FrenchStream');
@@ -512,7 +512,11 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
 
 /* ---------- MAIN EXPORT ---------- */
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     const startTime = Date.now();
     const BUDGET_MS = 45000;
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
@@ -523,7 +527,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode) {
     const subType = await detectSubType(tmdbId, mediaType, titles);
     if (subType) console.log('[Frenchstream] subType: ' + subType);
 
-    if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
+    if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return [];
 
     if (mediaType === 'tv') {
         // --- ArmSync: resolve absolute episode for TV series ---

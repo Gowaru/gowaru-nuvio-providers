@@ -131,6 +131,17 @@ async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
         }
     }
     
+    // Attacher les métadonnées (année extraite de startDate)
+    const dateStr = anime.startDate;
+    const year = dateStr && dateStr.length >= 4 && /^\d{4}/.test(dateStr) ? parseInt(dateStr.substring(0, 4), 10) : null;
+
+    titles._metadata = {
+        isAnime: (anime.originalLanguage || '') === 'ja',
+        name: anime.canonicalTitle || '',
+        originalLanguage: anime.originalLanguage || '',
+        year: year
+    };
+
     console.log(`[Metadata] Kitsu fallback titles for ${kitsuId}: ${titles.join(' | ')}`);
     return titles;
 }
@@ -173,10 +184,14 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
 
             // Extraire les métadonnées depuis la même réponse (aucun fetch supplémentaire)
             if (data) {
+                const dateStr = type === 'movie' ? data.release_date : data.first_air_date;
+                const year = dateStr && dateStr.length >= 4 && /^\d{4}/.test(dateStr) ? parseInt(dateStr.substring(0, 4), 10) : null;
+
                 metadata = {
                     isAnime: data.original_language === 'ja' || (data.genres || []).some(g => g.id === 16),
                     name: data.name || data.title || '',
-                    originalLanguage: data.original_language || ''
+                    originalLanguage: data.original_language || '',
+                    year: year
                 };
             }
 

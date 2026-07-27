@@ -1,6 +1,6 @@
-import { fetchText, BASE } from './http.js';
+import { fetchText, BASE, setCurrentSignal } from './http.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { resolveStream, safeJson } from '../utils/resolvers.js';
+import { resolveStream, safeJson, isAborted } from '../utils/resolvers.js';
 import { normalize } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
@@ -392,7 +392,11 @@ async function getAnimeData(slug, mediaType) {
     });
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episodeNum) {
+export async function extractStreams(tmdbId, mediaType, season, episodeNum, options = {}) {
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 

@@ -1,7 +1,11 @@
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js'
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js'
 import { SITE, TIMEOUTS } from './config.js'
 
 const rateLimit = createProviderRateLimiter()
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = SITE.DOMAIN
 const RETRY_DELAYS = [1000, 3000, 5000]
 
@@ -32,21 +36,41 @@ function isCloudflareBlock(text) {
 }
 
 export async function fetchText(url, options = {}) {
+  const signal = options.signal || _currentSignal
+
+  // Bail out immédiat si le signal est déjà avorté
+  if (isAborted(signal)) {
+    console.log('[Streamzo] Request aborted before fetch:', url)
+    throw new Error('AbortError: Request aborted')
+  }
+
   await rateLimit(DOMAIN)
+
   const timeout = options.timeout ?? TIMEOUTS.PAGE
   const mergedHeaders = { ...HEADERS, ...(options.headers || {}) }
   const retries = options.retries ?? 2
 
   let lastError = null
   for (let attempt = 0; attempt <= retries; attempt++) {
+    // Vérifier l'abort à chaque itération de retry
+    if (isAborted(signal)) {
+      lastError = new Error('AbortError: Request aborted during retry')
+      break
+    }
+
     if (attempt > 0) {
       const delay = RETRY_DELAYS[attempt - 1] || 5000
       console.log(`[Streamzo] Retry ${attempt}/${retries} in ${delay}ms`)
       await sleep(delay)
+      // Re-vérifier après le sleep au cas où l'abort a eu lieu pendant l'attente
+      if (isAborted(signal)) {
+        lastError = new Error('AbortError: Request aborted during retry delay')
+        break
+      }
     }
 
     try {
-      const res = await safeFetch(url, { headers: mergedHeaders, timeout })
+      const res = await safeFetch(url, { headers: mergedHeaders, timeout, signal })
       if (!res) {
         lastError = new Error(`No response from ${url}`)
         continue
@@ -76,6 +100,10 @@ export async function fetchText(url, options = {}) {
 
       return await res.text()
     } catch (e) {
+      // Ne pas retry si l'abort a été déclenché
+      if (e.name === 'AbortError' || isAborted(signal)) {
+        throw e
+      }
       lastError = e
       if (attempt < retries && (
         e.message?.includes('fetch failed') ||
@@ -88,6 +116,10 @@ export async function fetchText(url, options = {}) {
       }
       throw e
     }
+  }
+
+  if (lastError && (lastError.name === 'AbortError' || lastError.message?.includes('AbortError'))) {
+    throw lastError
   }
 
   throw lastError || new Error(`Failed after ${retries + 1} attempts: ${url}`)

@@ -2,7 +2,10 @@
  * HTTP Utilities for Anime-Sama
  */
 
-import { safeFetch, createProviderRateLimiter } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const DOMAIN = 'anime-sama.to';
 const rateLimit = createProviderRateLimiter();
@@ -23,10 +26,13 @@ export const HEADERS = {
 };
 
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
     console.log(`[Anime-Sama] Fetching: ${url}`);
     const { headers: customHeaders, ...rest } = options;
     await rateLimit(DOMAIN);
-    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest });
+    const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest, signal });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for ${url}`);

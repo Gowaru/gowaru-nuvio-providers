@@ -1,6 +1,10 @@
-import { safeFetch, createProviderRateLimiter, sleep } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter(1200, 0.3);
+
+let _currentSignal = null;
+export function setCurrentSignal(signal) { _currentSignal = signal; }
+
 const DOMAIN = 'animoflix.to';
 
 // Délais de retry pour 429 (rate limiting) et erreurs réseau
@@ -19,6 +23,9 @@ export const HEADERS = {
  * progressivement pour éviter les blocages permanents.
  */
 export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+
     const timeout = options.timeout
     const method = options.method || 'GET'
     const maxRetries = options.retries ?? 2
@@ -27,10 +34,18 @@ export async function fetchText(url, options = {}) {
 
     let lastError = null
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (isAborted(signal)) {
+            lastError = new Error('AbortError: Request aborted')
+            break
+        }
         if (attempt > 0) {
             const delay = RETRY_DELAYS[attempt - 1] || 5000
             console.log(`[AnimoFlix] Retry ${attempt}/${maxRetries} after ${delay}ms`)
             await sleep(delay)
+            if (isAborted(signal)) {
+                lastError = new Error('AbortError: Request aborted')
+                break
+            }
         }
 
         await rateLimit(DOMAIN)
@@ -40,6 +55,7 @@ export async function fetchText(url, options = {}) {
                 headers: mergedHeaders,
                 method,
                 timeout,
+                signal,
                 ...rest
             })
 
@@ -66,6 +82,7 @@ export async function fetchText(url, options = {}) {
 
             return await res.text()
         } catch (e) {
+            if (e.name === 'AbortError' || isAborted(signal)) throw e
             lastError = e
             if (attempt < maxRetries && (
                 e.message?.includes('fetch failed') ||

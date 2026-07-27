@@ -1,6 +1,6 @@
-import { fetchText, fetchJson } from './http.js'
+import { fetchText, fetchJson, setCurrentSignal } from './http.js'
 import cheerio from 'cheerio-without-node-native'
-import { resolveStream, safeFetch } from '../utils/resolvers.js'
+import { resolveStream, safeFetch, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { toStream, normalize, resolveTargetEpisodes } from '../utils/dle-extractor.js'
 import {
@@ -179,12 +179,18 @@ async function createStreamsFromServers(servers, name, subType) {
   return results.filter(r => r.status === 'fulfilled').map(r => r.value).filter(s => s && s.isDirect)
 }
 
-export async function extractStreams(tmdbId, mediaType, season, episode) {
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+  const signal = options?.signal || null
+  if (isAborted(signal)) return []
+  setCurrentSignal(signal)
+
   const titles = await getTmdbTitles(tmdbId, mediaType, { season })
   if (!titles || titles.length === 0) return []
 
   const subType = await detectSubType(tmdbId, mediaType, titles)
   if (subType) console.log(`[Flemmix] Detected subtype: ${subType}`)
+
+  if (isAborted(signal)) return []
 
   if (mediaType === 'movie') {
     return extractMovie(tmdbId, titles, subType)
