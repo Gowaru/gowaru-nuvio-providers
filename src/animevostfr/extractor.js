@@ -3,7 +3,7 @@
  * Site: animevostfr.org (WordPress + ToroPlay theme)
  */
 
-import { stripSeasonSuffix, resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { stripSeasonSuffix, resolveTargetEpisodes, countExtraWords } from '../utils/dle-extractor.js';
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
@@ -72,15 +72,22 @@ async function searchAnime(title) {
         const simplifiedTitle = normalize(title);
         const titleWords = simplifiedTitle.split(/\s+/).filter(w => w.length > 2);
 
-        // Score each result by how many title words it matches
+        // Score each result by how many title words it matches.
+        // ATTENTION : l'égalité exacte doit être testée AVANT l'includes,
+        // sinon "Naruto" (exact) et "Naruto Shippuden" (contient "naruto")
+        // sont ex æquo à 100 et le tri stable garde l'ordre du site → la
+        // mauvaise série (suite/fan-edit) est extraite pour la S1.
         const scored = unique.map(r => {
             const n = normalize(r.title);
             let score = 0;
-            // Only use full includes match if simplifiedTitle is at least 5 chars (avoid false positives like "boys")
-            if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
-                score = 100;
-            } else if (n === simplifiedTitle) {
+            if (n === simplifiedTitle) {
                 score = 200;
+            } else if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
+                // Includes match : pénalité par mot significatif en trop
+                // (anti fan-edit/dérivés : "Naruto Shippuden Kai" vs "Naruto" → -50)
+                score = 100;
+                const extra = countExtraWords(n, simplifiedTitle);
+                if (extra > 0) score -= Math.min(extra * 25, 60);
             } else {
                 for (const w of titleWords) {
                     if (n.includes(w)) score += 20;

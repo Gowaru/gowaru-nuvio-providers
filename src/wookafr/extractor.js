@@ -2,7 +2,7 @@ import { fetchText, postForm, fetchJson, setCurrentSignal } from './http.js'
 import cheerio from 'cheerio-without-node-native'
 import { resolveStream, safeFetch, withTimeout, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
-import { toStream, toSlug, normalize, resolveTargetEpisodes } from '../utils/dle-extractor.js'
+import { toStream, toSlug, normalize, resolveTargetEpisodes, stripSeasonSuffix, countExtraWords } from '../utils/dle-extractor.js'
 import {
   SITE, SELECTORS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, ANIME_GENRE_ID, ANIME_KEYWORDS,
@@ -21,12 +21,34 @@ function scoreMatch(resultTitle, searchTitle) {
   const nt = normalize(searchTitle)
   const nr = normalize(resultTitle)
   if (!nt || !nr) return 0
-  if (nr === nt) return SCORES.EXACT_MATCH
-  if (nr.includes(nt) || nt.includes(nr)) return SCORES.STRONG_MATCH
-  const words = nt.split(/\s+/).filter(w => w.length > 2)
-  const rWords = new Set(nr.split(/\s+/))
+
+  // Retire les infos de saison pour le matching (ex: "Saison 2")
+  const cleanNr = nr.replace(/saison\s*\d+/g, '').replace(/:\s*$/, '').trim()
+  const cleanNt = nt.replace(/saison\s*\d+/g, '').replace(/:\s*$/, '').trim()
+
+  if (cleanNr === cleanNt || nr === nt) return SCORES.EXACT_MATCH
+  if (nr.includes(nt) || nt.includes(nr)) {
+    // Pénalité anti-fan-edit : chaque mot significatif en trop dans le résultat
+    // (ex: requête "Naruto" → résultat "Naruto Shippuden Kai" = 2 mots extra)
+    // retire -25. Empêche les recuts/dérivés de battre le titre exact.
+    const extra = countExtraWords(nr, nt)
+    if (extra > 0) {
+      return Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
+    }
+    return SCORES.STRONG_MATCH
+  }
+
+  const words = cleanNt.split(/\s+/).filter(w => w.length > 2)
+  const rWords = new Set(cleanNr.split(/\s+/))
   const matched = words.filter(w => rWords.has(w)).length
-  if (words.length > 0) return (matched / words.length) * 50
+  if (words.length > 0) {
+    // Anti-false-positive: si la recherche a ≥2 mots significatifs mais que
+    // le résultat en partage < 2, c'est probablement une série différente
+    // Ex: "Law & Order" → mots=["law","order"] cherche "Police in a Pod" → matched=0 → reject
+    // Ex: "One Piece" → mots=["one","piece"] cherche "One Piece Saison 2" → matched=2 → OK
+    if (words.length >= 2 && matched < 2) return 0
+    return Math.round((matched / words.length) * 50)
+  }
   return 0
 }
 
@@ -354,8 +376,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
   const startTime = Date.now()
   const BUDGET_MS = 45000
-  const titles = await getTmdbTitles(tmdbId, mediaType, { season })
-  if (!titles || titles.length === 0) return []
+  const rawTitles = await getTmdbTitles(tmdbId, mediaType, { season })
+  if (!rawTitles || rawTitles.length === 0) return []
+  // Strip season suffixes (ex: "Naruto Season 1" → "Naruto") pour éviter les
+  // variantes diluées dans la recherche — préserve les métadonnées attachées
+  const titles = rawTitles.map(t => stripSeasonSuffix(t))
+  titles._metadata = rawTitles._metadata
+  titles.effectiveSeason = rawTitles.effectiveSeason
 
   const subType = await detectSubType(tmdbId, mediaType, titles)
   if (subType) console.log(`[Wookafr] Detected subtype: ${subType}`)

@@ -1,4 +1,4 @@
-import { stripSeasonSuffix, toStream, resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
 import { safeFetch, resolveStream, isBudgetExhausted, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
@@ -164,7 +164,15 @@ function scoreCard(card, queryTitle, mediaType, season) {
     if (!q || !t) return 0;
     let score = 0;
     if (t === q) score += 120;
-    if (hay.includes(q)) score += 70;
+    if (hay.includes(q)) {
+      score += 70;
+      // Pénalité anti-fan-edit : chaque mot significatif en trop du résultat
+      // (ex: requête "Naruto" → "Naruto Shippuden Kai" = 2 mots extra) retire -25.
+      // Utilise hay (titre + href normalisés) pour couvrir aussi les slugs de
+      // fan-edit (ex: card titrée "Naruto" avec href /naruto-shippuden-kai-1x1/).
+      const extra = countExtraWords(hay, q);
+      if (extra > 0) score -= Math.min(extra * 25, 55);
+    }
     if (q.includes(t)) score += 40;
     const qWords = new Set(q.split(' ').filter(w => w && w.length > 2 && !['the','and','for','with','from','des','les','une','dans','sur','via','de','du','la','le'].includes(w)));
     const tWords = new Set(hay.split(' ').filter(Boolean));

@@ -219,6 +219,9 @@ const _atob = (str) => {
 
 const CODEC_PREFERENCE = ['AV1', 'H.265', 'H.264', 'VP9'];
 
+/** Alphabet base64 (décodage maison QuickJS-safe pour fsvid/vidzy) */
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
 /**
  * Sanitize a search query for site search APIs.
  * Replaces hyphens, apostrophes, and common punctuation that can break
@@ -325,7 +328,11 @@ function isKnownFakeDirectUrl(url) {
         u.includes('bigbuckbunny') ||
         u.includes('sample-videos.com') ||
         u.includes('example.com') ||
-        u.includes('localhost')
+        u.includes('localhost') ||
+        // Leurre anti-scraper fsvid/vidzy : "troll/master.m3u8" est identique
+        // pour tous les embeds (vidéo de test). Empêche le fallback générique
+        // de le renvoyer comme URL directe si resolveFsvidVidzy échoue.
+        u.includes('/troll/master.m3u8')
     );
 }
 
@@ -333,7 +340,8 @@ function isPlayableMediaUrl(url) {
     if (!url || typeof url !== 'string') return false;
     const u = url.toLowerCase();
     if (isKnownFakeDirectUrl(u)) return false;
-    return /\.(mp4|m3u8|mkv|webm)(\?.*)?$/.test(u) || u.includes('/hls2/') || u.includes('/master.m3u8');
+    // .mpd (DASH) est reconnu par ExoPlayer/Media3 nativement (Util.inferContentType)
+    return /\.(mp4|m3u8|mkv|webm|mpd)(\?.*)?$/.test(u) || u.includes('/hls2/') || u.includes('/master.m3u8');
 }
 
 const STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
@@ -472,6 +480,7 @@ function inferType(url) {
     if (!url || typeof url !== 'string') return null;
     const u = url.toLowerCase();
     if (u.includes('.m3u8') || u.includes('/hls/') || u.includes('/hls2/') || u.includes('master.m3u8')) return 'hls';
+    if (u.includes('.mpd')) return 'dash';
     if (u.includes('.mp4')) return 'mp4';
     if (u.includes('.mkv')) return 'mkv';
     if (u.includes('.webm')) return 'webm';
@@ -971,6 +980,22 @@ export async function resolveUqload(url) {
     if (originalDomain.endsWith('.to')) fallbackDomains.push('uqload.co');
     const uniqueDomains = [...new Set(fallbackDomains)];
 
+    // Marqueurs de fichier expiré/supprimé servis par uqload (vérifié en live sur
+    // .is ET .co : page ~427 octets "File is no longer available as it expired or
+    // has been deleted"). Un fichier expiré l'est sur TOUS les domaines → on n'a
+    // pas besoin de tenter les fallbacks, et on marque l'embed comme mort pour que
+    // resolveStream saute le generic fallback (évite un re-fetch inutile + peeling
+    // d'iframe + regex sur une page morte → économie de budget).
+    const EXPIRED_MARKERS = [
+        'file is no longer available',
+        'expired or has been deleted',
+        'file no longer exists',
+    ];
+    const isExpiredPage = (html) => {
+        const low = html.toLowerCase();
+        return EXPIRED_MARKERS.some(m => low.includes(m));
+    };
+
     return new Promise((resolve) => {
         let failures = 0;
         let resolved = false;
@@ -982,6 +1007,12 @@ export async function resolveUqload(url) {
                 const res = await safeFetch(tryUrl, { headers: { ...HEADERS, 'Referer': ref } });
                 if (res) {
                     const html = await res.text();
+                    if (isExpiredPage(html) && !resolved) {
+                        resolved = true;
+                        console.warn(`[Resolver] uqload embed dead (expired/deleted): ${url.slice(0, 80)}`);
+                        resolve({ url, isDead: true });
+                        return;
+                    }
                     const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
                                   html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
                     if (match && !resolved) {
@@ -1008,6 +1039,23 @@ export async function resolveVoe(url) {
         if (!res) return { url };
         let html = await res.text();
 
+        // ── Frontend actuel voe (SPA React "Byse") — vérifié en live ────────
+        // Les domaines voe (voe.sx, weneverbeenfree, sandratableother,
+        // maryspecialwatch, charlestoughrace) servent désormais un shell React
+        // (<div id="root"> + bundle /assets/index-*.js) et résolvent la vidéo
+        // via API REST : /api/videos/<code>/settings|playback|captcha|view et
+        // /api/videos/stream/<code> — avec fingerprint chiffré AES-GCM
+        // (WebCrypto, indisponible en QuickJS), captcha PoW optionnel
+        // (captchaRequired, pow_token) et gating premium (prem=1).
+        // AUCUNE URL de stream n'apparaît dans le HTML → contrairement à
+        // fsvid/vidzy, il n'y a PAS de leurre type "troll/master.m3u8" ni de
+        // bloc XOR à décoder. Sans navigateur ces embeds sont irrésolvables :
+        // on abandonne immédiatement au lieu de gratter des regex inutiles.
+        if (html.includes('<div id="root">') && html.includes('/assets/index-')) {
+            return { url };
+        }
+
+        // ── Ancien player voe (script packé avec clé 'hls') ────────────────
         let fetchUrl = url;
         const redirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
         if (redirect) {
@@ -1029,6 +1077,75 @@ export async function resolveVoe(url) {
             if (isKnownFakeDirectUrl(videoUrl)) return { url };
             return { url: videoUrl, headers: { "Referer": fetchUrl } };
         }
+    } catch (e) {}
+    return { url };
+}
+
+export async function resolveFsvidVidzy(url) {
+    try {
+        // CRITIQUE (cause racine du ratio ~1/10) : fsvid.lol renvoie 403 si la
+        // page embed est fetchée sans Referer. Dériver le Referer du domaine de
+        // l'embed lui-même (ex: https://fsvid.lol/embed-xxx.html → Referer
+        // https://fsvid.lol/) couvre tous les miroirs fsvid/vidzy. Vérifié en
+        // live : fsvid.lol → 403 sans Referer, 200 avec; vidzy.org → 200 dans
+        // les deux cas (le Referer ne casse rien).
+        const embedDomain = (url.match(/^https?:\/\/([^/]+)/) || [])[1] || '';
+        const embedRef = embedDomain ? `https://${embedDomain}/` : 'https://fsvid.lol/';
+        const res = await safeFetch(url, { headers: { Referer: embedRef } });
+        if (!res) return { url };
+        let html = await res.text();
+        if (!html.includes('p,a,c,k,e,d')) return { url };
+        html = unpack(html);
+
+        // La vraie URL HLS est encodée en base64 XORée avec une clé statique
+        // (var k=[...],b=atob(s),r="";...return r})("BASE64") dans le script packé.
+        // Le m3u8 "s1.fsvid.lol/troll/master.m3u8" présent dans la page est un
+        // LEURRE anti-scraper (identique pour tous les embeds) → à rejeter absolument.
+        // Tolérant aux variations d'obfuscation : var|let|const, espaces,
+        // et base64 standard OU URL-safe (- et _ mappés vers + et /).
+        const pattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
+        let match, videoUrl = null;
+
+        while ((match = pattern.exec(html)) !== null) {
+            const key = match[1].split(',').map(n => parseInt(n, 10));
+            const b64 = match[2].replace(/-/g, '+').replace(/_/g, '/');
+
+            // Décodage base64 maison (QuickJS-safe, sans Buffer/atob)
+            let bin = '', buffer = 0, bits = 0;
+            for (let i = 0; i < b64.length; i++) {
+                const ch = b64[i];
+                if (ch === '=') break;
+                const val = B64_ALPHABET.indexOf(ch);
+                if (val < 0) continue;
+                buffer = (buffer << 6) | val;
+                bits += 6;
+                if (bits >= 8) { bits -= 8; bin += String.fromCharCode((buffer >> bits) & 0xFF); }
+            }
+
+            // XOR avec la clé
+            let decoded = '';
+            for (let i = 0; i < bin.length; i++) {
+                decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
+            }
+
+            // Garde anti-faux-positif : URL http + playlist + pas de leurre troll.
+            // NB: les URLs multiaudio se terminent par ",.urlset/master.m3u8?t=..." —
+            // ce sont des masters HLS STANDARD directement jouables (pistes AUDIO
+            // FR/EN + SUBTITLES, vérifié en live : master 200 + segments 200).
+            // Le proxy /ad-et/es.ad?m= du player n'est utilisé que par le chemin
+            // Chromecast (cast.framework.CastSession.loadMedia), PAS par les
+            // lecteurs natifs — donc on renvoie l'URL telle quelle.
+            if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
+                videoUrl = decoded;
+                break;
+            }
+        }
+
+        if (!videoUrl) return { url };
+
+        // Referer requis par le CDN (vérifié en live : fsvid.lol → 200, vidzy.live → 200)
+        const referer = url.includes('vidzy') ? 'https://vidzy.live/' : 'https://fsvid.lol/';
+        return { url: videoUrl, headers: { Referer: referer } };
     } catch (e) {}
     return { url };
 }
@@ -1602,7 +1719,8 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('vidoza.')) result = await resolveVidoza(originalUrl);
         else if (urlLower.includes('sendvid.') || urlLower.includes('daisukianime')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
-        else if (urlLower.includes('fsvid.lol') || urlLower.includes('vidzy.live') || urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.') || urlLower.includes('vidhsareup.')) result = await resolvePackedPlayer(originalUrl);
+        else if (urlLower.includes('fsvid.') || urlLower.includes('vidzy.')) result = await resolveFsvidVidzy(originalUrl);
+        else if (urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.') || urlLower.includes('vidhsareup.')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulustream.') ||
@@ -1637,8 +1755,13 @@ export async function resolveStream(stream, depth = 0) {
         // 3. Generic Fallback & Recursive Peeling
         // Skip generic fallback for known slow or dead hosts (already tried in specific resolver)
         const knownSlowHost = urlLower.includes('up4fun.') || urlLower.includes('down-paradise.') || urlLower.includes('getvid.club') || urlLower.includes('vidhsareup.');
+        // Embed explicitement mort (ex: fichier uqload expiré/supprimé détecté par
+        // resolveUqload) : pas de re-fetch ni de peeling, on abandonne immédiatement
+        // pour économiser le budget — le stream sera filtré par isDirect avant
+        // l'expansion des qualités.
+        const deadEmbed = result && result.isDead === true;
         if (!result || result.url === originalUrl) {
-            if (knownSlowHost) {
+            if (knownSlowHost || deadEmbed) {
                 return { ...stream, isDirect: false };
             }
 

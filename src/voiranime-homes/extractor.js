@@ -8,6 +8,9 @@ import {
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES,
 } from './config.js'
 
+const PROVIDER = 'VoirAnimeHomes'
+const PROVIDER_ID = 'voiranime-homes'
+
 function normalize(s) {
   return (s || '')
     .toLowerCase()
@@ -263,7 +266,7 @@ async function trySearchFallback(allResults, tmdbTitles) {
 
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value) {
-      console.log(`[FrenchManga] Fallback matched: "${r.value.title}" (newsid: ${r.value.newsid})`)
+      console.log(`[${PROVIDER}] Fallback matched: "${r.value.title}" (newsid: ${r.value.newsid})`)
       return r.value
     }
   }
@@ -293,17 +296,17 @@ async function trySearch(titles, targetSeason) {
       }
 
       // Fallback to GET (main page listing — works for recently updated)
-      console.log(`[FrenchManga] POST search missed, trying GET for "${title}"...`)
+      console.log(`[${PROVIDER}] POST search missed, trying GET for "${title}"...`)
       const getMatch = await trySearchGet(title, targetSeason)
       if (getMatch) return getMatch
     } catch (e) {
-      console.warn(`[FrenchManga] Search failed for "${title}": ${e.message}`)
+      console.warn(`[${PROVIDER}] Search failed for "${title}": ${e.message}`)
     }
   }
   
   // Deep fallback: check low-scoring POST results via page content (parallel, short timeout)
   if (allPostResults.length > 0) {
-    console.log(`[FrenchManga] Trying deep fallback on ${allPostResults.length} POST results...`)
+    console.log(`[${PROVIDER}] Trying deep fallback on ${allPostResults.length} POST results...`)
     const fallbackMatch = await trySearchFallback(allPostResults, titles)
     if (fallbackMatch) return fallbackMatch
   }
@@ -318,12 +321,12 @@ async function trySearchPostRaw(title, targetSeason) {
       if (html && html.length > 50) {
       const results = parseSearchResults(html)
       if (results.length > 0) {
-        console.log(`[FrenchManga] AJAX search found ${results.length} results for "${title}"`)
+        console.log(`[${PROVIDER}] AJAX search found ${results.length} results for "${title}"`)
         return results
       }
     }
   } catch (e) {
-    console.warn(`[FrenchManga] AJAX search failed for "${title}": ${e.message}`)
+    console.warn(`[${PROVIDER}] AJAX search failed for "${title}": ${e.message}`)
   }
   
   // Note: trySearchGet (called from trySearch) already handles the
@@ -347,27 +350,27 @@ async function resolveWithTimeout(stream) {
 
     if (resolved && resolved.url && resolved.isDirect) {
       if (resolved.url !== stream.url) {
-        console.log(`[FrenchManga] Resolved OK (${elapsed}ms): ${stream.url.slice(0, 60)}... → ${resolved.url.slice(0, 60)}...`);
+        console.log(`[${PROVIDER}] Resolved OK (${elapsed}ms): ${stream.url.slice(0, 60)}... → ${resolved.url.slice(0, 60)}...`);
       } else {
-        console.log(`[FrenchManga] Direct OK (${elapsed}ms): ${stream.url.slice(0, 70)}...`);
+        console.log(`[${PROVIDER}] Direct OK (${elapsed}ms): ${stream.url.slice(0, 70)}...`);
       }
       return resolved
     }
 
     if (resolved && resolved.url && !resolved.isDirect) {
-      console.log(`[FrenchManga] ✗ Resolve FAILED (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, skipping`)
+      console.log(`[${PROVIDER}] ✗ Resolve FAILED (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, skipping`)
       return null
     }
 
     if (resolved && resolved.url) {
-      console.log(`[FrenchManga] ✗ Resolve UNCERTAIN (${elapsed}ms): ${stream.url.slice(0, 80)} - no resolution, skipping`)
+      console.log(`[${PROVIDER}] ✗ Resolve UNCERTAIN (${elapsed}ms): ${stream.url.slice(0, 80)} - no resolution, skipping`)
       return null
     }
 
-    console.log(`[FrenchManga] ✗ Resolve null: ${(stream.url || '').slice(0, 80)}`)
+    console.log(`[${PROVIDER}] ✗ Resolve null: ${(stream.url || '').slice(0, 80)}`)
     return null
   } catch (e) {
-    console.log(`[FrenchManga] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message}`)
+    console.log(`[${PROVIDER}] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message}`)
     return null
   }
 }
@@ -401,7 +404,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   if (!titles || titles.length === 0) return []
 
   const subType = await detectSubType(tmdbId, mediaType, titles)
-  if (subType) console.log(`[FrenchManga] Detected subtype: ${subType}`)
+  if (subType) console.log(`[${PROVIDER}] Detected subtype: ${subType}`)
 
   if (isAborted(signal)) return []
 
@@ -415,11 +418,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 async function extractMovie(tmdbId, titles, subType) {
   const match = await trySearch(titles, null)
   if (!match) {
-    console.warn(`[FrenchManga] Movie not found for TMDB ${tmdbId}`)
+    console.warn(`[${PROVIDER}] Movie not found for TMDB ${tmdbId}`)
     return []
   }
 
-  console.log(`[FrenchManga] Movie match: ${match.title} -> ${match.url}`)
+  console.log(`[${PROVIDER}] Movie match: ${match.title} -> ${match.url}`)
   try {
     // Use newsid from search result if available, otherwise fetch page
     let newsid = match.newsid
@@ -427,7 +430,7 @@ async function extractMovie(tmdbId, titles, subType) {
       const pageHtml = await fetchText(match.url, { timeout: TIMEOUTS.PAGE })
       const config = parseSerieConfig(pageHtml)
       if (!config || !config.newsId) {
-        console.warn(`[FrenchManga] No config found on page ${match.url}`)
+        console.warn(`[${PROVIDER}] No config found on page ${match.url}`)
         return []
       }
       newsid = config.newsId
@@ -435,13 +438,13 @@ async function extractMovie(tmdbId, titles, subType) {
 
     const apiData = await fetchEpisodeApi(newsid)
     if (!apiData || !apiData.versions) {
-      console.warn(`[FrenchManga] No episode data for newsid ${newsid}`)
+      console.warn(`[${PROVIDER}] No episode data for newsid ${newsid}`)
       return []
     }
 
-    return extractStreamsFromApi(apiData, 'FrenchManga', subType)
+    return extractStreamsFromApi(apiData, PROVIDER, subType)
   } catch (e) {
-    console.warn(`[FrenchManga] Movie extraction failed: ${e.message}`)
+    console.warn(`[${PROVIDER}] Movie extraction failed: ${e.message}`)
   }
   return []
 }
@@ -453,7 +456,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
   let match = await trySearch(titles, targetSeasonNum)
   if (!match) {
-    console.warn(`[FrenchManga] Series not found for TMDB ${tmdbId}`)
+    console.warn(`[${PROVIDER}] Series not found for TMDB ${tmdbId}`)
     return []
   }
 
@@ -473,12 +476,12 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
   )
 
   if (needsSeasonRetry) {
-    console.log(`[FrenchManga] Season check: match.season=${match.season}, target=${targetSeasonNum}, searching specific...`)
+    console.log(`[${PROVIDER}] Season check: match.season=${match.season}, target=${targetSeasonNum}, searching specific...`)
 
     // Une seule tentative suffit : tous les stripSeasonSuffix(title) donnent le même base
     const baseTitle = stripSeasonSuffix(titles[0])
     const seasonQuery = `${baseTitle} Saison ${targetSeasonNum}`
-    console.log(`[FrenchManga] Season search: "${seasonQuery}"`)
+    console.log(`[${PROVIDER}] Season search: "${seasonQuery}"`)
 
     try {
       const html = await ajaxSearch(seasonQuery, { timeout: TIMEOUTS.SEARCH })
@@ -487,21 +490,21 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
         if (results.length > 0) {
           const seasonMatch = bestMatch(results, titles[0], targetSeasonNum)
           if (seasonMatch && seasonMatch.season === targetSeasonNum) {
-            console.log(`[FrenchManga] ✅ Season search matched: "${seasonMatch.title}" (S${seasonMatch.season})`)
+            console.log(`[${PROVIDER}] ✅ Season search matched: "${seasonMatch.title}" (S${seasonMatch.season})`)
             match = seasonMatch
           }
         }
       }
     } catch (e) {
-      console.warn(`[FrenchManga] Season search failed for "${seasonQuery}": ${e.message}`)
+      console.warn(`[${PROVIDER}] Season search failed for "${seasonQuery}": ${e.message}`)
     }
 
     if (match.season !== targetSeasonNum) {
-      console.log(`[FrenchManga] ⚠ Season search didn't find S${targetSeasonNum}, using original match`)
+      console.log(`[${PROVIDER}] ⚠ Season search didn't find S${targetSeasonNum}, using original match`)
     }
   }
 
-  console.log(`[FrenchManga] Series match: ${match.title} -> ${match.url} (newsid: ${match.newsid})`)
+  console.log(`[${PROVIDER}] Series match: ${match.title} -> ${match.url} (newsid: ${match.newsid})`)
 
   try {
     // Use newsid from search result if available, otherwise fetch page
@@ -510,7 +513,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
       const pageHtml = await fetchText(match.url, { timeout: TIMEOUTS.PAGE })
       const config = parseSerieConfig(pageHtml)
       if (!config || !config.newsId) {
-        console.warn(`[FrenchManga] No config found on page ${match.url}`)
+        console.warn(`[${PROVIDER}] No config found on page ${match.url}`)
         return []
       }
       newsid = config.newsId
@@ -518,7 +521,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
     const apiData = await fetchEpisodeApi(newsid)
     if (!apiData || !apiData.versions) {
-      console.warn(`[FrenchManga] No episode data for newsid ${newsid}`)
+      console.warn(`[${PROVIDER}] No episode data for newsid ${newsid}`)
       return []
     }
 
@@ -530,32 +533,32 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
       let ep = episodes.find(e => e.num === targetEp)
       if (!ep) {
         ep = episodes[targetEp - 1]
-        if (ep) console.log(`[FrenchManga] Fallback: using episode ${ep.num} for target ${targetEp} (${lang})`)
+        if (ep) console.log(`[${PROVIDER}] Fallback: using episode ${ep.num} for target ${targetEp} (${lang})`)
       }
       if (!ep) continue
 
       // Log episode title if available from API info
       const epInfo = apiData.info && apiData.info[String(ep.num)]
       if (epInfo && epInfo.title) {
-        console.log(`[FrenchManga] Episode ${ep.num}: "${epInfo.title}" (${lang})`)
+        console.log(`[${PROVIDER}] Episode ${ep.num}: "${epInfo.title}" (${lang})`)
       }
-      console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`)
+      console.log(`[${PROVIDER}] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`)
 
       for (const server of ep.servers) {
-        const stream = toStream(server.url, lang, 'FrenchManga', SITE.BASE_URL, { quality: 'HD' })
+        const stream = toStream(server.url, lang, PROVIDER, SITE.BASE_URL, { quality: 'HD' })
         if (subType) stream.subType = subType
 
         const resolved = await resolveWithTimeout(stream)
         if (resolved && resolved.url && resolved.isDirect) {
-          streams.push({ ...resolved, provider: 'french-manga' })
+          streams.push({ ...resolved, provider: PROVIDER_ID })
         }
       }
     }
 
-    console.log(`[FrenchManga] Series: ${streams.length} streams for episode ${targetEp}`)
+    console.log(`[${PROVIDER}] Series: ${streams.length} streams for episode ${targetEp}`)
     return streams
   } catch (e) {
-    console.warn(`[FrenchManga] Series extraction failed: ${e.message}`)
+    console.warn(`[${PROVIDER}] Series extraction failed: ${e.message}`)
   }
   return []
 }
@@ -568,7 +571,7 @@ async function extractStreamsFromApi(apiData, name, subType) {
     const firstEp = episodes[0]
     if (!firstEp) continue
 
-    console.log(`[FrenchManga] Found movie (${lang}) with ${firstEp.servers.length} server(s)`)
+    console.log(`[${PROVIDER}] Found movie (${lang}) with ${firstEp.servers.length} server(s)`)
 
     for (const server of firstEp.servers) {
       const stream = toStream(server.url, lang, name, SITE.BASE_URL, { quality: 'HD' })
@@ -576,11 +579,11 @@ async function extractStreamsFromApi(apiData, name, subType) {
 
       const resolved = await resolveWithTimeout(stream)
       if (resolved && resolved.url && resolved.isDirect) {
-        streams.push({ ...resolved, provider: 'french-manga' })
+        streams.push({ ...resolved, provider: PROVIDER_ID })
       }
     }
   }
 
-  console.log(`[FrenchManga] Movie: ${streams.length} streams`)
+  console.log(`[${PROVIDER}] Movie: ${streams.length} streams`)
   return streams
 }

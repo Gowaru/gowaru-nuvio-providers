@@ -193,6 +193,21 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
                     originalLanguage: data.original_language || '',
                     year: year
                 };
+
+                // Comptage d'épisodes par saison (utile pour les providers dont les
+                // séries ont des saisons regroupées, ex: waveanime format 'kai')
+                // → permet de calculer un numéro d'épisode "continu" multi-saisons
+                if (type === 'tv' && Array.isArray(data.seasons)) {
+                    const counts = {};
+                    for (const s of data.seasons) {
+                        if (s && s.season_number > 0 && s.episode_count > 0) {
+                            counts[s.season_number] = s.episode_count;
+                        }
+                    }
+                    if (Object.keys(counts).length > 0) {
+                        metadata.seasonEpisodeCounts = counts;
+                    }
+                }
             }
 
             if (titleEn) titles.push(titleEn);

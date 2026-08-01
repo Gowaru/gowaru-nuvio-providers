@@ -23,39 +23,49 @@ To use these providers in your Nuvio app:
 
 ## 🇫🇷 Included Providers
 
-This bundle integrates **21 providers** covering the French streaming landscape — from anime to movies & series, in VF and VOSTFR.
+This bundle integrates **23 providers** covering the French streaming landscape — from anime to movies & series, in VF and VOSTFR.
 
 ### 📊 Provider Overview
 
 | # | Provider | 🎬 Content | 🌐 Lang | 💾 Formats | 📱 App | 📺 TV | 🏷️ Ver. |
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
 | | **🎌 Anime** | | | | | | |
-| 1 | **Sekai** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.20 |
+| 1 | **Sekai** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.21 |
 | 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.49 |
-| 3 | **AnimeSama.co** _DLE_ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.6 |
+| 3 | **AnimeSama.co** _DLE_ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.7 |
 | 4 | **AnimesUltra** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.31 |
-| 5 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.45 |
-| 6 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.12 |
-| 7 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.7 |
-| 8 | **Mugiwara** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.11 |
-| 9 | **VoirAnime** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.2.17 |
-| 10 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.8 |
-| 11 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.49 |
+| 5 | **Anime-Ultime** ¹ | 🎬📺 | VF / VOSTFR | MP4 | ✅ | ✅ | 1.0.0 |
+| 6 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.45 |
+| 7 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.13 |
+| 8 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.7 |
+| 9 | **Mugiwara** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.13 |
+| 10 | **VoirAnime** ⁴ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.2.18 |
+| 11 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.9 |
+| 12 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.0 |
+| 13 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.49 |
+| 14 | **WaveAnime** ² | 🎬📺 | VF / VOSTFR | DASH | ✅ | ⚠️ | 0.1.0 |
 | | **🎬 Movies & Series** | | | | | | |
-| 12 | **Coflix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ⚠️ | 1.0.6 |
-| 13 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.10 |
-| 14 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.7 |
-| 15 | **Frenchstream** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.11 |
-| 16 | **Movix** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.34 |
-| 17 | **Nakios** | 🎬📺 | FR / EN | MP4 | ✅ | ✅ | 1.0.0 |
-| 18 | **Papadustream** | 📺 _only_ | FR / EN | M3U8 | ✅ | ✅ | 1.0.0 |
-| 19 | **StreamZo** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 1.0.0 |
-| 20 | **Wookafr** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.7 |
+| 15 | **Coflix** ⁵ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ⚠️ | 1.0.8 |
+| 16 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.11 |
+| 17 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.8 |
+| 18 | **Frenchstream** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.12 |
+| 19 | **Movix** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.35 |
+| 20 | **Nakios** | 🎬📺 | FR / EN | MP4 | ✅ | ✅ | 1.0.1 |
+| 21 | **Papadustream** | 📺 _only_ | FR / EN | M3U8 | ✅ | ✅ | 1.0.1 |
+| 22 | **StreamZo** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 1.0.1 |
+| 23 | **Wookafr** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.8 |
 
 > **Legend:**
 > - 🎬📺 = Movies & Series  |  📺 _only_ = Series only
 > - ✅ = Fully functional  |  ⚠️ = Known limitations
 > - 📱 App = NuvioApp compatibility  |  📺 TV = NuvioTV compatibility
+>
+> **Notes:**
+> - ¹ **Anime-Ultime**: licensed series are excluded by the site (catalog limited to unlicensed anime).
+> - ² **WaveAnime**: DASH (MPD) playback — native via ExoPlayer/Media3 (Android) only, not supported by AVPlayer (iOS/TV).
+> - ³ **Sekai**: direct MP4 (1080p/720p/360p) — multi-saga probing with rate limiting may exceed NuvioTV's 30s request window on large titles.
+> - ⁴ **VoirAnime**: multi-host resolution (Sibnet, Uqload, Voe, Dood, Vidzy…) — slowest titles may exceed NuvioTV's 30s request window.
+> - ⁵ **Coflix**: multi-domain probing + `lecteurvideo` embeds — falls back to embed links (not natively playable) when direct resolution fails.
 
 ---
 

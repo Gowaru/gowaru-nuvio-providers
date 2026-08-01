@@ -110,14 +110,47 @@ export function cached(key, fn, ttl) {
 }
 
 /**
+ * Mots "structurels" d'un titre qui ne changent pas l'identité de la série
+ * (saison, partie, intégrale, film, articles...). Ils sont ignorés dans le
+ * calcul des mots supplémentaires d'un résultat (pénalité anti-fan-edit).
+ * Ex: requête "Naruto" vs résultat "Naruto Shippuden Kai" → mots extra =
+ * [shippuden, kai] → STRONG_MATCH fortement pénalisé.
+ */
+export const TITLE_NOISE_WORDS = new Set([
+  'saison', 'saisons', 'season', 'seasons', 'partie', 'part', 'parties', 'integrale', 'integrales',
+  'vol', 'film', 'films', 'movie', 'ova', 'ona', 'special', 'specials',
+  'the', 'le', 'la', 'les', 'des', 'une', 'de', 'du', 'et', 'au', 'aux',
+  'vostfr', 'vost', 'vf', 'vff', 'vfq', 'vo', 'french', 'streaming',
+])
+
+/**
+ * Compte les mots significatifs du résultat absents de la requête.
+ * Ignore les nombres, mots courts et mots structurels (TITLE_NOISE_WORDS).
+ */
+export function countExtraWords(resultTitle, searchTitle) {
+  const qWords = new Set((searchTitle || '').split(/\s+/).filter(w => w.length > 2))
+  return (resultTitle || '').split(/\s+/).filter(w =>
+    w.length > 2 && !/^\d+$/.test(w) && !TITLE_NOISE_WORDS.has(w) && !qWords.has(w)
+  ).length
+}
+
+/**
  * Score a search result against the query title
+ * Pénalise les mots significatifs en trop (ex: "Naruto Shippuden Kai" pour
+ * une requête "Naruto" → -25/mot extra) pour éviter les fan-edits dérivées.
  */
 export function scoreMatch(resultTitle, searchTitle, SCORES) {
   const nt = normalize(searchTitle)
   const nr = normalize(resultTitle)
   if (!nt || !nr) return 0
   if (nr === nt) return SCORES.EXACT_MATCH
-  if (nr.includes(nt) || nt.includes(nr)) return SCORES.STRONG_MATCH
+  if (nr.includes(nt) || nt.includes(nr)) {
+    const extra = countExtraWords(nr, nt)
+    if (extra > 0) {
+      return Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
+    }
+    return SCORES.STRONG_MATCH
+  }
   const words = nt.split(/\s+/).filter(w => w.length > 2)
   const rWords = new Set(nr.split(/\s+/))
   const matched = words.filter(w => rWords.has(w)).length

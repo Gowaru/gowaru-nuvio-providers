@@ -3,6 +3,29 @@
   "version": "1.2.0",
   "scrapers": [
     {
+      "id": "anime-ultime",
+      "name": "Anime-Ultime",
+      "description": "Animes VOSTFR et VF en streaming sur v5.anime-ultime.net (séries licenciées exclues par le site).",
+      "version": "0.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/anime-ultime.js",
+      "enabled": true,
+      "logo": "https://v5.anime-ultime.net/static/favicon/android-icon-192x192.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
@@ -78,7 +101,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.45",
+      "version": "1.1.46",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -126,7 +149,7 @@
       "id": "coflix",
       "name": "Coflix",
       "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -143,7 +166,9 @@
         "m3u8"
       ],
       "limited": false,
-      "disabledPlatforms": [],
+      "disabledPlatforms": [
+        "tv"
+      ],
       "supportsExternalPlayer": false
     },
     {
@@ -173,7 +198,7 @@
       "id": "flemmix",
       "name": "Flemmix",
       "description": "Films et séries en streaming VF/VOSTFR sur Flemmix.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -198,7 +223,7 @@
       "id": "french-manga",
       "name": "French-Manga",
       "description": "Animes VF et VOSTFR en streaming sur French-Manga.net",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -219,10 +244,34 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "voiranime-homes",
+      "name": "VoirAnime.homes",
+      "description": "Animes VF et VOSTFR en streaming sur voiranime.homes (moteur DLE, miroir French-Manga).",
+      "version": "0.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/voiranime-homes.js",
+      "enabled": true,
+      "logo": "https://voiranime.homes/img/icon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (séries site-native, films par catégories).",
-      "version": "2.0.12",
+      "version": "2.0.13",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -248,7 +297,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "1.0.35",
+      "version": "0.1.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -256,7 +305,7 @@
       ],
       "filename": "providers/movix.js",
       "enabled": true,
-      "logo": "https://movix.cash/movix.png",
+      "logo": "https://movix.fun/movix.png",
       "contentLanguage": [
         "fr"
       ],
@@ -315,7 +364,9 @@
         "mkv"
       ],
       "limited": false,
-      "disabledPlatforms": [],
+      "disabledPlatforms": [
+        "tv"
+      ],
       "supportsExternalPlayer": false
     },
     {
@@ -340,7 +391,9 @@
         "m3u8"
       ],
       "limited": false,
-      "disabledPlatforms": [],
+      "disabledPlatforms": [
+        "tv"
+      ],
       "supportsExternalPlayer": false
     },
     {
@@ -419,14 +472,14 @@
       "id": "papadustream",
       "name": "Papadustream",
       "description": "Séries TV en streaming HLS via papadustream.club (multi-qualité 360p-1080p, multi-langue).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "tv"
       ],
       "filename": "providers/papadustream.js",
       "enabled": true,
-      "logo": "https://papadustream.club/favicon.ico",
+      "logo": "https://raw.githubusercontent.com/Gowaru/gowaru-nuvio-providers/main/assets/papadustream.png",
       "contentLanguage": [
         "fr",
         "en"
@@ -442,7 +495,7 @@
       "id": "wookafr",
       "name": "Wookafr",
       "description": "Films et séries en streaming VF sur Wookafr.",
-      "version": "1.0.8",
+      "version": "1.0.9",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -450,7 +503,7 @@
       ],
       "filename": "providers/wookafr.js",
       "enabled": true,
-      "logo": "https://wookafr.fyi/favicon.ico",
+      "logo": "https://wookafr.center/wp-content/uploads/2023/08/icon-192x192-1.webp",
       "contentLanguage": [
         "fr"
       ],
@@ -466,7 +519,7 @@
       "id": "streamzo",
       "name": "StreamZo",
       "description": "Films et séries en streaming VF/VOSTFR sur Streamzo.fr (SPA, iframe injecté, multi-serveurs).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -474,7 +527,7 @@
       ],
       "filename": "providers/streamzo.js",
       "enabled": true,
-      "logo": "https://streamzo.fr/favicon.ico",
+      "logo": "https://streamzo.fr/static/favicon.ico",
       "contentLanguage": [
         "fr"
       ],
@@ -483,6 +536,31 @@
       ],
       "limited": false,
       "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "waveanime",
+      "name": "WaveAnime",
+      "description": "Animes en DASH (MPD) via waveanime.fr — lecture native ExoPlayer/Media3 (Android), non supporté par AVPlayer (iOS).",
+      "version": "0.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/waveanime.js",
+      "enabled": true,
+      "logo": "https://waveanime.fr/assets/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "dash"
+      ],
+      "limited": true,
+      "disabledPlatforms": [
+        "tv"
+      ],
       "supportsExternalPlayer": false
     }
   ]

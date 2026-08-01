@@ -7,7 +7,7 @@
  * Supports: films, séries, anime
  */
 
-import { stripSeasonSuffix, toStream, resolveTargetEpisodes } from '../utils/dle-extractor.js'
+import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords } from '../utils/dle-extractor.js'
 import { fetchText, fetchJson, setCurrentSignal } from './http.js'
 import { resolveStream, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
@@ -163,6 +163,13 @@ async function searchViaWpApi(query, mediaType, season, episode) {
     // Vérifier la pertinence du résultat
     const queryLower = query.toLowerCase();
     const isRelevant = title.includes(queryLower) || slug.includes(toSlug(query));
+
+    // Garde anti-fan-edit : un résultat avec ≥2 mots significatifs en trop
+    // (ex: requête "Naruto" → post "Naruto Shippuden Kai") est un dérivé/recut → écarter
+    if (isRelevant && countExtraWords(title, queryLower) >= 2) {
+      console.log(`[Coflix] WP result is a fan-edit/derivative, skipped: "${title}"`);
+      continue;
+    }
 
     if (!isRelevant) {
       console.log(`[Coflix] WP result not relevant: \"${title}\" for \"${query}\"`);

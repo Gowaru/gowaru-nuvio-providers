@@ -1,6 +1,6 @@
 /**
- * papadustream - Built from src/papadustream/
- * Generated: 2026-08-01T00:11:42.669102645Z
+ * waveanime - Built from src/waveanime/
+ * Generated: 2026-08-01T00:11:43.645103518Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -586,85 +586,358 @@ var __provider = (() => {
     }
   });
 
-  // src/papadustream/http.js
+  // src/waveanime/http.js
   function setCurrentSignal(signal) {
     _currentSignal = signal;
   }
-  function extractPath(url) {
-    try {
-      const u = new URL(url);
-      return u.pathname + u.search + u.hash;
-    } catch (e) {
-      return url;
-    }
-  }
-  function buildUrl(domain, originalUrl) {
-    const path = extractPath(originalUrl);
-    return `https://${domain}${path}`;
-  }
-  function fetchFromDomain(_0, _1) {
-    return __async(this, arguments, function* (domain, originalUrl, options = {}) {
-      var _a, _b, _c, _d;
-      const signal = options.signal || _currentSignal;
-      if (isAborted(signal)) return null;
-      const url = buildUrl(domain, originalUrl);
-      const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
-      const mergedHeaders = __spreadValues(__spreadProps(__spreadValues({}, HEADERS2), {
-        Referer: `https://${domain}/`,
-        Origin: `https://${domain}`
-      }), options.headers || {});
-      yield rateLimit(domain);
-      for (let attempt = 0; attempt <= ((_a = options.retries) != null ? _a : 1); attempt++) {
-        if (isAborted(signal)) return null;
-        try {
-          const res = yield safeFetch(url, { headers: mergedHeaders, timeout, signal });
-          if (!res) {
-            console.log(`[Papadustream] No response from ${domain} (attempt ${attempt + 1})`);
-            if (attempt < ((_b = options.retries) != null ? _b : 1)) yield sleep(RETRY_DELAYS[attempt] || 1e3);
-            continue;
-          }
-          if (!res.ok) {
-            if (res.status === 404) return null;
-            console.log(`[Papadustream] HTTP ${res.status} on ${domain}`);
-            if (attempt < ((_c = options.retries) != null ? _c : 1)) yield sleep(RETRY_DELAYS[attempt] || 1e3);
-            continue;
-          }
-          return yield res.text();
-        } catch (e) {
-          console.log(`[Papadustream] Error on ${domain} (attempt ${attempt + 1}): ${e.message}`);
-          if (attempt < ((_d = options.retries) != null ? _d : 1)) yield sleep(RETRY_DELAYS[attempt] || 1e3);
-        }
-      }
-      return null;
-    });
-  }
   function fetchText(_0) {
     return __async(this, arguments, function* (url, options = {}) {
-      for (const domain of DOMAINS) {
-        console.log(`[Papadustream] Trying ${domain}...`);
-        const result = yield fetchFromDomain(domain, url, options);
-        if (result) return result;
+      const signal = options.signal || _currentSignal;
+      if (isAborted(signal)) throw new Error("AbortError: Request aborted");
+      const _a = options, { headers: customHeaders } = _a, rest = __objRest(_a, ["headers"]);
+      yield rateLimit(DOMAIN);
+      const res = yield safeFetch(url, __spreadProps(__spreadValues({}, rest), {
+        headers: __spreadValues(__spreadValues({}, HEADERS2), customHeaders || {}),
+        signal
+      }));
+      if (!res || !res.ok) {
+        const status = res && typeof res.status === "number" ? res.status : "no-response";
+        throw new Error(`HTTP error ${status} for ${url}`);
       }
-      console.warn(`[Papadustream] All domains failed for ${url}`);
-      return null;
+      return yield res.text();
     });
   }
-  var rateLimit, _currentSignal, DOMAINS, BASE_URL, GLOBAL_TIMEOUT_MS, HEADERS2, RETRY_DELAYS;
+  function fetchJson(_0) {
+    return __async(this, arguments, function* (url, options = {}) {
+      const text = yield fetchText(url, options);
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        return null;
+      }
+    });
+  }
+  var _currentSignal, rateLimit, DOMAIN, HEADERS2;
   var init_http = __esm({
-    "src/papadustream/http.js"() {
+    "src/waveanime/http.js"() {
       init_resolvers();
-      rateLimit = createProviderRateLimiter();
       _currentSignal = null;
-      DOMAINS = ["papadustream.club", "papadustream.fr", "papadustream.net"];
-      BASE_URL = "https://papadustream.club";
-      GLOBAL_TIMEOUT_MS = 15e3;
+      rateLimit = createProviderRateLimiter(300, 0.3);
+      DOMAIN = "waveanime.fr";
       HEADERS2 = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Connection": "keep-alive"
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://waveanime.fr/"
       };
-      RETRY_DELAYS = [1e3, 2e3];
+    }
+  });
+
+  // src/utils/metadata.js
+  function isLatinText(str) {
+    return /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()0-9]+$/.test(str);
+  }
+  function parseKitsuId(id) {
+    const strId = String(id);
+    return strId.match(/^kitsu:(\d+)(?::(\d+))?$/);
+  }
+  function searchTmdbByTitle(title, mediaType) {
+    return __async(this, null, function* () {
+      const type = mediaType === "movie" ? "movie" : "tv";
+      const encoded = encodeURIComponent(title);
+      const url = `${TMDB_API_BASE}/search/${type}?api_key=${TMDB_API_KEY}&query=${encoded}`;
+      const res = yield safeFetch(url);
+      if (!res) return null;
+      let data;
+      try {
+        data = yield res.json();
+      } catch (e) {
+        return null;
+      }
+      const results = data == null ? void 0 : data.results;
+      if (!results || !results.length) return null;
+      return results[0].id;
+    });
+  }
+  function getKitsuTitles(_0, _1) {
+    return __async(this, arguments, function* (kitsuId, mediaType, opts = {}) {
+      var _a, _b, _c, _d, _e, _f;
+      const url = `https://kitsu.io/api/edge/anime/${kitsuId}`;
+      const res = yield safeFetch(url);
+      if (!res) {
+        console.log(`[Metadata] Kitsu API error: failed to fetch ${kitsuId}`);
+        return [];
+      }
+      let data;
+      try {
+        data = yield res.json();
+      } catch (e) {
+        console.log(`[Metadata] Kitsu API error: invalid JSON for ${kitsuId}`);
+        return [];
+      }
+      const anime = (_a = data == null ? void 0 : data.data) == null ? void 0 : _a.attributes;
+      if (!anime) {
+        console.log(`[Metadata] Kitsu API error: no anime data for ${kitsuId}`);
+        return [];
+      }
+      const enTitle = (_c = (_b = anime.titles) == null ? void 0 : _b.en) == null ? void 0 : _c.trim();
+      if (enTitle) {
+        const foundTmdbId = yield searchTmdbByTitle(enTitle, mediaType);
+        if (foundTmdbId) {
+          console.log(`[Metadata] Kitsu ${kitsuId} -> TMDB ${foundTmdbId} via "${enTitle}"`);
+          return yield getTMDBTitlesById(String(foundTmdbId), mediaType, opts);
+        }
+      }
+      const titles = [];
+      const canonicalTitle = (_d = anime.canonicalTitle) == null ? void 0 : _d.trim();
+      if (enTitle) titles.push(enTitle);
+      if (canonicalTitle && !titles.some((t) => t.toLowerCase() === canonicalTitle.toLowerCase())) {
+        titles.push(canonicalTitle);
+      }
+      const jaTitle = (_f = (_e = anime.titles) == null ? void 0 : _e.ja_jp) == null ? void 0 : _f.trim();
+      if (jaTitle && !titles.some((t) => t.toLowerCase() === jaTitle.toLowerCase()) && isLatinText(jaTitle)) {
+        titles.push(jaTitle);
+      }
+      const abbrTitles = anime.abbreviatedTitles || [];
+      for (const t of abbrTitles) {
+        const trimmed = t == null ? void 0 : t.trim();
+        if (trimmed && !titles.some((existing) => existing.toLowerCase() === trimmed.toLowerCase()) && isLatinText(trimmed)) {
+          titles.push(trimmed);
+        }
+      }
+      const season = opts.season ? parseInt(opts.season, 10) : null;
+      if (season && season > 0) {
+        const baseTitles = [enTitle, canonicalTitle].filter(Boolean);
+        for (const baseTitle of baseTitles) {
+          for (const suffix of SEASON_SUFFIXES) {
+            const variant = `${baseTitle} ${suffix(season)}`;
+            if (!titles.some((t) => t.toLowerCase() === variant.toLowerCase())) {
+              titles.push(variant);
+            }
+          }
+        }
+      }
+      const dateStr = anime.startDate;
+      const year = dateStr && dateStr.length >= 4 && /^\d{4}/.test(dateStr) ? parseInt(dateStr.substring(0, 4), 10) : null;
+      titles._metadata = {
+        isAnime: (anime.originalLanguage || "") === "ja",
+        name: anime.canonicalTitle || "",
+        originalLanguage: anime.originalLanguage || "",
+        year
+      };
+      console.log(`[Metadata] Kitsu fallback titles for ${kitsuId}: ${titles.join(" | ")}`);
+      return titles;
+    });
+  }
+  function getTMDBTitlesById(_0, _1) {
+    return __async(this, arguments, function* (tmdbId, mediaType, opts = {}) {
+      var _a, _b, _c, _d, _e, _f;
+      const type = mediaType === "movie" ? "movie" : "tv";
+      const titles = [];
+      let metadata = null;
+      try {
+        const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
+        const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
+        const [mainRes, altRes, transRes] = yield Promise.all([
+          safeFetch(mainUrl),
+          safeFetch(altUrl),
+          safeFetch(transUrl)
+        ]);
+        if (mainRes) {
+          const mainJson = yield mainRes.json();
+          const data = mainJson != null ? mainJson : {};
+          const titleEn = (_a = type === "movie" ? data.title : data.name) == null ? void 0 : _a.trim();
+          const titleOriginal = (_b = type === "movie" ? data.original_title : data.original_name) == null ? void 0 : _b.trim();
+          if (data) {
+            const dateStr = type === "movie" ? data.release_date : data.first_air_date;
+            const year = dateStr && dateStr.length >= 4 && /^\d{4}/.test(dateStr) ? parseInt(dateStr.substring(0, 4), 10) : null;
+            metadata = {
+              isAnime: data.original_language === "ja" || (data.genres || []).some((g) => g.id === 16),
+              name: data.name || data.title || "",
+              originalLanguage: data.original_language || "",
+              year
+            };
+            if (type === "tv" && Array.isArray(data.seasons)) {
+              const counts = {};
+              for (const s of data.seasons) {
+                if (s && s.season_number > 0 && s.episode_count > 0) {
+                  counts[s.season_number] = s.episode_count;
+                }
+              }
+              if (Object.keys(counts).length > 0) {
+                metadata.seasonEpisodeCounts = counts;
+              }
+            }
+          }
+          if (titleEn) titles.push(titleEn);
+          if (titleOriginal && titleOriginal !== titleEn && isLatinText(titleOriginal)) {
+            titles.push(titleOriginal);
+          }
+          if (mediaType === "tv" && opts.season) {
+            const s = parseInt(opts.season, 10);
+            if (s > 0 && titleEn) {
+              for (const suffix of SEASON_SUFFIXES) {
+                const variant = `${titleEn} ${suffix(s)}`;
+                if (!titles.includes(variant)) titles.push(variant);
+              }
+            }
+            if (s > 0 && titleOriginal && titleOriginal !== titleEn && isLatinText(titleOriginal)) {
+              for (const suffix of SEASON_SUFFIXES) {
+                const variant = `${titleOriginal} ${suffix(s)}`;
+                if (!titles.includes(variant)) titles.push(variant);
+              }
+            }
+          }
+        }
+        if (altRes) {
+          const altJson = yield altRes.json();
+          const altData = altJson != null ? altJson : {};
+          const altList = type === "movie" ? altData.titles : altData.results;
+          if (altList && Array.isArray(altList)) {
+            altList.forEach((alt) => {
+              var _a2;
+              const t = (_a2 = alt.title) == null ? void 0 : _a2.trim();
+              if (t && !titles.some((existing) => existing.toLowerCase() === t.toLowerCase()) && isLatinText(t)) {
+                titles.push(t);
+              }
+            });
+          }
+        }
+        if (transRes) {
+          const transJson = yield transRes.json();
+          const transData = transJson != null ? transJson : {};
+          const frTrans = (transData.translations || []).find((t) => t.iso_639_1 === "fr");
+          const titleFr = ((_d = (_c = frTrans == null ? void 0 : frTrans.data) == null ? void 0 : _c.name) == null ? void 0 : _d.trim()) || ((_f = (_e = frTrans == null ? void 0 : frTrans.data) == null ? void 0 : _e.title) == null ? void 0 : _f.trim());
+          if (titleFr && !titles.some((existing) => existing.toLowerCase() === titleFr.toLowerCase())) {
+            titles.splice(1, 0, titleFr);
+          }
+          if (mediaType === "tv" && opts.season && titleFr) {
+            const s = parseInt(opts.season, 10);
+            if (s > 0) {
+              const frVar = `${titleFr} Saison ${s}`;
+              if (!titles.some((existing) => existing.toLowerCase() === frVar.toLowerCase())) {
+                const frIndex = titles.indexOf(titleFr);
+                if (frIndex !== -1) {
+                  titles.splice(frIndex + 1, 0, frVar);
+                } else {
+                  titles.splice(2, 0, frVar);
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`[Metadata] TMDB API error: ${e.message}`);
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const uniqueTitles = titles.filter((t) => {
+        const key = t.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (metadata) {
+        uniqueTitles._metadata = metadata;
+      }
+      console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(" | ")}`);
+      return uniqueTitles;
+    });
+  }
+  function kitsuSearchFallback(tmdbName, mediaType, opts) {
+    return __async(this, null, function* () {
+      var _a, _b, _c, _d, _e, _f;
+      try {
+        if (!tmdbName || tmdbName.length < 3) return [];
+        const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(tmdbName)}&page[limit]=5`;
+        const res = yield safeFetch(url);
+        if (!res) return [];
+        const data = yield res.json();
+        if (!((_a = data == null ? void 0 : data.data) == null ? void 0 : _a.length)) return [];
+        for (const anime of data.data) {
+          const attrs = anime.attributes || {};
+          const jaTitle = (_c = (_b = attrs.titles) == null ? void 0 : _b.ja_jp) == null ? void 0 : _c.trim();
+          const canonicalTitle = (_d = attrs.canonicalTitle) == null ? void 0 : _d.trim();
+          const enTitle = ((_f = (_e = attrs.titles) == null ? void 0 : _e.en) == null ? void 0 : _f.trim()) || canonicalTitle;
+          if (!jaTitle && attrs.originalLanguage !== "ja") continue;
+          if (!enTitle) continue;
+          console.log(`[Metadata] Kitsu search: "${tmdbName}" \u2192 "${enTitle}" (ja=${!!jaTitle})`);
+          const foundTmdbId = yield searchTmdbByTitle(enTitle, mediaType);
+          if (foundTmdbId) {
+            const altTitles = yield getTMDBTitlesById(String(foundTmdbId), mediaType, opts);
+            const meta = altTitles._metadata;
+            if (meta && meta.isAnime) {
+              console.log(`[Metadata] Fallback success: TMDB ID ${foundTmdbId} for "${enTitle}"`);
+              return altTitles;
+            }
+          }
+          console.log(`[Metadata] Fallback: using Kitsu titles directly for ${anime.id}`);
+          return yield getKitsuTitles(anime.id, mediaType, opts);
+        }
+        console.log(`[Metadata] Kitsu search: no valid results for "${tmdbName}"`);
+        return [];
+      } catch (e) {
+        console.warn(`[Metadata] Kitsu fallback error: ${e.message}`);
+        return [];
+      }
+    });
+  }
+  function getTmdbTitles(_0, _1) {
+    return __async(this, arguments, function* (id, mediaType, opts = {}) {
+      const kitsuMatch = parseKitsuId(id);
+      let effectiveSeason = opts.season != null ? opts.season : null;
+      console.log(`[Metadata] getTmdbTitles: id="${id}" type="${mediaType}" season=${opts.season}`);
+      if (kitsuMatch) {
+        const kitsuId = kitsuMatch[1];
+        const seasonFromId = kitsuMatch[2] ? parseInt(kitsuMatch[2], 10) : null;
+        effectiveSeason = opts.season != null ? opts.season : seasonFromId;
+        console.log(`[Metadata] Kitsu ID detected: ${kitsuId}, season=${effectiveSeason}`);
+        const titles2 = yield getKitsuTitles(kitsuId, mediaType, __spreadProps(__spreadValues({}, opts), { season: effectiveSeason }));
+        titles2.effectiveSeason = effectiveSeason;
+        return titles2;
+      }
+      if (!id) {
+        console.error(`[Metadata] Invalid/null TMDB ID received: "${id}"`);
+        const emptyTitles = [];
+        emptyTitles.effectiveSeason = effectiveSeason;
+        return emptyTitles;
+      }
+      const titles = yield getTMDBTitlesById(id, mediaType, opts);
+      if (mediaType === "tv" && titles.length > 0 && titles._metadata) {
+        const meta = titles._metadata;
+        if (!meta.isAnime) {
+          console.warn(`[Metadata] \u26A0 ID ${id} = "${meta.name}" (${meta.originalLanguage}) - not anime!`);
+          const hasJapaneseName = /[\u3000-\u9FFF\uF900-\uFAFF]/.test(meta.name || "");
+          const hasJapaneseLang = meta.originalLanguage === "ja";
+          if (hasJapaneseLang || hasJapaneseName) {
+            const altTitles = yield kitsuSearchFallback(titles[0], mediaType, opts);
+            if (altTitles.length > 0) {
+              console.log(`[Metadata] Fallback success: ${altTitles.length} alternative titles`);
+              altTitles.effectiveSeason = effectiveSeason;
+              return altTitles;
+            }
+            console.warn(`[Metadata] Kitsu fallback failed for "${meta.name}", using original titles`);
+          } else {
+            console.log(`[Metadata] No anime indicators, skipping Kitsu fallback for "${meta.name}"`);
+          }
+        } else {
+          console.log(`[Metadata] \u2713 ID ${id}: "${meta.name}" confirmed anime (${meta.originalLanguage})`);
+        }
+      }
+      titles.effectiveSeason = effectiveSeason;
+      return titles;
+    });
+  }
+  var TMDB_API_KEY, TMDB_API_BASE, SEASON_SUFFIXES;
+  var init_metadata = __esm({
+    "src/utils/metadata.js"() {
+      init_resolvers();
+      TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
+      TMDB_API_BASE = "https://api.themoviedb.org/3";
+      SEASON_SUFFIXES = [
+        (s) => `Season ${s}`,
+        (s) => `Saison ${s}`,
+        (s) => `S${s}`
+      ];
     }
   });
 
@@ -2493,23 +2766,23 @@ var __provider = (() => {
         this._tagStack.push(element);
       };
       DomHandler.prototype.ontext = function(data) {
-        var normalize = this._options.normalizeWhitespace || this._options.ignoreWhitespace;
+        var normalize2 = this._options.normalizeWhitespace || this._options.ignoreWhitespace;
         var lastTag;
         if (!this._tagStack.length && this.dom.length && (lastTag = this.dom[this.dom.length - 1]).type === ElementType.Text) {
-          if (normalize) {
+          if (normalize2) {
             lastTag.data = (lastTag.data + data).replace(re_whitespace, " ");
           } else {
             lastTag.data += data;
           }
         } else {
           if (this._tagStack.length && (lastTag = this._tagStack[this._tagStack.length - 1]) && (lastTag = lastTag.children[lastTag.children.length - 1]) && lastTag.type === ElementType.Text) {
-            if (normalize) {
+            if (normalize2) {
               lastTag.data = (lastTag.data + data).replace(re_whitespace, " ");
             } else {
               lastTag.data += data;
             }
           } else {
-            if (normalize) {
+            if (normalize2) {
               data = data.replace(re_whitespace, " ");
             }
             var element = this._createDomElement({
@@ -4700,8 +4973,8 @@ var __provider = (() => {
             return object[key];
           });
         }
-        function cacheHas(cache2, key) {
-          return cache2.has(key);
+        function cacheHas(cache, key) {
+          return cache.has(key);
         }
         function charsStartIndex(strSymbols, chrSymbols) {
           var index = -1, length = strSymbols.length;
@@ -5516,8 +5789,8 @@ var __provider = (() => {
                 if (!(seen ? cacheHas(seen, computed) : includes2(result2, computed, comparator))) {
                   othIndex = othLength;
                   while (--othIndex) {
-                    var cache2 = caches[othIndex];
-                    if (!(cache2 ? cacheHas(cache2, computed) : includes2(arrays[othIndex], computed, comparator))) {
+                    var cache = caches[othIndex];
+                    if (!(cache ? cacheHas(cache, computed) : includes2(arrays[othIndex], computed, comparator))) {
                       continue outer;
                     }
                   }
@@ -7104,12 +7377,12 @@ var __provider = (() => {
           }
           function memoizeCapped(func) {
             var result2 = memoize(func, function(key) {
-              if (cache2.size === MAX_MEMOIZE_SIZE) {
-                cache2.clear();
+              if (cache.size === MAX_MEMOIZE_SIZE) {
+                cache.clear();
               }
               return key;
             });
-            var cache2 = result2.cache;
+            var cache = result2.cache;
             return result2;
           }
           function mergeData(data, source) {
@@ -8063,12 +8336,12 @@ var __provider = (() => {
               throw new TypeError2(FUNC_ERROR_TEXT);
             }
             var memoized = function() {
-              var args = arguments, key = resolver ? resolver.apply(this, args) : args[0], cache2 = memoized.cache;
-              if (cache2.has(key)) {
-                return cache2.get(key);
+              var args = arguments, key = resolver ? resolver.apply(this, args) : args[0], cache = memoized.cache;
+              if (cache.has(key)) {
+                return cache.get(key);
               }
               var result2 = func.apply(this, args);
-              memoized.cache = cache2.set(key, result2) || cache2;
+              memoized.cache = cache.set(key, result2) || cache;
               return result2;
             };
             memoized.cache = new (memoize.Cache || MapCache)();
@@ -12453,398 +12726,316 @@ var __provider = (() => {
   });
 
   // src/utils/dle-extractor.js
-  function syncFetch(_0) {
-    return __async(this, arguments, function* (url, options = {}) {
-      try {
-        const res = yield safeFetch(url, options);
-        return res;
-      } catch (e) {
-        console.error(`[ArmSync] Fetch failed: ${url}`, e.message);
-        return null;
-      }
-    });
+  function normalize(s) {
+    return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?()\[\]\/-]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   }
-  function getImdbId(tmdbId, mediaType) {
-    return __async(this, null, function* () {
-      if (!tmdbId) return null;
-      const armRes = yield syncFetch(`${ARM_API}/themoviedb?id=${tmdbId}`);
-      if (armRes) {
-        try {
-          const armJson = yield armRes.json();
-          const data = armJson != null ? armJson : null;
-          const entry = Array.isArray(data) ? data[0] : data;
-          if (entry && entry.imdb) return entry.imdb;
-        } catch (e) {
-          console.warn(`[ArmSync] JSON parse failed for getImdbId: ${e == null ? void 0 : e.message}`);
-        }
-      }
-      return null;
-    });
-  }
-  function getAbsoluteEpisode(imdbId, season, episode) {
-    return __async(this, null, function* () {
-      var _a;
-      if (!imdbId || season === 0) return null;
-      const res = yield syncFetch(`${CINEMATA_API}/meta/series/${imdbId}.json`);
-      if (!res) return null;
-      const json = yield res.json();
-      const data = json != null ? json : {};
-      if (!((_a = data == null ? void 0 : data.meta) == null ? void 0 : _a.videos)) return null;
-      const episodes = data.meta.videos.filter((v) => v.season > 0 && v.episode > 0).sort((a, b) => a.season - b.season || a.episode - b.episode);
-      const uniqueEpisodes = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const ep of episodes) {
-        const key = `${ep.season}-${ep.episode}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          uniqueEpisodes.push(ep);
-        }
-      }
-      const index = uniqueEpisodes.findIndex((v) => v.season == season && v.episode == episode);
-      if (index !== -1) {
-        const absoluteNumber = index + 1;
-        console.log(`[ArmSync] Resolved: S${season}E${episode} -> Absolute ${absoluteNumber}`);
-        return absoluteNumber;
-      }
-      return null;
-    });
-  }
-  function toStream(url, language, providerName, siteUrl, opts = {}) {
-    const { quality, subType, title } = opts;
-    const origin = (() => {
-      try {
-        return new URL(url).origin;
-      } catch (e) {
-        return siteUrl;
-      }
-    })();
-    const result = {
-      name: `${providerName} (${language})`,
-      title: title || `[${language}] ${providerName}${quality && quality !== "HD" ? ` [${quality}]` : ""}`,
-      url,
-      quality: quality || "HD",
-      language,
-      headers: {
-        Referer: `${origin}/`,
-        Origin: origin,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      }
-    };
-    if (subType) result.subType = subType;
-    return result;
-  }
-  function resolveTargetEpisodes(_0, _1, _2, _3) {
-    return __async(this, arguments, function* (tmdbId, mediaType, season, episode, opts = {}) {
-      const { startTime, budgetMs = PROVIDER_BUDGET_MS } = opts;
-      const epNum = parseInt(episode) || 1;
-      if (mediaType !== "tv" || !tmdbId || !season) return [epNum];
-      const episodes = [epNum];
-      if (startTime != null && isBudgetExhausted(startTime, budgetMs)) return episodes;
-      try {
-        const imdbId = yield getImdbId(tmdbId, mediaType);
-        if (imdbId && (startTime == null || !isBudgetExhausted(startTime, budgetMs))) {
-          const absoluteEpisode = yield getAbsoluteEpisode(imdbId, season, epNum);
-          if (absoluteEpisode && absoluteEpisode !== epNum) {
-            episodes.push(absoluteEpisode);
-          }
-        }
-      } catch (e) {
-        console.warn(`[ArmSync] Failed: ${e.message}`);
-      }
-      return episodes;
-    });
-  }
-  var import_cheerio_without_node_native, ARM_API, CINEMATA_API;
+  var import_cheerio_without_node_native;
   var init_dle_extractor = __esm({
     "src/utils/dle-extractor.js"() {
       import_cheerio_without_node_native = __toESM(require_cheerio_without_node_native());
       init_resolvers();
-      ARM_API = "https://arm.haglund.dev/api/v2";
-      CINEMATA_API = "https://v3-cinemeta.strem.io";
     }
   });
 
-  // src/utils/cache.js
-  function cleanCache(tag) {
-    const now = Date.now();
-    const expired = [];
-    for (const [key, entry] of cache) {
-      if (now - entry.ts >= entry.ttl) {
-        expired.push(key);
-      }
+  // src/waveanime/extractor.js
+  function scoreSearchResult(result, query) {
+    const q = normalize(query);
+    const t = normalize(result.title || "");
+    if (!q || !t) return 0;
+    let score = 0;
+    if (t === q) score += 100;
+    else if (t.includes(q) || q.includes(t)) score += 60;
+    const qWords = q.split(/\s+/).filter((w) => w.length > 2);
+    const tWords = t.split(/\s+/);
+    for (const w of qWords) {
+      if (tWords.includes(w)) score += 12;
     }
-    for (const key of expired) {
-      cache.delete(key);
-    }
-    if (cache.size > CACHE_MAX_SIZE) {
-      const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts);
-      const toRemove = sorted.slice(0, cache.size - CACHE_MAX_SIZE);
-      for (const [key] of toRemove) {
-        cache.delete(key);
-      }
-    }
-    if (expired.length > 0) {
-      console.log(`[${tag}] Cache: ${expired.length} expir\xE9es supprim\xE9es, ${cache.size} entr\xE9es restantes`);
-    }
-    lastCleanup = now;
+    return score;
   }
-  function createCache(namespace, tag) {
-    const logTag = tag || namespace.toUpperCase();
-    const prefix = `${namespace}_`;
-    function cacheKey(raw) {
-      return `${prefix}${String(raw).replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "")}`;
-    }
-    function cacheGet(key) {
-      const entry = cache.get(key);
-      if (!entry) return void 0;
-      const now = Date.now();
-      if (now - entry.ts >= entry.ttl) {
-        cache.delete(key);
-        return void 0;
-      }
-      return entry.data;
-    }
-    function cacheSet(key, data, success = true) {
-      if (Date.now() - lastCleanup > CLEANUP_INTERVAL) {
-        cleanCache(logTag);
-      }
-      if (cache.size >= CACHE_MAX_SIZE) {
-        const oldest = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-        if (oldest) cache.delete(oldest[0]);
-      }
-      cache.set(key, {
-        data,
-        ts: Date.now(),
-        ttl: success ? CACHE_SUCCESS_TTL : CACHE_FAILURE_TTL,
-        success
-      });
-    }
-    return function withCache2(_0, _1) {
-      return __async(this, arguments, function* (rawKey, fn, opts = {}) {
-        const key = cacheKey(rawKey);
-        if (!opts.bypass) {
-          const cached = cacheGet(key);
-          if (cached !== void 0) {
-            console.log(`[${logTag}] Cache HIT: ${rawKey.slice(0, 60)}`);
-            return cached;
-          }
-        }
-        console.log(`[${logTag}] Cache MISS: ${rawKey.slice(0, 60)}`);
-        try {
-          const result = yield fn();
-          const isSuccess = result != null;
-          cacheSet(key, result, isSuccess);
-          if (!isSuccess) {
-            console.log(`[${logTag}] Cache: negative result cached (30s TTL)`);
-          }
-          return result;
-        } catch (error) {
-          console.warn(`[${logTag}] Cache: error, not caching: ${error == null ? void 0 : error.message}`);
-          throw error;
-        }
-      });
-    };
-  }
-  var CACHE_SUCCESS_TTL, CACHE_FAILURE_TTL, CACHE_MAX_SIZE, CLEANUP_INTERVAL, cache, lastCleanup;
-  var init_cache = __esm({
-    "src/utils/cache.js"() {
-      CACHE_SUCCESS_TTL = 3e5;
-      CACHE_FAILURE_TTL = 3e4;
-      CACHE_MAX_SIZE = 150;
-      CLEANUP_INTERVAL = 6e4;
-      cache = /* @__PURE__ */ new Map();
-      lastCleanup = Date.now();
-    }
-  });
-
-  // src/papadustream/extractor.js
-  function getImdbIdFromTmdb(tmdbId) {
+  function searchSite(query, signal) {
     return __async(this, null, function* () {
-      const url = `${TMDB_API_BASE}/tv/${tmdbId}/external_ids?api_key=${TMDB_API_KEY}`;
-      return withCache(`imdb_${tmdbId}`, () => __async(null, null, function* () {
+      try {
+        const data = yield fetchJson(`${BASE_URL}/api/series?query=${encodeURIComponent(query)}`, { signal });
+        return Array.isArray(data) ? data : [];
+      } catch (e) {
+        return [];
+      }
+    });
+  }
+  function fetchCatalog(signal) {
+    return __async(this, null, function* () {
+      try {
+        const data = yield fetchJson(`${BASE_URL}/api/series?limit=100`, { signal });
+        return Array.isArray(data) ? data : [];
+      } catch (e) {
+        return [];
+      }
+    });
+  }
+  function fetchSerieDetail(id, signal) {
+    return __async(this, null, function* () {
+      try {
+        return yield fetchJson(`${BASE_URL}/api/series/${id}`, { signal });
+      } catch (e) {
+        return null;
+      }
+    });
+  }
+  function findEpisode(serieData, mediaType, season, episode) {
+    if (!serieData || !Array.isArray(serieData.episodes)) return null;
+    const eps = serieData.episodes;
+    if (mediaType === "movie") {
+      return eps.find((e2) => e2.number === 1) || eps[0] || null;
+    }
+    const s = parseInt(season, 10) || 1;
+    const e = parseInt(episode, 10) || 1;
+    return eps.find((ep) => ep.season_number === s && ep.number === e) || null;
+  }
+  function findEpisodeContinuous(serieData, seasonCounts, season, episode) {
+    if (!serieData || !Array.isArray(serieData.episodes)) return null;
+    const s = parseInt(season, 10) || 1;
+    const e = parseInt(episode, 10) || 1;
+    if (s <= 1 || !seasonCounts) return null;
+    const eps = serieData.episodes;
+    const numbers = [];
+    for (const ep of eps) {
+      if (ep.season_number !== 1 || typeof ep.number !== "number" || !Number.isInteger(ep.number) || ep.number < 1) {
+        return null;
+      }
+      numbers.push(ep.number);
+    }
+    numbers.sort((a, b) => a - b);
+    for (let i = 0; i < numbers.length; i++) {
+      if (numbers[i] !== i + 1) return null;
+    }
+    const maxN = numbers.length;
+    if (maxN < 1) return null;
+    let offset = 0;
+    for (let i = 1; i < s; i++) {
+      const c = seasonCounts[i];
+      if (!c || c <= 0) return null;
+      offset += c;
+    }
+    const continuous = offset + e;
+    if (continuous < 1 || continuous > maxN) return null;
+    return eps.find((ep) => ep.number === continuous) || null;
+  }
+  function assTimeToVttTime(t) {
+    const m = /^(\d+):(\d{1,2}):(\d{1,2})[.](\d{1,2})$/.exec(t);
+    if (!m) return null;
+    const h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    const s = parseInt(m[3], 10);
+    const totalMs = (h * 3600 + min * 60 + s) * 1e3 + parseInt(m[4], 10) * 10;
+    const hh = String(Math.floor(totalMs / 36e5)).padStart(2, "0");
+    const mm = String(Math.floor(totalMs % 36e5 / 6e4)).padStart(2, "0");
+    const ss = String(Math.floor(totalMs % 6e4 / 1e3)).padStart(2, "0");
+    const mmm = String(totalMs % 1e3).padStart(3, "0");
+    return `${hh}:${mm}:${ss}.${mmm}`;
+  }
+  function assTextToVtt(text) {
+    if (!text) return "";
+    let t = text.replace(/\\[Nn]/g, "\n").replace(/\\h/g, " ");
+    t = t.replace(/\{([^}]*)\}/g, (block, inner) => {
+      let out = "";
+      const re = /\\([ibu])([01])/g;
+      let m;
+      while ((m = re.exec(inner)) !== null) {
+        out += m[2] === "1" ? `<${m[1]}>` : `</${m[1]}>`;
+      }
+      return out;
+    });
+    t = t.replace(/[{}]/g, "");
+    t = t.replace(/^(<\/[ibu]>)+/, "");
+    t = t.replace(/&/g, "&amp;");
+    t = t.replace(/<(?!\/?(?:i|b|u)>)/g, "&lt;");
+    return t.replace(/\s+$/g, "");
+  }
+  function assToVtt(ass) {
+    if (!ass || typeof ass !== "string") return null;
+    const lines = ass.split(/\r?\n/);
+    const cues = [];
+    for (const line of lines) {
+      if (!line.startsWith("Dialogue:")) continue;
+      const body = line.slice("Dialogue:".length).trim();
+      const commaIdx = [];
+      let idx = -1;
+      for (let i = 0; i < 9; i++) {
+        idx = body.indexOf(",", idx + 1);
+        if (idx === -1) break;
+        commaIdx.push(idx);
+      }
+      if (commaIdx.length < 9) continue;
+      const fields = [];
+      let start = 0;
+      for (let i = 0; i < 9; i++) {
+        fields.push(body.slice(start, commaIdx[i]));
+        start = commaIdx[i] + 1;
+      }
+      const startVtt = assTimeToVttTime(fields[1]);
+      const endVtt = assTimeToVttTime(fields[2]);
+      const text = assTextToVtt(body.slice(start));
+      if (!startVtt || !endVtt || !text) continue;
+      cues.push(`${startVtt} --> ${endVtt}
+${text}`);
+    }
+    if (cues.length === 0) return null;
+    return "WEBVTT\n\n" + cues.join("\n\n") + "\n";
+  }
+  function vttToDataUri(vtt) {
+    return "data:text/vtt;charset=utf-8," + encodeURIComponent(vtt);
+  }
+  function fetchEpisodeMeta(epId, signal) {
+    return __async(this, null, function* () {
+      try {
+        return yield fetchJson(`${BASE_URL}/api/episodes/${epId}`, { signal });
+      } catch (e) {
+        return null;
+      }
+    });
+  }
+  function buildSubtitles(epMeta, epId, signal) {
+    return __async(this, null, function* () {
+      if (!epMeta || !epMeta.subtitles) return [];
+      const lang = (epMeta.created_timestamp || 0) >= SUBTITLE_LANG_THRESHOLD ? "fra" : "fr";
+      const subtitles = [];
+      const tracks = [
+        { key: "fra_full", flag: "full", id: "fra-full", label: "Fran\xE7ais" },
+        { key: "fra_forced", flag: "forced", id: "fra-forced", label: "Fran\xE7ais (forced)" }
+      ];
+      for (const track of tracks) {
+        if (!epMeta.subtitles[track.key]) continue;
+        if (isAborted(signal)) return subtitles;
+        const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${lang}-${track.flag}.ass`;
+        let url = assUrl;
         try {
-          const res = yield safeFetch(url);
-          if (!res) return null;
-          const data = yield res.json();
-          if (!data || data.success === false) return null;
-          const imdbId = data == null ? void 0 : data.imdb_id;
-          if (!imdbId || typeof imdbId !== "string" || !imdbId.startsWith("tt")) return null;
-          console.log(`[Papadustream] TMDB ${tmdbId} \u2192 IMDb ${imdbId}`);
-          return imdbId;
+          const assText = yield fetchText(assUrl, { signal });
+          const vtt = assToVtt(assText);
+          if (vtt) url = vttToDataUri(vtt);
         } catch (e) {
-          console.warn(`[Papadustream] TMDB error: ${e == null ? void 0 : e.message}`);
-          return null;
         }
-      }));
-    });
-  }
-  function getTmdbSeriesTitle(tmdbId) {
-    return __async(this, null, function* () {
-      const url = `${TMDB_API_BASE}/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=fr-FR`;
-      return withCache(`title_${tmdbId}`, () => __async(null, null, function* () {
-        try {
-          const res = yield safeFetch(url);
-          if (!res) return null;
-          const data = yield res.json();
-          if (!data || data.success === false) return null;
-          return data.name || null;
-        } catch (e) {
-          console.warn(`[Papadustream] TMDB title error: ${e == null ? void 0 : e.message}`);
-          return null;
-        }
-      }));
-    });
-  }
-  function searchSeriesByTitle(title) {
-    return __async(this, null, function* () {
-      const searchUrl = `${BASE_URL}/search?q=${encodeURIComponent(title)}`;
-      return withCache(`search_${title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`, () => __async(null, null, function* () {
-        try {
-          const html = yield fetchText(searchUrl);
-          if (!html) return null;
-          const seriesRegex = /\/series\/(tt\d+)/g;
-          let match;
-          const found = [];
-          while ((match = seriesRegex.exec(html)) !== null) {
-            found.push(match[1]);
-          }
-          if (found.length > 0) {
-            const imdbId = found[0];
-            console.log(`[Papadustream] Search "${title}" \u2192 ${imdbId} (${found.length} results)`);
-            return imdbId;
-          }
-          console.warn(`[Papadustream] No series found for "${title}"`);
-          return null;
-        } catch (e) {
-          console.warn(`[Papadustream] Search error: ${e == null ? void 0 : e.message}`);
-          return null;
-        }
-      }));
-    });
-  }
-  function resolveImdbId(tmdbId) {
-    return __async(this, null, function* () {
-      let imdbId = yield getImdbIdFromTmdb(tmdbId);
-      if (imdbId) return imdbId;
-      console.log(`[Papadustream] Title search fallback for TMDB ${tmdbId}...`);
-      const title = yield getTmdbSeriesTitle(tmdbId);
-      if (title) {
-        const mainTitle = title.split(":")[0].trim();
-        imdbId = yield searchSeriesByTitle(mainTitle);
-        if (imdbId) return imdbId;
-        imdbId = yield searchSeriesByTitle(title);
-        if (imdbId) return imdbId;
+        subtitles.push({ id: track.id, url, lang: "fra", label: track.label });
       }
-      console.warn(`[Papadustream] IMDb ID not found for TMDB ${tmdbId}`);
-      return null;
+      return subtitles;
     });
   }
-  function extractHlsUrls(html, season, episode) {
-    if (!html) return [];
-    const results = [];
-    const hlsRegex = /\/hls\/s\d+\/serial\/tt\d+\/(\d+)\/(\d+)\/playlist\.m3u8/g;
-    let match;
-    while ((match = hlsRegex.exec(html)) !== null) {
-      const epSeason = parseInt(match[1], 10);
-      const epNumber = parseInt(match[2], 10);
-      if (epSeason === season && epNumber === episode) {
-        const fullUrl = `${BASE_URL}${match[0]}`;
-        console.log(`[Papadustream] Found HLS: S${epSeason}E${epNumber}`);
-        results.push(fullUrl);
+  function parseMpdQuality(manifestUrl, signal) {
+    return __async(this, null, function* () {
+      try {
+        const text = yield fetchText(manifestUrl, { signal });
+        let maxH = 0;
+        const re = /height="(\d+)"/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const h = parseInt(m[1], 10);
+          if (h > maxH) maxH = h;
+        }
+        if (maxH >= 2160) return "2160p";
+        if (maxH >= 1080) return "1080p";
+        if (maxH >= 720) return "720p";
+        if (maxH >= 480) return "480p";
+        if (maxH > 0) return `${maxH}p`;
+        return "HD";
+      } catch (e) {
+        return "HD";
       }
-    }
-    return results;
+    });
   }
   function extractStreams(_0, _1, _2, _3) {
     return __async(this, arguments, function* (tmdbId, mediaType, season, episode, options = {}) {
       const signal = (options == null ? void 0 : options.signal) || null;
       if (isAborted(signal)) return [];
       setCurrentSignal(signal);
-      if (mediaType !== "tv") {
-        console.log(`[Papadustream] Unsupported: ${mediaType} (TV series only)`);
-        return [];
-      }
       const startTime = Date.now();
-      console.log(`[Papadustream] Looking for S${season || 1}E${episode || 1} (TMDB: ${tmdbId})`);
-      const imdbId = yield resolveImdbId(tmdbId);
-      if (!imdbId) {
-        console.warn(`[Papadustream] Could not resolve IMDb ID for TMDB ${tmdbId}`);
-        return [];
-      }
-      const targetEpisodes = yield resolveTargetEpisodes(tmdbId, mediaType, season, episode, {
-        startTime,
-        budgetMs: 45e3
-      });
-      console.log(`[Papadustream] Target episodes: ${targetEpisodes}`);
-      const seriesUrl = `${BASE_URL}/series/${imdbId}`;
-      const html = yield withCache(`page_${imdbId}`, () => __async(null, null, function* () {
-        return yield fetchText(seriesUrl);
-      }));
-      if (!html) {
-        console.warn(`[Papadustream] Series page not accessible: ${seriesUrl}`);
-        return [];
-      }
-      const targetSeason = Number(season) || 1;
-      const streams = [];
-      const seenUrls = /* @__PURE__ */ new Set();
-      for (const ep of targetEpisodes) {
-        const urls = extractHlsUrls(html, targetSeason, ep);
-        for (const url of urls) {
-          if (seenUrls.has(url)) continue;
-          seenUrls.add(url);
-          const stream = toStream(url, "VF", "Papadustream", BASE_URL, {
-            quality: "HD",
-            title: `S${targetSeason}E${ep} HLS`
-          });
-          stream.type = "hls";
-          streams.push(stream);
+      const titles = yield getTmdbTitles(tmdbId, mediaType, { season });
+      if (!titles || titles.length === 0) return [];
+      const wantedFormats = mediaType === "movie" ? ["movie"] : ["serie", "kai"];
+      let serie = null;
+      const seenIds = /* @__PURE__ */ new Set();
+      for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+        if (!title || title.length < 3) continue;
+        const results = yield searchSite(title, signal);
+        const scored = results.filter((r) => wantedFormats.includes(r.format) && !seenIds.has(r.id)).map((r) => __spreadProps(__spreadValues({}, r), { score: scoreSearchResult(r, title) })).sort((a, b) => b.score - a.score);
+        for (const r of scored) {
+          if (r.score < 40) continue;
+          seenIds.add(r.id);
+          serie = r;
+          break;
         }
-        if (streams.length > 0) break;
+        if (serie) break;
       }
-      if (streams.length === 0 && targetEpisodes[0] > 1) {
-        const prevEp = targetEpisodes[0] - 1;
-        const urls = extractHlsUrls(html, targetSeason, prevEp);
-        for (const url of urls) {
-          if (seenUrls.has(url)) continue;
-          seenUrls.add(url);
-          const stream = toStream(url, "VF", "Papadustream", BASE_URL, {
-            quality: "HD",
-            title: `S${targetSeason}E${prevEp} HLS (fallback)`
-          });
-          stream.type = "hls";
-          streams.push(stream);
+      if (!serie && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        const catalog = yield fetchCatalog(signal);
+        let best = null;
+        for (const r of catalog) {
+          if (!wantedFormats.includes(r.format)) continue;
+          let bestScore = 0;
+          for (const t of titles) {
+            const sc = scoreSearchResult(r, t);
+            if (sc > bestScore) bestScore = sc;
+          }
+          if (bestScore > 40 && (!best || bestScore > best.score)) {
+            best = __spreadProps(__spreadValues({}, r), { score: bestScore });
+          }
         }
-        if (streams.length > 0) {
-          console.log(`[Papadustream] Fallback: E${prevEp} (target was E${targetEpisodes[0]})`);
+        if (best) serie = best;
+      }
+      if (!serie) return [];
+      const detail = yield fetchSerieDetail(serie.id, signal);
+      let ep = findEpisode(detail, mediaType, season, episode);
+      let usedContinuous = false;
+      if (!ep && mediaType === "tv" && serie.format === "kai" && !isAborted(signal)) {
+        const seasonCounts = titles._metadata && titles._metadata.seasonEpisodeCounts;
+        ep = findEpisodeContinuous(detail, seasonCounts, season, episode);
+        usedContinuous = !!ep;
+      }
+      if (!ep || !ep.id) return [];
+      const manifestUrl = `${BASE_URL}/playback/${ep.id}/manifest.mpd`;
+      const quality = yield parseMpdQuality(manifestUrl, signal);
+      let subtitles = [];
+      if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        const epMeta = yield fetchEpisodeMeta(ep.id, signal);
+        subtitles = yield buildSubtitles(epMeta, ep.id, signal);
+      }
+      const epLabel = mediaType === "movie" ? "" : ` S${usedContinuous ? parseInt(season, 10) || 1 : ep.season_number || season || 1}E${usedContinuous ? parseInt(episode, 10) || 1 : ep.number || episode || 1}`;
+      const stream = {
+        name: "WaveAnime",
+        title: `${serie.title}${epLabel}`,
+        url: manifestUrl,
+        quality,
+        type: "dash",
+        language: "VOSTFR",
+        headers: {
+          "Referer": `${BASE_URL}/`,
+          "Origin": BASE_URL
         }
-      }
-      if (streams.length === 0) {
-        console.log(`[Papadustream] No HLS for ${imdbId} S${targetSeason}E${targetEpisodes[0]}`);
-      } else {
-        console.log(`[Papadustream] ${streams.length} stream(s) found`);
-      }
-      return streams;
+      };
+      if (subtitles.length > 0) stream.subtitles = subtitles;
+      console.log(`[WaveAnime] Stream: ${stream.quality} dash | ${serie.title}${epLabel}${subtitles.length > 0 ? ` | ${subtitles.length} sub(s)` : ""}`);
+      return [stream];
     });
   }
-  var TMDB_API_KEY, TMDB_API_BASE, withCache;
+  var BASE_URL, BUDGET_MS, MAX_SEARCH_TITLES, SUBTITLE_LANG_THRESHOLD;
   var init_extractor = __esm({
-    "src/papadustream/extractor.js"() {
+    "src/waveanime/extractor.js"() {
       init_http();
       init_resolvers();
+      init_metadata();
       init_dle_extractor();
-      init_cache();
-      TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
-      TMDB_API_BASE = "https://api.themoviedb.org/3";
-      withCache = createCache("pd", "Papadustream");
+      BASE_URL = "https://waveanime.fr";
+      BUDGET_MS = 45e3;
+      MAX_SEARCH_TITLES = 6;
+      SUBTITLE_LANG_THRESHOLD = 1777804042435;
     }
   });
 
-  // src/papadustream/index.js
+  // src/waveanime/index.js
   var require_index = __commonJS({
-    "src/papadustream/index.js"(exports, module) {
+    "src/waveanime/index.js"(exports, module) {
       init_extractor();
       init_resolvers();
-      module.exports = { getStreams: createProvider("Papadustream", extractStreams) };
+      module.exports = { getStreams: createProvider("WaveAnime", extractStreams) };
     }
   });
   return require_index();
