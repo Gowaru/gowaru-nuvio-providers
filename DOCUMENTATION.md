@@ -208,6 +208,18 @@ May be exported as `module.exports.getStreams` (CommonJS) or defined as a global
 
 **Required:** `url` only (non-blank, must not contain "[object").
 
+> **💡 `toStream()` injecte `name` automatiquement**
+>
+> La fabrique partagée `toStream(url, language, providerName, siteUrl, opts)`
+> (src/utils/dle-extractor.js) définit d'office `name: ${providerName} (${language})`
+> (ex: `"Coflix (VF)"`), en plus de `title`, `quality` (défaut `"HD"`), `language`
+> et des `headers` Referer/Origin/User-Agent. `resolveStream()` (src/utils/resolvers.js)
+> préserve `name` dans tous ses chemins de retour (spreads `{ ...stream }`).
+>
+> **Convention : préférer `toStream()` à toute construction d'objet stream manuelle** —
+> un provider qui passe par cette fabrique a donc `name` même si aucun `name:` n'apparaît
+> dans son extracteur (voir aussi §9).
+
 ### 3.3 Headers Handling
 
 Headers returned in the stream object are forwarded to the native player (ExoPlayer/AVPlayer) via `ProxyHeaders`. `Accept-Encoding` is always stripped by the native layer. A default `User-Agent` is added if absent.
@@ -547,6 +559,15 @@ if (!data) return [];
 **`require('unknown-module')` throws.** Bundle all dependencies with esbuild `bundle: true`. Only `cheerio` and `crypto-js` are available at runtime.
 
 **Headers in stream object vs fetch call.** Only stream-level `headers` are sent to the video player. `fetch()` headers apply only to the provider's own requests.
+
+**Audit `name`/`size` : ne pas se limiter aux extracteurs.** Le champ `name` est injecté
+par `toStream()` dans `src/utils/dle-extractor.js`. Un grep `name:` restreint à
+`src/*/extractor.js` classe à tort les providers qui passent par cette fabrique comme
+« manquants » (faux positif). Avant de conclure qu'un provider n'envoie pas `name`,
+vérifier aussi `src/utils/dle-extractor.js` (fonction `toStream`) et `resolveStream()`
+(resolvers.js) qui préserve `name` par spreads `{ ...stream }`. À l'inverse, `size` n'est
+jamais injecté par `toStream()` : si un site ne l'expose pas, l'omettre plutôt que de
+faire un HEAD request par stream (coût/budget).
 
 **V8 vs QuickJS differences:**
 - `TextDecoder`/`TextEncoder` unavailable

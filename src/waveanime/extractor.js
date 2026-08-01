@@ -265,9 +265,11 @@ async function fetchEpisodeMeta(epId, signal) {
 }
 
 /**
- * Construit les pistes de sous-titres (fra_full / fra_forced) au format Stremio :
- * `[{ id, url, lang, label }]`. L'ASS est fetché et converti en WebVTT (data URI) ;
- * si la conversion échoue, l'URL ASS d'origine est gardée en fallback.
+ * Construit les pistes de sous-titres (fra_full / fra_forced) au format attendu par
+ * le runtime NuvioMobile (PluginRuntime.parseJsonResults) :
+ * `[{ url, language, name, headers }]`. L'ASS est fetché et converti en WebVTT
+ * (data URI) ; si la conversion échoue, l'URL ASS d'origine est gardée en fallback
+ * (les headers Referer/Origin permettent au player de re-fetcher l'ASS).
  * Format d'URL ASS (extrait du bundle JS du site) :
  *   /playback/subtitles/{epId}-{lang}-{full|forced}.ass
  * avec lang = 'fra' pour les épisodes récents, 'fr' pour les anciens.
@@ -277,8 +279,8 @@ async function buildSubtitles(epMeta, epId, signal) {
     const lang = (epMeta.created_timestamp || 0) >= SUBTITLE_LANG_THRESHOLD ? 'fra' : 'fr';
     const subtitles = [];
     const tracks = [
-        { key: 'fra_full', flag: 'full', id: 'fra-full', label: 'Français' },
-        { key: 'fra_forced', flag: 'forced', id: 'fra-forced', label: 'Français (forced)' },
+        { key: 'fra_full', flag: 'full', label: 'Français' },
+        { key: 'fra_forced', flag: 'forced', label: 'Français (forced)' },
     ];
     for (const track of tracks) {
         if (!epMeta.subtitles[track.key]) continue;
@@ -294,7 +296,18 @@ async function buildSubtitles(epMeta, epId, signal) {
         } catch (e) {
             // fallback : garder l'URL ASS d'origine
         }
-        subtitles.push({ id: track.id, url, lang: 'fra', label: track.label });
+        // Format NuvioMobile : url + language (ISO 639-2) + name + headers par piste.
+        // `language: 'fra'` est lu tel quel (défaut "Unknown" si absent) — l'ancien
+        // format { id, url, lang, label } était ignoré (lang/label non reconnus).
+        subtitles.push({
+            url,
+            language: 'fra',
+            name: track.label,
+            headers: {
+                'Referer': `${BASE_URL}/`,
+                'Origin': BASE_URL,
+            },
+        });
     }
     return subtitles;
 }

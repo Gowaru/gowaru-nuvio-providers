@@ -1,6 +1,6 @@
 /**
  * animevostfr - Built from src/animevostfr/
- * Generated: 2026-08-01T00:11:41.443101367Z
+ * Generated: 2026-08-01T15:57:13.382833284Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12626,18 +12626,11 @@ var __provider = (() => {
         while ((match = pattern.exec(html)) !== null) {
           const key = match[1].split(",").map((n) => parseInt(n, 10));
           const b64 = match[2].replace(/-/g, "+").replace(/_/g, "/");
-          let bin = "", buffer = 0, bits = 0;
-          for (let i = 0; i < b64.length; i++) {
-            const ch = b64[i];
-            if (ch === "=") break;
-            const val = B64_ALPHABET.indexOf(ch);
-            if (val < 0) continue;
-            buffer = buffer << 6 | val;
-            bits += 6;
-            if (bits >= 8) {
-              bits -= 8;
-              bin += String.fromCharCode(buffer >> bits & 255);
-            }
+          let bin = "";
+          try {
+            bin = atob(b64);
+          } catch (e) {
+            continue;
           }
           let decoded = "";
           for (let i = 0; i < bin.length; i++) {
@@ -13124,7 +13117,7 @@ var __provider = (() => {
       return __spreadProps(__spreadValues({}, stream), { isDirect: false });
     });
   }
-  var PROVIDER_BUDGET_MS, HEADERS, USER_AGENT, BASE_HEADERS, _atob, CODEC_PREFERENCE, B64_ALPHABET, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, KNOWN_HOST_NAMES, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
+  var PROVIDER_BUDGET_MS, HEADERS, USER_AGENT, BASE_HEADERS, _atob, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, KNOWN_HOST_NAMES, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
@@ -13142,7 +13135,6 @@ var __provider = (() => {
         }
       };
       CODEC_PREFERENCE = ["AV1", "H.265", "H.264", "VP9"];
-      B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
       TV_BUDGET_MS = 5e4;
       STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
       DEFAULT_QUALITY_TIER = 720;

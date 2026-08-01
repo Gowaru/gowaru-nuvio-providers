@@ -1,6 +1,6 @@
 /**
  * waveanime - Built from src/waveanime/
- * Generated: 2026-08-01T00:11:43.645103518Z
+ * Generated: 2026-08-01T15:57:14.598834551Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12900,8 +12900,8 @@ ${text}`);
       const lang = (epMeta.created_timestamp || 0) >= SUBTITLE_LANG_THRESHOLD ? "fra" : "fr";
       const subtitles = [];
       const tracks = [
-        { key: "fra_full", flag: "full", id: "fra-full", label: "Fran\xE7ais" },
-        { key: "fra_forced", flag: "forced", id: "fra-forced", label: "Fran\xE7ais (forced)" }
+        { key: "fra_full", flag: "full", label: "Fran\xE7ais" },
+        { key: "fra_forced", flag: "forced", label: "Fran\xE7ais (forced)" }
       ];
       for (const track of tracks) {
         if (!epMeta.subtitles[track.key]) continue;
@@ -12914,7 +12914,15 @@ ${text}`);
           if (vtt) url = vttToDataUri(vtt);
         } catch (e) {
         }
-        subtitles.push({ id: track.id, url, lang: "fra", label: track.label });
+        subtitles.push({
+          url,
+          language: "fra",
+          name: track.label,
+          headers: {
+            "Referer": `${BASE_URL}/`,
+            "Origin": BASE_URL
+          }
+        });
       }
       return subtitles;
     });

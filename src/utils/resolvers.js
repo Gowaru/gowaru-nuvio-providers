@@ -219,8 +219,6 @@ const _atob = (str) => {
 
 const CODEC_PREFERENCE = ['AV1', 'H.265', 'H.264', 'VP9'];
 
-/** Alphabet base64 (décodage maison QuickJS-safe pour fsvid/vidzy) */
-const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 /**
  * Sanitize a search query for site search APIs.
@@ -1045,8 +1043,8 @@ export async function resolveVoe(url) {
         // (<div id="root"> + bundle /assets/index-*.js) et résolvent la vidéo
         // via API REST : /api/videos/<code>/settings|playback|captcha|view et
         // /api/videos/stream/<code> — avec fingerprint chiffré AES-GCM
-        // (WebCrypto, indisponible en QuickJS), captcha PoW optionnel
-        // (captchaRequired, pow_token) et gating premium (prem=1).
+        // (WebCrypto/crypto.subtle : disponible sur NuvioMobile, absent sur NuvioTV),
+        // captcha PoW optionnel (captchaRequired, pow_token) et gating premium (prem=1).
         // AUCUNE URL de stream n'apparaît dans le HTML → contrairement à
         // fsvid/vidzy, il n'y a PAS de leurre type "troll/master.m3u8" ni de
         // bloc XOR à décoder. Sans navigateur ces embeds sont irrésolvables :
@@ -1110,16 +1108,14 @@ export async function resolveFsvidVidzy(url) {
             const key = match[1].split(',').map(n => parseInt(n, 10));
             const b64 = match[2].replace(/-/g, '+').replace(/_/g, '/');
 
-            // Décodage base64 maison (QuickJS-safe, sans Buffer/atob)
-            let bin = '', buffer = 0, bits = 0;
-            for (let i = 0; i < b64.length; i++) {
-                const ch = b64[i];
-                if (ch === '=') break;
-                const val = B64_ALPHABET.indexOf(ch);
-                if (val < 0) continue;
-                buffer = (buffer << 6) | val;
-                bits += 6;
-                if (bits >= 8) { bits -= 8; bin += String.fromCharCode((buffer >> bits) & 0xFF); }
+            // Décodage base64 via atob() natif — polyfillé sur NuvioMobile ET NuvioTV
+            // (vérifié dans le code des apps : base64Polyfill / getStaticPolyfillCode).
+            // Remplace l'ancien décodage maison B64_ALPHABET (superflu).
+            let bin = '';
+            try {
+                bin = atob(b64);
+            } catch (e) {
+                continue;
             }
 
             // XOR avec la clé

@@ -43,7 +43,7 @@ This bundle integrates **23 providers** covering the French streaming landscape 
 | 11 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.9 |
 | 12 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.0 |
 | 13 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.49 |
-| 14 | **WaveAnime** ² | 🎬📺 | VF / VOSTFR | DASH | ✅ | ⚠️ | 0.1.0 |
+| 14 | **WaveAnime** ² | 🎬📺 | VF / VOSTFR | DASH | ✅ | ✅ | 0.0.2 |
 | | **🎬 Movies & Series** | | | | | | |
 | 15 | **Coflix** ⁵ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ⚠️ | 1.0.8 |
 | 16 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.11 |
@@ -62,7 +62,7 @@ This bundle integrates **23 providers** covering the French streaming landscape 
 >
 > **Notes:**
 > - ¹ **Anime-Ultime**: licensed series are excluded by the site (catalog limited to unlicensed anime).
-> - ² **WaveAnime**: DASH (MPD) playback — native via ExoPlayer/Media3 (Android) only, not supported by AVPlayer (iOS/TV).
+> - ² **WaveAnime**: DASH (MPD) playback — native via ExoPlayer/Media3 on NuvioMobile (Android) **and NuvioTV** (ExoPlayer, not AVPlayer). iOS: player MPV (MPVKit) — support DASH à confirmer sur appareil réel. Sous-titres ASS externes : supportés sur NuvioMobile uniquement (NuvioTV ignore le champ `subtitles`).
 > - ³ **Sekai**: direct MP4 (1080p/720p/360p) — multi-saga probing with rate limiting may exceed NuvioTV's 30s request window on large titles.
 > - ⁴ **VoirAnime**: multi-host resolution (Sibnet, Uqload, Voe, Dood, Vidzy…) — slowest titles may exceed NuvioTV's 30s request window.
 > - ⁵ **Coflix**: multi-domain probing + `lecteurvideo` embeds — falls back to embed links (not natively playable) when direct resolution fails.

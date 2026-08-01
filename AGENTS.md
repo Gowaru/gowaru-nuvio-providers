@@ -41,17 +41,24 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 ## Provider API
 - `getStreams(tmdbId, mediaType, season, episode)` → `Promise<Array<Stream>>`
 - **Stream object**: Only `url` is required (non-blank, no "object" strings)
-  - Optional: `title`, `quality`, `headers`, `provider`, `type`, `size`, `language`
-- **Headers**: Applied to native player (ExoPlayer/AVPlayer); `Accept-Encoding` stripped by runtime
+  - Optional: `title`, `name`, `quality`, `headers`, `provider`, `type`, `size`, `language`, `infoHash`, `seeders`, `peers`
+  - `subtitles`: `[{ url, language, name, headers }]` — **NuvioMobile only** (NuvioTV ignores the field entirely). `language` defaults to `"Unknown"` when absent → always set it (`fra`, `eng`, …). `headers` are applied per-subtitle by the app player.
+- **Headers**: Applied via the app playback proxy — `behaviorHints.proxyHeaders` (both apps) + `notWebReady=true` (NuvioMobile only); `Range` and `Accept-Encoding` are stripped by the runtime — do not rely on them
+- **`type` values**: `'dash'`/`'mpd'` → DASH (natively supported by ExoPlayer/Media3 on NuvioMobile Android **and** NuvioTV), `'hls'`/`'m3u8'` → HLS, `'mp4'`/`'mkv'` → progressive
+- **Manifest `disabledPlatforms`/`supportedPlatforms`**: currently **inert** — NuvioMobile hardcodes its platform to `android`/`ios` (never matches `tv`), NuvioTV parses the fields but never applies them. Keep as documentation/future-proofing only.
 
 ## Runtime Constraints (QuickJS)
-- **Unavailable**: `setTimeout`, `setInterval`, `TextDecoder`, `TextEncoder`, `Buffer`, `process`
+- **Unavailable**: `setTimeout`, `setInterval`, `Buffer`, `process`
+- **TextEncoder/TextDecoder**: Polyfilled on **NuvioMobile** (native bridge) — **NOT available on NuvioTV**. Guard with `typeof TextEncoder !== 'undefined'` or avoid them entirely (string ops, `encodeURIComponent`, `atob`/`btoa` are polyfilled on both)
+- **AbortController/AbortSignal**: Polyfilled on both, but does **not** cancel the in-flight native fetch — NuvioMobile ignores `signal` entirely, NuvioTV only checks `aborted` before/after. Use budget/time-guards instead
+- **Crypto**: `CryptoJS` via `require('crypto-js')` on both runtimes; `crypto.subtle` (WebCrypto: AES-GCM/CBC/ECB, HMAC, PBKDF2, SHA-1/256/384/512, RSA/ECDSA sign/verify) **additionally on NuvioMobile only**
+- **`TMDB_API_KEY`**: Exposed as `globalThis.TMDB_API_KEY` on **NuvioTV only** (not on Mobile) — use with `typeof` fallback
 - **Require()**: Only `cheerio` and `crypto-js`; all other deps must be bundled via esbuild
 - **Fetch limits**: 
-  - Response body truncated at **256 KB**
+  - Response body truncated at **1 MB** (both apps; 256 KB in older runtimes)
   - Headers truncated at **8 KB**
   - `response.json()` returns `null` (not rejected) on parse failure → always guard
-- **Plugin timeout**: 60 seconds
+- **Plugin timeout**: 60 seconds per scraper (scrapers run in parallel, each in its own isolated QuickJS instance)
 - **Provider size limit**: 5 MB download limit
 
 ## Code Conventions
