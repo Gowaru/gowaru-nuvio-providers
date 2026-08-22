@@ -1,6 +1,6 @@
 /**
  * animoflix - Built from src/animoflix/
- * Generated: 2026-08-22T01:59:20.490960457Z
+ * Generated: 2026-08-22T03:49:18.529558484Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -13846,6 +13846,23 @@ var __provider = (() => {
       } catch (e) {
         console.warn(`[AnimoFlix] Search API failed for "${title}": ${e.message}`);
       }
+      const slug = toSlug(title);
+      if (slug && slug.length > 3) {
+        const slugUrl = `${BASE_URL}/anime/${slug}/`;
+        try {
+          const slugHtml = yield fetchText(slugUrl, { timeout: 8e3 });
+          if (slugHtml && slugHtml.length > 1e3) {
+            console.log(`[AnimoFlix] Slug probing match: ${slugUrl}`);
+            return [{
+              title: slug.replace(/-/g, " "),
+              title2: title,
+              slug,
+              url: slugUrl
+            }];
+          }
+        } catch (e) {
+        }
+      }
       try {
         const html = yield fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
         const $ = import_cheerio_without_node_native2.default.load(html);
@@ -13883,23 +13900,6 @@ var __provider = (() => {
         if (results.length > 0) return results;
       } catch (e) {
         console.warn(`[AnimoFlix] Search HTML fallback failed: ${e.message}`);
-      }
-      const slug = toSlug(title);
-      if (slug && slug.length > 3) {
-        const slugUrl = `${BASE_URL}/anime/${slug}/`;
-        try {
-          const slugHtml = yield fetchText(slugUrl, { timeout: 8e3 });
-          if (slugHtml && slugHtml.length > 1e3) {
-            console.log(`[AnimoFlix] Slug probing match: ${slugUrl}`);
-            return [{
-              title: slug.replace(/-/g, " "),
-              title2: title,
-              slug,
-              url: slugUrl
-            }];
-          }
-        } catch (e) {
-        }
       }
       return [];
     });
@@ -13977,14 +13977,21 @@ var __provider = (() => {
       const targetEpisodes = yield resolveTargetEpisodes(tmdbId, mediaType, season, episode);
       let bestMatch = null;
       const badSlugs = /* @__PURE__ */ new Set();
-      const searchPromises = titles.slice(0, MAX_TITLE_SEARCHES).map(
-        (searchTitle) => searchAnime(searchTitle).then((results) => {
+      const maxSearches = isMovie ? MAX_TITLE_SEARCHES_MOVIE : MAX_TITLE_SEARCHES;
+      const allResults = [];
+      for (const searchTitle of titles.slice(0, maxSearches)) {
+        if (isAborted(signal)) break;
+        try {
           const nt = normalize(searchTitle);
-          if (nt.length < 4) return [];
-          return results.filter((r) => !SPECIAL_SLUG_RE.test(r.slug) && !badSlugs.has(r.slug)).map((r) => __spreadProps(__spreadValues({}, r), { _queryTitle: searchTitle }));
-        }).catch(() => [])
-      );
-      const allResults = (yield Promise.allSettled(searchPromises)).flatMap((r) => r.status === "fulfilled" ? r.value : []);
+          if (nt.length < 4) continue;
+          const results = yield searchAnime(searchTitle);
+          const filtered = results.filter((r) => !SPECIAL_SLUG_RE.test(r.slug) && !badSlugs.has(r.slug)).map((r) => __spreadProps(__spreadValues({}, r), { _queryTitle: searchTitle }));
+          allResults.push(...filtered);
+          if (filtered.some((r) => scoreSearchMatch(r, searchTitle) >= 100)) break;
+        } catch (e) {
+        }
+        if (allResults.length === 0) yield sleep(500);
+      }
       const scored = /* @__PURE__ */ new Map();
       for (const r of allResults) {
         if (badSlugs.has(r.slug)) continue;
@@ -14340,7 +14347,7 @@ var __provider = (() => {
       return results.filter((r) => r.status === "fulfilled" && r.value).map((r) => r.value);
     });
   }
-  var import_cheerio_without_node_native2, BASE_URL, SEARCH_URL, TIMEOUT, SPECIAL_SLUG_RE, MAX_TITLE_SEARCHES, withCache;
+  var import_cheerio_without_node_native2, BASE_URL, SEARCH_URL, TIMEOUT, SPECIAL_SLUG_RE, MAX_TITLE_SEARCHES, MAX_TITLE_SEARCHES_MOVIE, withCache;
   var init_extractor = __esm({
     "src/animoflix/extractor.js"() {
       init_http();
@@ -14353,7 +14360,8 @@ var __provider = (() => {
       SEARCH_URL = `${BASE_URL}/search-autocomplete.php`;
       TIMEOUT = 25e3;
       SPECIAL_SLUG_RE = /(?:ona|oav|film|movie|special|scan|chapitre|volume|dub|uncut)(?:-|$)/i;
-      MAX_TITLE_SEARCHES = 6;
+      MAX_TITLE_SEARCHES = 3;
+      MAX_TITLE_SEARCHES_MOVIE = 2;
       withCache = createCache("af", "AnimoFlix");
     }
   });
