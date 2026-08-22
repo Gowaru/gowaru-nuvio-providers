@@ -155,12 +155,17 @@ function matchSaison(saisons, tmdbSeason, episodeNum) {
         }
     }
 
+    // Cumulative fallback: only try if season number is within range of available sagas
     const mainSeasons = saisons.filter(s => {
         if (s.notASeason) return false;
         if (!s.lang || Object.keys(s.lang).length === 0) return false;
         if (/[a-zA-Z]/.test(s.id.replace(/-/g, ''))) return false;
         return true;
     });
+
+    // Don't use cumulative fallback if season exceeds available sagas
+    // (e.g., One Piece S20 should not match S1 East Blue)
+    if (tmdbSeason > mainSeasons.length) return null;
 
     let cumulativeStart = 0;
     for (const s of mainSeasons) {
@@ -212,12 +217,28 @@ async function resolveStreams(streams) {
     const results = await Promise.allSettled(
         streams.map(stream =>
             resolveStream(stream)
-                .then(r => (r && r.url && r.isDirect) ? r : stream)
+                .then(r => {
+                    if (r && r.url && r.isDirect) {
+                        // Preserve original labels (title, name, quality) when resolution succeeds
+                        return { ...stream, url: r.url, isDirect: true, quality: r.quality || stream.quality };
+                    }
+                    // Resolution failed or returned non-direct — keep original stream as fallback
+                    return stream;
+                })
                 .catch(() => stream)
         )
     );
     const resolved = results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
-    return resolved.length > 0 ? resolved : streams.filter(s => s && s.isDirect);
+    
+    // Prefer direct streams, but include embed fallbacks if none are direct
+    const direct = resolved.filter(s => s && s.isDirect);
+    const embed = resolved.filter(s => s && !s.isDirect && s.url);
+    if (direct.length > 0) return direct;
+    if (embed.length > 0) {
+        console.log(`[Mugiwara] No direct streams, using ${embed.length} embed URL(s) as fallback`);
+        return embed;
+    }
+    return resolved;
 }
 
 function collectSourceUrls(episodeSourceUrls) {

@@ -8,6 +8,35 @@ const TMDB_API_BASE = "https://api.themoviedb.org/3";
 
 import { safeFetch } from './resolvers.js';
 
+/**
+ * Cache dédié aux métadonnées TMDB avec TTL long (5 minutes).
+ * Les données TMDB changent rarement (titre, année, genres) →
+ * un TTL long élimine les fetches répétés pendant une session de visionnage.
+ * LRU simple : au-delà de 500 entrées, on vide les plus anciennes.
+ */
+const METADATA_CACHE = new Map();
+const METADATA_TTL = 5 * 60 * 1000; // 5 minutes
+const METADATA_MAX = 500;
+
+function metadataCacheGet(key) {
+    const entry = METADATA_CACHE.get(key);
+    if (entry && Date.now() - entry.ts < METADATA_TTL) return entry.data;
+    if (entry) METADATA_CACHE.delete(key); // expired
+    return null;
+}
+
+function metadataCacheSet(key, data) {
+    if (METADATA_CACHE.size >= METADATA_MAX) {
+        // Supprimer les 100 plus anciennes entrées
+        const oldest = [...METADATA_CACHE.entries()]
+            .sort((a, b) => a[1].ts - b[1].ts)
+            .slice(0, 100)
+            .map(([k]) => k);
+        for (const k of oldest) METADATA_CACHE.delete(k);
+    }
+    METADATA_CACHE.set(key, { data, ts: Date.now() });
+}
+
 const SEASON_SUFFIXES = [
     (s) => `Season ${s}`,
     (s) => `Saison ${s}`,
@@ -162,6 +191,16 @@ async function getKitsuTitles(kitsuId, mediaType, opts = {}) {
  */
 async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
     const type = mediaType === 'movie' ? 'movie' : 'tv';
+    const season = opts.season ? parseInt(opts.season, 10) : null;
+    const cacheKey = `tmdb:${tmdbId}:${type}:${season || ''}`;
+
+    // Cache dédié : les données TMDB changent rarement
+    const cached = metadataCacheGet(cacheKey);
+    if (cached) {
+        console.log(`[Metadata] Cache HIT for ${cacheKey}`);
+        return cached;
+    }
+
     const titles = [];
     let metadata = null;
 
@@ -287,6 +326,9 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
         uniqueTitles._metadata = metadata;
     }
 
+    // Mettre en cache pour les prochaines requêtes (TTL 5 min)
+    metadataCacheSet(cacheKey, uniqueTitles);
+
     console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(' | ')}`);
     return uniqueTitles;
 }
@@ -299,6 +341,15 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
 async function kitsuSearchFallback(tmdbName, mediaType, opts) {
     try {
         if (!tmdbName || tmdbName.length < 3) return [];
+
+        // Cache dédié Kitsu fallback
+        const season = opts.season ? parseInt(opts.season, 10) : null;
+        const cacheKey = `kitsu-fb:${tmdbName.toLowerCase()}:${mediaType}:${season || ''}`;
+        const cached = metadataCacheGet(cacheKey);
+        if (cached) {
+            console.log(`[Metadata] Kitsu fallback cache HIT for "${tmdbName}"`);
+            return cached;
+        }
 
         const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(tmdbName)}&page[limit]=5`;
         const res = await safeFetch(url);
@@ -326,13 +377,16 @@ async function kitsuSearchFallback(tmdbName, mediaType, opts) {
                 const meta = altTitles._metadata;
                 if (meta && meta.isAnime) {
                     console.log(`[Metadata] Fallback success: TMDB ID ${foundTmdbId} for "${enTitle}"`);
+                    metadataCacheSet(cacheKey, altTitles);
                     return altTitles;
                 }
             }
 
             // Dernier recours : utiliser les titres Kitsu directement
             console.log(`[Metadata] Fallback: using Kitsu titles directly for ${anime.id}`);
-            return await getKitsuTitles(anime.id, mediaType, opts);
+            const kitsuTitles = await getKitsuTitles(anime.id, mediaType, opts);
+            metadataCacheSet(cacheKey, kitsuTitles);
+            return kitsuTitles;
         }
 
         console.log(`[Metadata] Kitsu search: no valid results for "${tmdbName}"`);

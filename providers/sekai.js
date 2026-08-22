@@ -1,6 +1,6 @@
 /**
  * sekai - Built from src/sekai/
- * Generated: 2026-08-22T01:59:20.792960764Z
+ * Generated: 2026-08-22T04:10:26.164826138Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12548,6 +12548,19 @@ var __provider = (() => {
   });
 
   // src/utils/metadata.js
+  function metadataCacheGet(key) {
+    const entry = METADATA_CACHE.get(key);
+    if (entry && Date.now() - entry.ts < METADATA_TTL) return entry.data;
+    if (entry) METADATA_CACHE.delete(key);
+    return null;
+  }
+  function metadataCacheSet(key, data) {
+    if (METADATA_CACHE.size >= METADATA_MAX) {
+      const oldest = [...METADATA_CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, 100).map(([k]) => k);
+      for (const k of oldest) METADATA_CACHE.delete(k);
+    }
+    METADATA_CACHE.set(key, { data, ts: Date.now() });
+  }
   function isLatinText(str) {
     return /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()0-9]+$/.test(str);
   }
@@ -12647,6 +12660,13 @@ var __provider = (() => {
     return __async(this, arguments, function* (tmdbId, mediaType, opts = {}) {
       var _a, _b, _c, _d, _e, _f;
       const type = mediaType === "movie" ? "movie" : "tv";
+      const season = opts.season ? parseInt(opts.season, 10) : null;
+      const cacheKey = `tmdb:${tmdbId}:${type}:${season || ""}`;
+      const cached = metadataCacheGet(cacheKey);
+      if (cached) {
+        console.log(`[Metadata] Cache HIT for ${cacheKey}`);
+        return cached;
+      }
       const titles = [];
       let metadata = null;
       try {
@@ -12754,6 +12774,7 @@ var __provider = (() => {
       if (metadata) {
         uniqueTitles._metadata = metadata;
       }
+      metadataCacheSet(cacheKey, uniqueTitles);
       console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(" | ")}`);
       return uniqueTitles;
     });
@@ -12763,6 +12784,13 @@ var __provider = (() => {
       var _a, _b, _c, _d, _e, _f;
       try {
         if (!tmdbName || tmdbName.length < 3) return [];
+        const season = opts.season ? parseInt(opts.season, 10) : null;
+        const cacheKey = `kitsu-fb:${tmdbName.toLowerCase()}:${mediaType}:${season || ""}`;
+        const cached = metadataCacheGet(cacheKey);
+        if (cached) {
+          console.log(`[Metadata] Kitsu fallback cache HIT for "${tmdbName}"`);
+          return cached;
+        }
         const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(tmdbName)}&page[limit]=5`;
         const res = yield safeFetch(url);
         if (!res) return [];
@@ -12782,11 +12810,14 @@ var __provider = (() => {
             const meta = altTitles._metadata;
             if (meta && meta.isAnime) {
               console.log(`[Metadata] Fallback success: TMDB ID ${foundTmdbId} for "${enTitle}"`);
+              metadataCacheSet(cacheKey, altTitles);
               return altTitles;
             }
           }
           console.log(`[Metadata] Fallback: using Kitsu titles directly for ${anime.id}`);
-          return yield getKitsuTitles(anime.id, mediaType, opts);
+          const kitsuTitles = yield getKitsuTitles(anime.id, mediaType, opts);
+          metadataCacheSet(cacheKey, kitsuTitles);
+          return kitsuTitles;
         }
         console.log(`[Metadata] Kitsu search: no valid results for "${tmdbName}"`);
         return [];
@@ -12842,12 +12873,15 @@ var __provider = (() => {
       return titles;
     });
   }
-  var TMDB_API_KEY, TMDB_API_BASE, SEASON_SUFFIXES;
+  var TMDB_API_KEY, TMDB_API_BASE, METADATA_CACHE, METADATA_TTL, METADATA_MAX, SEASON_SUFFIXES;
   var init_metadata = __esm({
     "src/utils/metadata.js"() {
       init_resolvers();
       TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
       TMDB_API_BASE = "https://api.themoviedb.org/3";
+      METADATA_CACHE = /* @__PURE__ */ new Map();
+      METADATA_TTL = 5 * 60 * 1e3;
+      METADATA_MAX = 500;
       SEASON_SUFFIXES = [
         (s) => `Season ${s}`,
         (s) => `Saison ${s}`,
@@ -13197,6 +13231,17 @@ var __provider = (() => {
             break;
           }
           idx += 3;
+        }
+      }
+      if (Object.keys(epMap).length === 0 && mainHtml && mainHtml.length > 1e3) {
+        console.log(`[Sekai] No sagas found, parsing main series page directly...`);
+        const mainMap = parseEpisodeMapFromHtml(mainHtml);
+        for (const [num, sources] of Object.entries(mainMap)) {
+          if (!epMap[num]) epMap[num] = {};
+          Object.assign(epMap[num], sources);
+        }
+        if (Object.keys(epMap).length > 0) {
+          console.log(`[Sekai] Parsed ${Object.keys(epMap).length} episodes from main page`);
         }
       }
       if (epMap[absEp] && Object.keys(epMap[absEp]).length > 0) {

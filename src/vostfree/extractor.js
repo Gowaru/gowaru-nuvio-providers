@@ -43,7 +43,16 @@ function titleMatches(resultTitle, searchTitle) {
     const nResult = normalize(resultTitle);
     const nSearch = normalize(searchTitle);
     if (!nResult || !nSearch) return false;
-    if (nResult.includes(nSearch)) return true;
+    if (nResult === nSearch) return true;
+    if (nResult.includes(nSearch)) {
+        // Vérifier que le résultat n'a pas de mots significatifs en trop AVANT le titre recherché
+        // Ex: "boruto naruto" ne doit pas matcher "naruto"
+        const idx = nResult.indexOf(nSearch);
+        const prefix = nResult.slice(0, idx).trim();
+        const prefixWords = prefix.split(/\s+/).filter(w => w.length > 2 && !['saison', 'season', 'la', 'le', 'les', 'du', 'de', 'des'].includes(w));
+        if (prefixWords.length >= 1) return false;
+        return true;
+    }
     const searchWords = nSearch.split(/\s+/).filter(w => w.length > 2);
     if (searchWords.length === 0) return false;
     const matched = searchWords.filter(w => nResult.includes(w));

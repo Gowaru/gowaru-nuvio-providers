@@ -347,7 +347,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
     // 4. Fetch les saga pages et construire le mapping des épisodes
     let epMap = {};
 
-    // Limiter à 6 sagas max pour le budget
+    // Cas 1: Séries avec sagas (ex: One Piece) — fetch les pages saga
     const sagasToFetch = sagaUrls.slice(0, 6);
     if (!isBudgetExhausted(startTime, BUDGET_MS) && sagasToFetch.length > 0) {
         // Fetch en parallèle avec limite de concurrence (3 à la fois)
@@ -375,6 +375,20 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
             }
 
             idx += 3;
+        }
+    }
+
+    // Cas 2: Séries sans sagas (JJK, Demon Slayer, etc.) — parser directement la page série
+    // Ces séries ont episode[N] / episodeLow[N] directement dans le HTML
+    if (Object.keys(epMap).length === 0 && mainHtml && mainHtml.length > 1000) {
+        console.log(`[Sekai] No sagas found, parsing main series page directly...`);
+        const mainMap = parseEpisodeMapFromHtml(mainHtml);
+        for (const [num, sources] of Object.entries(mainMap)) {
+            if (!epMap[num]) epMap[num] = {};
+            Object.assign(epMap[num], sources);
+        }
+        if (Object.keys(epMap).length > 0) {
+            console.log(`[Sekai] Parsed ${Object.keys(epMap).length} episodes from main page`);
         }
     }
 

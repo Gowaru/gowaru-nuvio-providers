@@ -1,6 +1,6 @@
 /**
  * frenchstream - Built from src/frenchstream/
- * Generated: 2026-08-22T01:59:20.65796062Z
+ * Generated: 2026-08-22T04:10:26.047826013Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -13379,6 +13379,19 @@ var __provider = (() => {
   });
 
   // src/utils/metadata.js
+  function metadataCacheGet(key) {
+    const entry = METADATA_CACHE.get(key);
+    if (entry && Date.now() - entry.ts < METADATA_TTL) return entry.data;
+    if (entry) METADATA_CACHE.delete(key);
+    return null;
+  }
+  function metadataCacheSet(key, data) {
+    if (METADATA_CACHE.size >= METADATA_MAX) {
+      const oldest = [...METADATA_CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, 100).map(([k]) => k);
+      for (const k of oldest) METADATA_CACHE.delete(k);
+    }
+    METADATA_CACHE.set(key, { data, ts: Date.now() });
+  }
   function isLatinText(str) {
     return /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()0-9]+$/.test(str);
   }
@@ -13478,6 +13491,13 @@ var __provider = (() => {
     return __async(this, arguments, function* (tmdbId, mediaType, opts = {}) {
       var _a, _b, _c, _d, _e, _f;
       const type = mediaType === "movie" ? "movie" : "tv";
+      const season = opts.season ? parseInt(opts.season, 10) : null;
+      const cacheKey = `tmdb:${tmdbId}:${type}:${season || ""}`;
+      const cached = metadataCacheGet(cacheKey);
+      if (cached) {
+        console.log(`[Metadata] Cache HIT for ${cacheKey}`);
+        return cached;
+      }
       const titles = [];
       let metadata = null;
       try {
@@ -13585,6 +13605,7 @@ var __provider = (() => {
       if (metadata) {
         uniqueTitles._metadata = metadata;
       }
+      metadataCacheSet(cacheKey, uniqueTitles);
       console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(" | ")}`);
       return uniqueTitles;
     });
@@ -13594,6 +13615,13 @@ var __provider = (() => {
       var _a, _b, _c, _d, _e, _f;
       try {
         if (!tmdbName || tmdbName.length < 3) return [];
+        const season = opts.season ? parseInt(opts.season, 10) : null;
+        const cacheKey = `kitsu-fb:${tmdbName.toLowerCase()}:${mediaType}:${season || ""}`;
+        const cached = metadataCacheGet(cacheKey);
+        if (cached) {
+          console.log(`[Metadata] Kitsu fallback cache HIT for "${tmdbName}"`);
+          return cached;
+        }
         const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(tmdbName)}&page[limit]=5`;
         const res = yield safeFetch(url);
         if (!res) return [];
@@ -13613,11 +13641,14 @@ var __provider = (() => {
             const meta = altTitles._metadata;
             if (meta && meta.isAnime) {
               console.log(`[Metadata] Fallback success: TMDB ID ${foundTmdbId} for "${enTitle}"`);
+              metadataCacheSet(cacheKey, altTitles);
               return altTitles;
             }
           }
           console.log(`[Metadata] Fallback: using Kitsu titles directly for ${anime.id}`);
-          return yield getKitsuTitles(anime.id, mediaType, opts);
+          const kitsuTitles = yield getKitsuTitles(anime.id, mediaType, opts);
+          metadataCacheSet(cacheKey, kitsuTitles);
+          return kitsuTitles;
         }
         console.log(`[Metadata] Kitsu search: no valid results for "${tmdbName}"`);
         return [];
@@ -13673,12 +13704,15 @@ var __provider = (() => {
       return titles;
     });
   }
-  var TMDB_API_KEY, TMDB_API_BASE, SEASON_SUFFIXES;
+  var TMDB_API_KEY, TMDB_API_BASE, METADATA_CACHE, METADATA_TTL, METADATA_MAX, SEASON_SUFFIXES;
   var init_metadata = __esm({
     "src/utils/metadata.js"() {
       init_resolvers();
       TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
       TMDB_API_BASE = "https://api.themoviedb.org/3";
+      METADATA_CACHE = /* @__PURE__ */ new Map();
+      METADATA_TTL = 5 * 60 * 1e3;
+      METADATA_MAX = 500;
       SEASON_SUFFIXES = [
         (s) => `Season ${s}`,
         (s) => `Saison ${s}`,
@@ -14094,12 +14128,16 @@ var __provider = (() => {
       const limited = candidates.slice(0, MAX_CANDIDATES);
       const resolved = yield Promise.allSettled(limited.map(resolveSingle));
       const direct = [];
+      const embeds = [];
       for (const r of resolved) {
         if (r.status !== "fulfilled") continue;
         const s = r.value;
         if (s && s.url && s.isDirect) direct.push(s);
+        else if (s && s.url) embeds.push(s);
       }
-      return dedupeByUrl(direct);
+      if (direct.length > 0) return dedupeByUrl(direct);
+      if (embeds.length > 0) console.log("[Frenchstream] No direct streams, returning embed fallback (" + embeds.length + ")");
+      return dedupeByUrl(embeds);
     });
   }
   function parseCategoryMovies(html) {
@@ -14316,7 +14354,41 @@ var __provider = (() => {
             }
           }
         }
-        console.warn("[Frenchstream] No streams found via site API");
+        console.warn("[Frenchstream] No streams found via site API, trying DLE search fallback...");
+        for (const title of buildTitleQueries(titles)) {
+          if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+          try {
+            const ranked = yield searchByTitle(title, "tv", effectiveSeason);
+            if (ranked.length > 0 && ranked[0]._score >= MIN_MATCH_SCORE) {
+              const card = ranked[0];
+              const cardUrl = card.href || "";
+              const modalMatch = yield (() => __async(null, null, function* () {
+                var _a, _b;
+                try {
+                  const html = yield fetchText(cardUrl, { baseUrl: card.baseUrl || BASE_URL, timeout: 1e4 });
+                  return ((_a = html.match(/data-news-id="(\d+)"/)) == null ? void 0 : _a[1]) || ((_b = html.match(/openModal\('(\d+)'\)/)) == null ? void 0 : _b[1]);
+                } catch (e) {
+                  return null;
+                }
+              }))();
+              if (modalMatch) {
+                const epData = yield fetchEpisodeData(modalMatch);
+                if (epData) {
+                  for (const ep of targetEpisodes) {
+                    const candidates = collectTvSiteCandidates(epData, ep, subType);
+                    if (candidates.length > 0) {
+                      const streams = yield resolveCandidates(candidates);
+                      console.log("[Frenchstream] DLE fallback eps " + modalMatch + ": " + candidates.length + " candidates, " + streams.length + " streams (ep=" + ep + ")");
+                      return streams;
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`[Frenchstream] DLE fallback failed for "${title}": ${e == null ? void 0 : e.message}`);
+          }
+        }
         return [];
       }
       const movieStreams = yield searchMovieOnSite(tmdbId, titles, subType);

@@ -17,7 +17,7 @@ import { normalize } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://waveanime.fr";
 const BUDGET_MS = 45000;
-const MAX_SEARCH_TITLES = 6;
+const MAX_SEARCH_TITLES = 3;
 // Les épisodes récents (created_timestamp >= ce seuil) utilisent le code langue "fra"
 // dans les URLs de sous-titres ASS, les plus anciens utilisent "fr" (déterminé par le
 // bundle JS du site : `created_timestamp >= 1777804042435 ? "fra" : "fr"`)
@@ -282,32 +282,33 @@ async function buildSubtitles(epMeta, epId, signal) {
         { key: 'fra_full', flag: 'full', label: 'Français' },
         { key: 'fra_forced', flag: 'forced', label: 'Français (forced)' },
     ];
-    for (const track of tracks) {
-        if (!epMeta.subtitles[track.key]) continue;
-        // Sortie propre si abort pendant la conversion (les subs déjà construits
-        // restent livrés, le stream est déjà garanti par le garde d'appel)
-        if (isAborted(signal)) return subtitles;
-        const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${lang}-${track.flag}.ass`;
-        let url = assUrl;
-        try {
-            const assText = await fetchText(assUrl, { signal });
-            const vtt = assToVtt(assText);
-            if (vtt) url = vttToDataUri(vtt);
-        } catch (e) {
-            // fallback : garder l'URL ASS d'origine
-        }
-        // Format NuvioMobile : url + language (ISO 639-2) + name + headers par piste.
-        // `language: 'fra'` est lu tel quel (défaut "Unknown" si absent) — l'ancien
-        // format { id, url, lang, label } était ignoré (lang/label non reconnus).
-        subtitles.push({
-            url,
-            language: 'fra',
-            name: track.label,
-            headers: {
-                'Referer': `${BASE_URL}/`,
-                'Origin': BASE_URL,
-            },
+    // Fetch tous les ASS en parallèle (2 fetches max, ~400ms chacun)
+    const trackPromises = tracks
+        .filter(track => epMeta.subtitles[track.key])
+        .map(async (track) => {
+            if (isAborted(signal)) return null;
+            const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${lang}-${track.flag}.ass`;
+            let url = assUrl;
+            try {
+                const assText = await fetchText(assUrl, { signal });
+                const vtt = assToVtt(assText);
+                if (vtt) url = vttToDataUri(vtt);
+            } catch (e) {
+                // fallback : garder l'URL ASS d'origine
+            }
+            return {
+                url,
+                language: 'fra',
+                name: track.label,
+                headers: {
+                    'Referer': `${BASE_URL}/`,
+                    'Origin': BASE_URL,
+                },
+            };
         });
+    const results = await Promise.all(trackPromises);
+    for (const r of results) {
+        if (r) subtitles.push(r);
     }
     return subtitles;
 }
@@ -415,13 +416,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     if (!ep || !ep.id) return [];
 
     const manifestUrl = `${BASE_URL}/playback/${ep.id}/manifest.mpd`;
-    const quality = await parseMpdQuality(manifestUrl, signal);
 
-    // Sous-titres ASS → WebVTT (data URI) — fetch dédié épisode + conversion
-    // (gardé par le budget/abort pour rester cohérent avec le reste du pipeline)
+    // Paralléliser MPD quality + Episode meta (deux fetches indépendants)
+    const [quality, epMeta] = await Promise.all([
+        parseMpdQuality(manifestUrl, signal),
+        (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS))
+            ? fetchEpisodeMeta(ep.id, signal)
+            : Promise.resolve(null),
+    ]);
+
+    // Sous-titres ASS → WebVTT (data URI) — conversion en parallèle
     let subtitles = [];
-    if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const epMeta = await fetchEpisodeMeta(ep.id, signal);
+    if (epMeta && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         subtitles = await buildSubtitles(epMeta, ep.id, signal);
     }
 

@@ -227,28 +227,48 @@ async function findContent(titles, mediaType, season, opts = {}) {
   for (const slug of slugsToTry) {
     if (isAborted(signal) || isBudgetExhausted(startTime, PROVIDER_BUDGET_MS)) return null
 
-    const pageUrl = `${SITE.BASE_URL}/${slug}`
-    try {
-      const html = await fetchText(pageUrl, { timeout: 4000, signal })
-      if (html && html.length > 5000) {
-        const embedUrl = extractEmbedUrl(html)
-        const hasEpisodes = hasSeriesEpisodes(html)
-        
-        if (embedUrl || hasEpisodes) {
-          const detectedType = hasEpisodes ? 'series' : 'movie'
-          console.log(`[Streamzo] Found ${detectedType} page: ${pageUrl}`)
-          return {
-            type: detectedType,
-            url: pageUrl,
-            html,
-            embedUrl,
-            quality: extractQuality(html),
+    // Streamzo place les films à la racine (/slug) et les séries sous /series/slug
+    // Pour les séries (mediaType=tv), on teste /series/ en premier
+    const pathsToTry = _mediaType === 'tv' ? [
+      `/series/${slug}`,    // Série (prioritaire pour TV)
+      `/${slug}`,           // Fallback film
+    ] : [
+      `/${slug}`,           // Film (prioritaire pour movie)
+      `/series/${slug}`,    // Fallback série
+    ]
+
+    for (const path of pathsToTry) {
+      if (isAborted(signal)) return null
+
+      const pageUrl = `${SITE.BASE_URL}${path}`
+      try {
+        const html = await fetchText(pageUrl, { timeout: 4000, signal })
+        if (html && html.length > 5000) {
+          const embedUrl = extractEmbedUrl(html)
+          const hasEpisodes = hasSeriesEpisodes(html)
+          
+          if (embedUrl || hasEpisodes) {
+            const detectedType = hasEpisodes ? 'series' : 'movie'
+            // Pour les séries TV, ne pas retourner un film (slug homonyme)
+            // Continuer la recherche pour trouver la vraie série
+            if (detectedType === 'movie' && _mediaType === 'tv') {
+              console.log(`[Streamzo] Found movie at ${pageUrl} but looking for series, continuing...`)
+              continue
+            }
+            console.log(`[Streamzo] Found ${detectedType} page: ${pageUrl}`)
+            return {
+              type: detectedType,
+              url: pageUrl,
+              html,
+              embedUrl,
+              quality: extractQuality(html),
+            }
           }
         }
+      } catch (e) {
+        if (e.name === 'AbortError') return null
+        /* slug not found */
       }
-    } catch (e) {
-      if (e.name === 'AbortError') return null
-      /* slug not found */
     }
   }
 
@@ -332,6 +352,8 @@ function detectLanguage(url, html) {
  * @param {AbortSignal} [options.signal] - Signal d'annulation externe
  * @returns {Promise<Array>}
  */
+let _mediaType = null;
+
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
   const signal = options?.signal || null
   if (isAborted(signal)) return []
@@ -341,6 +363,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   if (!titles || titles.length === 0) return []
 
   const startTime = Date.now()
+  _mediaType = mediaType
   const content = await findContent(titles, mediaType, season, { signal, startTime })
   if (!content) {
     console.log(`[Streamzo] Content not found for TMDB ${tmdbId}`)

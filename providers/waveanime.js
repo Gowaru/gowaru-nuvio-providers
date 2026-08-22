@@ -1,6 +1,6 @@
 /**
  * waveanime - Built from src/waveanime/
- * Generated: 2026-08-22T01:59:20.990960961Z
+ * Generated: 2026-08-22T04:10:26.336826304Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -634,6 +634,19 @@ var __provider = (() => {
   });
 
   // src/utils/metadata.js
+  function metadataCacheGet(key) {
+    const entry = METADATA_CACHE.get(key);
+    if (entry && Date.now() - entry.ts < METADATA_TTL) return entry.data;
+    if (entry) METADATA_CACHE.delete(key);
+    return null;
+  }
+  function metadataCacheSet(key, data) {
+    if (METADATA_CACHE.size >= METADATA_MAX) {
+      const oldest = [...METADATA_CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, 100).map(([k]) => k);
+      for (const k of oldest) METADATA_CACHE.delete(k);
+    }
+    METADATA_CACHE.set(key, { data, ts: Date.now() });
+  }
   function isLatinText(str) {
     return /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()0-9]+$/.test(str);
   }
@@ -733,6 +746,13 @@ var __provider = (() => {
     return __async(this, arguments, function* (tmdbId, mediaType, opts = {}) {
       var _a, _b, _c, _d, _e, _f;
       const type = mediaType === "movie" ? "movie" : "tv";
+      const season = opts.season ? parseInt(opts.season, 10) : null;
+      const cacheKey = `tmdb:${tmdbId}:${type}:${season || ""}`;
+      const cached = metadataCacheGet(cacheKey);
+      if (cached) {
+        console.log(`[Metadata] Cache HIT for ${cacheKey}`);
+        return cached;
+      }
       const titles = [];
       let metadata = null;
       try {
@@ -840,6 +860,7 @@ var __provider = (() => {
       if (metadata) {
         uniqueTitles._metadata = metadata;
       }
+      metadataCacheSet(cacheKey, uniqueTitles);
       console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(" | ")}`);
       return uniqueTitles;
     });
@@ -849,6 +870,13 @@ var __provider = (() => {
       var _a, _b, _c, _d, _e, _f;
       try {
         if (!tmdbName || tmdbName.length < 3) return [];
+        const season = opts.season ? parseInt(opts.season, 10) : null;
+        const cacheKey = `kitsu-fb:${tmdbName.toLowerCase()}:${mediaType}:${season || ""}`;
+        const cached = metadataCacheGet(cacheKey);
+        if (cached) {
+          console.log(`[Metadata] Kitsu fallback cache HIT for "${tmdbName}"`);
+          return cached;
+        }
         const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(tmdbName)}&page[limit]=5`;
         const res = yield safeFetch(url);
         if (!res) return [];
@@ -868,11 +896,14 @@ var __provider = (() => {
             const meta = altTitles._metadata;
             if (meta && meta.isAnime) {
               console.log(`[Metadata] Fallback success: TMDB ID ${foundTmdbId} for "${enTitle}"`);
+              metadataCacheSet(cacheKey, altTitles);
               return altTitles;
             }
           }
           console.log(`[Metadata] Fallback: using Kitsu titles directly for ${anime.id}`);
-          return yield getKitsuTitles(anime.id, mediaType, opts);
+          const kitsuTitles = yield getKitsuTitles(anime.id, mediaType, opts);
+          metadataCacheSet(cacheKey, kitsuTitles);
+          return kitsuTitles;
         }
         console.log(`[Metadata] Kitsu search: no valid results for "${tmdbName}"`);
         return [];
@@ -928,12 +959,15 @@ var __provider = (() => {
       return titles;
     });
   }
-  var TMDB_API_KEY, TMDB_API_BASE, SEASON_SUFFIXES;
+  var TMDB_API_KEY, TMDB_API_BASE, METADATA_CACHE, METADATA_TTL, METADATA_MAX, SEASON_SUFFIXES;
   var init_metadata = __esm({
     "src/utils/metadata.js"() {
       init_resolvers();
       TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
       TMDB_API_BASE = "https://api.themoviedb.org/3";
+      METADATA_CACHE = /* @__PURE__ */ new Map();
+      METADATA_TTL = 5 * 60 * 1e3;
+      METADATA_MAX = 500;
       SEASON_SUFFIXES = [
         (s) => `Season ${s}`,
         (s) => `Saison ${s}`,
@@ -12904,9 +12938,8 @@ ${text}`);
         { key: "fra_full", flag: "full", label: "Fran\xE7ais" },
         { key: "fra_forced", flag: "forced", label: "Fran\xE7ais (forced)" }
       ];
-      for (const track of tracks) {
-        if (!epMeta.subtitles[track.key]) continue;
-        if (isAborted(signal)) return subtitles;
+      const trackPromises = tracks.filter((track) => epMeta.subtitles[track.key]).map((track) => __async(null, null, function* () {
+        if (isAborted(signal)) return null;
         const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${lang}-${track.flag}.ass`;
         let url = assUrl;
         try {
@@ -12915,7 +12948,7 @@ ${text}`);
           if (vtt) url = vttToDataUri(vtt);
         } catch (e) {
         }
-        subtitles.push({
+        return {
           url,
           language: "fra",
           name: track.label,
@@ -12923,7 +12956,11 @@ ${text}`);
             "Referer": `${BASE_URL}/`,
             "Origin": BASE_URL
           }
-        });
+        };
+      }));
+      const results = yield Promise.all(trackPromises);
+      for (const r of results) {
+        if (r) subtitles.push(r);
       }
       return subtitles;
     });
@@ -13001,10 +13038,12 @@ ${text}`);
       }
       if (!ep || !ep.id) return [];
       const manifestUrl = `${BASE_URL}/playback/${ep.id}/manifest.mpd`;
-      const quality = yield parseMpdQuality(manifestUrl, signal);
+      const [quality, epMeta] = yield Promise.all([
+        parseMpdQuality(manifestUrl, signal),
+        !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS) ? fetchEpisodeMeta(ep.id, signal) : Promise.resolve(null)
+      ]);
       let subtitles = [];
-      if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const epMeta = yield fetchEpisodeMeta(ep.id, signal);
+      if (epMeta && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         subtitles = yield buildSubtitles(epMeta, ep.id, signal);
       }
       const epLabel = mediaType === "movie" ? "" : ` S${usedContinuous ? parseInt(season, 10) || 1 : ep.season_number || season || 1}E${usedContinuous ? parseInt(episode, 10) || 1 : ep.number || episode || 1}`;
@@ -13034,7 +13073,7 @@ ${text}`);
       init_dle_extractor();
       BASE_URL = "https://waveanime.fr";
       BUDGET_MS = 45e3;
-      MAX_SEARCH_TITLES = 6;
+      MAX_SEARCH_TITLES = 3;
       SUBTITLE_LANG_THRESHOLD = 1777804042435;
     }
   });

@@ -324,12 +324,17 @@ async function resolveCandidates(candidates) {
     const limited = candidates.slice(0, MAX_CANDIDATES);
     const resolved = await Promise.allSettled(limited.map(resolveSingle));
     const direct = [];
+    const embeds = [];
     for (const r of resolved) {
         if (r.status !== 'fulfilled') continue;
         const s = r.value;
         if (s && s.url && s.isDirect) direct.push(s);
+        else if (s && s.url) embeds.push(s);
     }
-    return dedupeByUrl(direct);
+    // If direct streams found, return them; otherwise fallback to embed URLs
+    if (direct.length > 0) return dedupeByUrl(direct);
+    if (embeds.length > 0) console.log('[Frenchstream] No direct streams, returning embed fallback (' + embeds.length + ')');
+    return dedupeByUrl(embeds);
 }
 
 /* ---------- MOVIE CATEGORY BROWSING ---------- */
@@ -571,7 +576,40 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 }
             }
         }
-        console.warn('[Frenchstream] No streams found via site API');
+        console.warn('[Frenchstream] No streams found via site API, trying DLE search fallback...');
+        // DLE search fallback: search by title and extract episode data from the card
+        for (const title of buildTitleQueries(titles)) {
+            if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+            try {
+                const ranked = await searchByTitle(title, 'tv', effectiveSeason);
+                if (ranked.length > 0 && ranked[0]._score >= MIN_MATCH_SCORE) {
+                    const card = ranked[0];
+                    // Extract newsId from card and try to fetch episode data
+                    const cardUrl = card.href || '';
+                    const modalMatch = (await (async () => {
+                        try {
+                            const html = await fetchText(cardUrl, { baseUrl: card.baseUrl || BASE_URL, timeout: 10000 });
+                            return html.match(/data-news-id="(\d+)"/)?.[1] || html.match(/openModal\('(\d+)'\)/)?.[1];
+                        } catch { return null; }
+                    })());
+                    if (modalMatch) {
+                        const epData = await fetchEpisodeData(modalMatch);
+                        if (epData) {
+                            for (const ep of targetEpisodes) {
+                                const candidates = collectTvSiteCandidates(epData, ep, subType);
+                                if (candidates.length > 0) {
+                                    const streams = await resolveCandidates(candidates);
+                                    console.log('[Frenchstream] DLE fallback eps ' + modalMatch + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
+                                    return streams;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn(`[Frenchstream] DLE fallback failed for "${title}": ${e?.message}`);
+            }
+        }
         return [];
     }
 

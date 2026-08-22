@@ -41,6 +41,11 @@ function scoreMatch(resultTitle, searchTitle) {
     // (ex: requête "Naruto" → résultat "Naruto Shippuden Kai" = 2 mots extra)
     // retire -25. Empêche les recuts/dérivés de battre le titre exact.
     const extra = countExtraWords(nr, nt)
+    // Anti-faux-positif titre court : si la requête est ≤ 3 mots et le résultat
+    // contient ≥ 5 mots de plus, c'est probablement un titre différent.
+    // Ex: "Invincible" (1 mot) → "Became Invincible" (9+ mots extra) → reject
+    const qWordCount = cleanNt.split(/\s+/).length
+    if (qWordCount <= 3 && extra >= 3) return 0
     if (extra > 0) {
       return Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
     }
@@ -355,20 +360,20 @@ async function resolveWithTimeout(stream) {
     }
 
     if (resolved && resolved.url && !resolved.isDirect) {
-      console.log(`[FrenchManga] ✗ Resolve FAILED (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, skipping`)
-      return null
+      console.log(`[FrenchManga] ⚠ Resolve embed (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, keeping as fallback`)
+      return resolved
     }
 
     if (resolved && resolved.url) {
-      console.log(`[FrenchManga] ✗ Resolve UNCERTAIN (${elapsed}ms): ${stream.url.slice(0, 80)} - no resolution, skipping`)
-      return null
+      console.log(`[FrenchManga] ⚠ Resolve uncertain (${elapsed}ms): ${stream.url.slice(0, 80)} - keeping as fallback`)
+      return resolved
     }
 
-    console.log(`[FrenchManga] ✗ Resolve null: ${(stream.url || '').slice(0, 80)}`)
-    return null
+    console.log(`[FrenchManga] ✗ Resolve null: ${(stream.url || '').slice(0, 80)} - returning embed fallback`)
+    return stream
   } catch (e) {
-    console.log(`[FrenchManga] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message}`)
-    return null
+    console.log(`[FrenchManga] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message} - returning embed fallback`)
+    return stream
   }
 }
 
@@ -539,8 +544,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
       if (epInfo && epInfo.title) {
         console.log(`[FrenchManga] Episode ${ep.num}: "${epInfo.title}" (${lang})`)
       }
-      console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`)
-
+      console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`)      
       for (const server of ep.servers) {
         const stream = toStream(server.url, lang, 'FrenchManga', SITE.BASE_URL, { quality: 'HD' })
         if (subType) stream.subType = subType
@@ -548,9 +552,15 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
         const resolved = await resolveWithTimeout(stream)
         if (resolved && resolved.url && resolved.isDirect) {
           streams.push({ ...resolved, provider: 'french-manga' })
+        } else if (resolved && resolved.url && !resolved.isDirect) {
+          // Embed fallback: include unresolved embeds when no direct stream available
+          stream.provider = 'french-manga'
+          stream.isDirect = false
+          streams.push(stream)
         }
       }
     }
+
 
     console.log(`[FrenchManga] Series: ${streams.length} streams for episode ${targetEp}`)
     return streams
@@ -577,6 +587,11 @@ async function extractStreamsFromApi(apiData, name, subType) {
       const resolved = await resolveWithTimeout(stream)
       if (resolved && resolved.url && resolved.isDirect) {
         streams.push({ ...resolved, provider: 'french-manga' })
+      } else if (resolved && resolved.url && !resolved.isDirect) {
+        // Embed fallback: include unresolved embeds when no direct stream available
+        stream.provider = 'french-manga'
+        stream.isDirect = false
+        streams.push(stream)
       }
     }
   }
