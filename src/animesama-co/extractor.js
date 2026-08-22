@@ -368,11 +368,30 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 }
 
 async function extractEpisodeStreams(match, season, episode, subType) {
-  const episodeUrl = `${SITE.BASE_URL}/anime/${match.animeId}-${match.slug}/saison-${season}/episode-${episode}.html`
+  const baseUrl = `${SITE.BASE_URL}/anime/${match.animeId}-${match.slug}`
+  const seasonUrl = `${baseUrl}/saison-${season}/episode-${episode}.html`
+  const filmUrl = `${baseUrl}/film/episode-${episode}.html`
+
+  let html = ''
+  let episodeUrl = seasonUrl
+
+  try {
+    html = await fetchText(seasonUrl, { timeout: TIMEOUTS.PAGE })
+  } catch (e) { /* ignore */ }
+
+  if (!html || !html.includes('videoPlayer')) {
+    try {
+      const filmHtml = await fetchText(filmUrl, { timeout: TIMEOUTS.PAGE })
+      if (filmHtml && filmHtml.includes('videoPlayer')) {
+        html = filmHtml
+        episodeUrl = filmUrl
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   console.log(`[AnimeSamaCo] Fetching episode: ${episodeUrl}`)
 
   try {
-    const html = await fetchText(episodeUrl, { timeout: TIMEOUTS.PAGE })
     if (!html) {
       console.warn(`[AnimeSamaCo] Empty response for episode page`)
       return []
@@ -390,37 +409,46 @@ async function extractEpisodeStreams(match, season, episode, subType) {
 
     const streams = []
 
-    // Deduplicate: same URL with different languages = same stream
-    const seen = new Set()
-    for (const lang of languages) {
-      for (const url of iframeUrls) {
-        const key = `${url}|${lang}`
-        if (seen.has(key)) continue
-        seen.add(key)
+    // When only 1 iframe URL for multiple languages, the page uses JS tabs to switch player.
+    // QuickJS can't execute JS, so we label the single stream with combined languages.
+    if (iframeUrls.length === 1 && languages.length > 1) {
+      const combinedLang = languages.join('/')
+      const stream = toStream(iframeUrls[0], combinedLang, 'AnimeSamaCo', SITE.BASE_URL)
+      if (subType) stream.subType = subType
 
-        const stream = toStream(url, lang, 'AnimeSamaCo', SITE.BASE_URL)
-        if (subType) stream.subType = subType
-
-        const resolved = await resolveWithTimeout(stream)
-        if (resolved && resolved.url) {
-          resolved.language = lang
-          streams.push({ ...resolved, provider: 'animesama-co' })
-        }
+      const resolved = await resolveWithTimeout(stream)
+      if (resolved && resolved.url) {
+        resolved.language = combinedLang
+        streams.push({ ...resolved, provider: 'animesama-co' })
+      } else {
+        streams.push({ ...stream, provider: 'animesama-co', isDirect: false })
       }
-    }
-
-    // If no streams resolved but we have iframe URLs, return them as-is
-    if (streams.length === 0) {
+    } else {
+      const seen = new Set()
       for (const lang of languages) {
         for (const url of iframeUrls) {
-          const key = `raw:${url}|${lang}`
+          const key = `${url}|${lang}`
           if (seen.has(key)) continue
           seen.add(key)
 
           const stream = toStream(url, lang, 'AnimeSamaCo', SITE.BASE_URL)
           if (subType) stream.subType = subType
-          streams.push({ ...stream, provider: 'animesama-co', isDirect: false })
+
+          const resolved = await resolveWithTimeout(stream)
+          if (resolved && resolved.url) {
+            resolved.language = lang
+            streams.push({ ...resolved, provider: 'animesama-co' })
+          }
         }
+      }
+    }
+
+    if (streams.length === 0) {
+      const label = languages.length > 1 ? languages.join('/') : (languages[0] || 'VF')
+      for (const url of iframeUrls) {
+        const stream = toStream(url, label, 'AnimeSamaCo', SITE.BASE_URL)
+        if (subType) stream.subType = subType
+        streams.push({ ...stream, provider: 'animesama-co', isDirect: false })
       }
     }
 

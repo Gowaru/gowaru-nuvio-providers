@@ -1,6 +1,6 @@
 /**
  * voiranime - Built from src/voiranime/
- * Generated: 2026-08-01T15:57:14.354834279Z
+ * Generated: 2026-08-22T01:59:20.853960819Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -324,11 +324,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -471,8 +472,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -1361,8 +1363,7 @@ var __provider = (() => {
       PROVIDER_BUDGET_MS = 45e3;
       RETRY_DELAYS = [1e3, 3e3, 5e3];
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -14062,6 +14063,19 @@ var __provider = (() => {
           if (scriptMatch && !scriptMatch[0].includes("voiranime.com")) embedUrl = scriptMatch[0];
         }
         if (embedUrl) {
+          const embedLower = embedUrl.toLowerCase();
+          const isUnresolvable = UNRESOLVABLE_HOSTS.some((h) => embedLower.includes(h));
+          if (isUnresolvable) {
+            console.log(`[VoirAnime] ${host} embed is unresolvable, returning embed URL directly`);
+            return {
+              name: `VoirAnime (${lang})`,
+              title: `${host} - ${lang}`,
+              url: embedUrl,
+              quality: "HD",
+              headers: __spreadValues({}, streamHeaders),
+              isDirect: false
+            };
+          }
           return resolveStream({
             name: `VoirAnime (${lang})`,
             title: `${host} - ${lang}`,
@@ -14313,12 +14327,17 @@ var __provider = (() => {
           console.warn(`[VoirAnime] Match processing failed: ${e == null ? void 0 : e.message}`);
         }
       }
-      const validStreams = streams.filter((s) => s && s.isDirect);
-      console.log(`[VoirAnime] Total streams: ${validStreams.length}`);
+      const directStreams = streams.filter((s) => s && s.isDirect);
+      const embedStreams = streams.filter((s) => s && !s.isDirect && s.url);
+      const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
+      if (directStreams.length === 0 && embedStreams.length > 0) {
+        console.log(`[VoirAnime] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+      }
+      console.log(`[VoirAnime] Total streams: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
       return sortStreamsByLanguage(validStreams);
     });
   }
-  var import_cheerio_without_node_native2, BASE_URL, HEAD_TIMEOUT, PAGE_TIMEOUT, HOST_TIMEOUT, BUDGET_MS, SEARCH_CACHE, SEARCH_CACHE_TTL, slugProbeCache, KNOWN_HOSTS, SPINOFF_KEYWORDS;
+  var import_cheerio_without_node_native2, BASE_URL, HEAD_TIMEOUT, PAGE_TIMEOUT, HOST_TIMEOUT, BUDGET_MS, SEARCH_CACHE, SEARCH_CACHE_TTL, slugProbeCache, KNOWN_HOSTS, UNRESOLVABLE_HOSTS, SPINOFF_KEYWORDS;
   var init_extractor = __esm({
     "src/voiranime/extractor.js"() {
       init_http();
@@ -14335,6 +14354,7 @@ var __provider = (() => {
       SEARCH_CACHE_TTL = 3e5;
       slugProbeCache = /* @__PURE__ */ new Map();
       KNOWN_HOSTS = ["myTV", "Stape", "Streamtape", "Uqload", "Vidzy", "fsvid", "Dood", "Voe", "Sendvid", "Sibnet", "Netu", "Younetu", "Vidoza", "Vidmoly", "Luluvid", "Moon", "FHD", "SB"];
+      UNRESOLVABLE_HOSTS = ["voe", "streamtape", "stape", "dood", "ds2play", "bigwar5"];
       SPINOFF_KEYWORDS = ["fan letter", "log:", "memories", "vigilante", "illegals", "film", "movie", "special", "oav", "ona", "x ut", "collab"];
     }
   });

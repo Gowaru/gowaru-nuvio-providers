@@ -1,6 +1,6 @@
 /**
  * animesultra - Built from src/animesultra/
- * Generated: 2026-08-01T15:57:13.284833183Z
+ * Generated: 2026-08-22T01:59:20.425960392Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12086,11 +12086,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -12233,8 +12234,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -13122,8 +13124,7 @@ var __provider = (() => {
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -13739,6 +13740,14 @@ var __provider = (() => {
       const now = Date.now();
       const cached = searchCache[title];
       if (cached && now - cached.time < CACHE_TTL) return cached.results;
+      if (searchPromisesCache[title]) return searchPromisesCache[title];
+      const promise = searchAnimeInner(title, now);
+      searchPromisesCache[title] = promise;
+      return promise;
+    });
+  }
+  function searchAnimeInner(title, now) {
+    return __async(this, null, function* () {
       try {
         const results = [];
         const seen = /* @__PURE__ */ new Set();
@@ -13830,7 +13839,7 @@ var __provider = (() => {
         const sa = isName(a) ? 0 : isFr(a) ? 1 : 2;
         const sb = isName(b) ? 0 : isFr(b) ? 1 : 2;
         return sa - sb || a.length - b.length;
-      });
+      }).slice(0, 5);
       const searchedQueries = /* @__PURE__ */ new Set();
       const searchPromises = searchQueries.map(
         (q) => trySearch(q).then(() => searchedQueries.add(queryKey(q)))
@@ -14109,7 +14118,7 @@ var __provider = (() => {
       return sortStreamsByLanguage(validStreams);
     });
   }
-  var import_cheerio_without_node_native2, BASE_URL, searchCache, CACHE_TTL, SEASON_PATTERNS;
+  var import_cheerio_without_node_native2, BASE_URL, searchCache, searchPromisesCache, CACHE_TTL, SEASON_PATTERNS;
   var init_extractor = __esm({
     "src/animesultra/extractor.js"() {
       init_dle_extractor();
@@ -14119,6 +14128,7 @@ var __provider = (() => {
       init_metadata();
       BASE_URL = "https://ww.animesultra.org";
       searchCache = {};
+      searchPromisesCache = {};
       CACHE_TTL = 6e4;
       SEASON_PATTERNS = [
         /saison\s*(\d+)/i,

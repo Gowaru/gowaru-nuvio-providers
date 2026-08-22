@@ -1,6 +1,6 @@
 /**
  * voiranime-rip - Built from src/voiranime-rip/
- * Generated: 2026-08-01T15:57:14.497834424Z
+ * Generated: 2026-08-22T01:59:20.921960885Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12095,11 +12095,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -12242,8 +12243,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -13132,8 +13134,7 @@ var __provider = (() => {
       PROVIDER_BUDGET_MS = 45e3;
       RETRY_DELAYS = [1e3, 3e3, 5e3];
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -14034,17 +14035,30 @@ var __provider = (() => {
     }
     if (iframeSrc) {
       const pageLang = detectLanguage(html);
-      urls.push({ url: iframeSrc, lang: pageLang });
+      urls.push({ url: iframeSrc, lang: pageLang, _fromIframe: true });
     }
     const text = $("script").text();
-    const regex = /(vostfr|vf)\s*:\s*['"]([^'"]+)['"]/gi;
+    const regex = /['"]?(vostfr|vf)['"]?\s*[:=]\s*['"]?(https?:\/\/[^'\"\s;,}]+)/gi;
     let m;
     while ((m = regex.exec(text)) !== null) {
       const lang = m[1].toLowerCase() === "vf" ? "VF" : "VOSTFR";
-      if (!urls.some((u) => u.url === m[2])) {
-        urls.push({ url: m[2], lang });
+      urls.push({ url: m[2], lang });
+    }
+    const urlMap = /* @__PURE__ */ new Map();
+    for (const u of urls) {
+      const existing = urlMap.get(u.url);
+      if (!existing) {
+        urlMap.set(u.url, u);
+      } else {
+        const existingExplicit = ["VF", "VOSTFR"].includes(existing.lang) && !existing._fromIframe;
+        const newExplicit = ["VF", "VOSTFR"].includes(u.lang) && !u._fromIframe;
+        if (newExplicit && !existingExplicit) {
+          urlMap.set(u.url, u);
+        }
       }
     }
+    urls.length = 0;
+    urls.push(...urlMap.values());
     if (urls.some((u) => !u.lang)) {
       const pageLang = detectLanguage(html);
       if (pageLang) {

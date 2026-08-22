@@ -1,6 +1,6 @@
 /**
  * animesama-co - Built from src/animesama-co/
- * Generated: 2026-08-01T15:57:13.183833105Z
+ * Generated: 2026-08-22T01:59:20.392960356Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12095,11 +12095,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -12242,8 +12243,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -13132,8 +13134,7 @@ var __provider = (() => {
       PROVIDER_BUDGET_MS = 45e3;
       RETRY_DELAYS = [1e3, 3e3, 5e3];
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -14167,10 +14168,27 @@ var __provider = (() => {
   }
   function extractEpisodeStreams(match, season, episode, subType) {
     return __async(this, null, function* () {
-      const episodeUrl = `${SITE.BASE_URL}/anime/${match.animeId}-${match.slug}/saison-${season}/episode-${episode}.html`;
+      const baseUrl = `${SITE.BASE_URL}/anime/${match.animeId}-${match.slug}`;
+      const seasonUrl = `${baseUrl}/saison-${season}/episode-${episode}.html`;
+      const filmUrl = `${baseUrl}/film/episode-${episode}.html`;
+      let html = "";
+      let episodeUrl = seasonUrl;
+      try {
+        html = yield fetchText(seasonUrl, { timeout: TIMEOUTS.PAGE });
+      } catch (e) {
+      }
+      if (!html || !html.includes("videoPlayer")) {
+        try {
+          const filmHtml = yield fetchText(filmUrl, { timeout: TIMEOUTS.PAGE });
+          if (filmHtml && filmHtml.includes("videoPlayer")) {
+            html = filmHtml;
+            episodeUrl = filmUrl;
+          }
+        } catch (e) {
+        }
+      }
       console.log(`[AnimeSamaCo] Fetching episode: ${episodeUrl}`);
       try {
-        const html = yield fetchText(episodeUrl, { timeout: TIMEOUTS.PAGE });
         if (!html) {
           console.warn(`[AnimeSamaCo] Empty response for episode page`);
           return [];
@@ -14183,31 +14201,40 @@ var __provider = (() => {
         }
         console.log(`[AnimeSamaCo] Found ${iframeUrls.length} player URL(s), languages: ${languages.join(", ")}`);
         const streams = [];
-        const seen = /* @__PURE__ */ new Set();
-        for (const lang of languages) {
-          for (const url of iframeUrls) {
-            const key = `${url}|${lang}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const stream = toStream(url, lang, "AnimeSamaCo", SITE.BASE_URL);
-            if (subType) stream.subType = subType;
-            const resolved = yield resolveWithTimeout(stream);
-            if (resolved && resolved.url) {
-              resolved.language = lang;
-              streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "animesama-co" }));
-            }
+        if (iframeUrls.length === 1 && languages.length > 1) {
+          const combinedLang = languages.join("/");
+          const stream = toStream(iframeUrls[0], combinedLang, "AnimeSamaCo", SITE.BASE_URL);
+          if (subType) stream.subType = subType;
+          const resolved = yield resolveWithTimeout(stream);
+          if (resolved && resolved.url) {
+            resolved.language = combinedLang;
+            streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "animesama-co" }));
+          } else {
+            streams.push(__spreadProps(__spreadValues({}, stream), { provider: "animesama-co", isDirect: false }));
           }
-        }
-        if (streams.length === 0) {
+        } else {
+          const seen = /* @__PURE__ */ new Set();
           for (const lang of languages) {
             for (const url of iframeUrls) {
-              const key = `raw:${url}|${lang}`;
+              const key = `${url}|${lang}`;
               if (seen.has(key)) continue;
               seen.add(key);
               const stream = toStream(url, lang, "AnimeSamaCo", SITE.BASE_URL);
               if (subType) stream.subType = subType;
-              streams.push(__spreadProps(__spreadValues({}, stream), { provider: "animesama-co", isDirect: false }));
+              const resolved = yield resolveWithTimeout(stream);
+              if (resolved && resolved.url) {
+                resolved.language = lang;
+                streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "animesama-co" }));
+              }
             }
+          }
+        }
+        if (streams.length === 0) {
+          const label = languages.length > 1 ? languages.join("/") : languages[0] || "VF";
+          for (const url of iframeUrls) {
+            const stream = toStream(url, label, "AnimeSamaCo", SITE.BASE_URL);
+            if (subType) stream.subType = subType;
+            streams.push(__spreadProps(__spreadValues({}, stream), { provider: "animesama-co", isDirect: false }));
           }
         }
         console.log(`[AnimeSamaCo] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter((s) => s.isDirect).length} direct)`);

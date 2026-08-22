@@ -1,6 +1,6 @@
 /**
  * anime-sama - Built from src/anime-sama/
- * Generated: 2026-08-01T15:57:11.608831528Z
+ * Generated: 2026-08-22T01:59:20.310960285Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -302,11 +302,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -449,8 +450,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -1338,8 +1340,7 @@ var __provider = (() => {
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -13881,42 +13882,6 @@ var __provider = (() => {
           streams.push(...result);
         }
       }
-      if (streams.length === 0 && titles.length > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const triedSlugs = /* @__PURE__ */ new Set([slug]);
-        const altSlugTasks = [];
-        const seasonSuffixRe = /-(?:saison|season|s)\d+$/i;
-        let slugsAdded = 0;
-        for (let i = 1; i < titles.length && slugsAdded < 5; i++) {
-          const altSlug = toSlug(titles[i]);
-          if (!altSlug || triedSlugs.has(altSlug)) continue;
-          triedSlugs.add(altSlug);
-          if (altSlug.replace(seasonSuffixRe, "") === slug) continue;
-          slugsAdded++;
-          for (const lang of languages) {
-            const task = withTimeout(
-              fetchAndGetUrl(altSlug, lang, effectiveSeason, episode, mediaType, altEpisodes),
-              5e3,
-              `alt-slug ${altSlug}`
-            ).catch(() => []);
-            altSlugTasks.push(task);
-          }
-        }
-        if (altSlugTasks.length > 0) {
-          console.log(`[Anime-Sama] Trying ${altSlugTasks.length} alt slug probes (max 5 slugs)`);
-          let resolvedCount = 0;
-          while (resolvedCount < altSlugTasks.length && !isBudgetExhausted(startTime, BUDGET_MS)) {
-            const batch = altSlugTasks.slice(resolvedCount, resolvedCount + 3);
-            const batchResults = yield Promise.allSettled(batch);
-            for (const r of batchResults) {
-              if (r.status === "fulfilled" && Array.isArray(r.value)) {
-                streams.push(...r.value);
-              }
-            }
-            if (streams.length > 0) break;
-            resolvedCount += 3;
-          }
-        }
-      }
       if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const foundSlugs = [];
         for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
@@ -13928,17 +13893,17 @@ var __provider = (() => {
           if (foundSlugs.length >= MAX_FALLBACK_SLUGS) break;
         }
         const checkedSlugs = /* @__PURE__ */ new Set([slug]);
-        const fallbackPromises = [];
+        const searchPromises = [];
         for (const fSlug of foundSlugs) {
           if (checkedSlugs.has(fSlug)) continue;
           checkedSlugs.add(fSlug);
           for (const lang of languages) {
-            fallbackPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
+            searchPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
           }
         }
-        if (fallbackPromises.length > 0) {
-          const fallbackResults = yield Promise.all(fallbackPromises);
-          for (const result of fallbackResults) {
+        if (searchPromises.length > 0) {
+          const searchResults = yield Promise.all(searchPromises);
+          for (const result of searchResults) {
             streams.push(...result);
           }
         }

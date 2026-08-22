@@ -13,6 +13,10 @@ const MAX_SEARCH_TITLES = 9;
 const MIN_QUERY_LENGTH = 5;
 
 const KNOWN_HOSTS = ['sibnet', 'uqload', 'oneupload', 'sendvid', 'voe', 'dood', 'stape', 'streamtape', 'myvi', 'mytv', 'vidmoly', 'fsvid', 'vidzy'];
+
+// Hosts whose embed pages use React SPA / AES-GCM fingerprinting
+// and cannot be resolved to direct URLs without a browser.
+const UNRESOLVABLE_HOSTS = ['voe', 'streamtape', 'stape', 'dood', 'ds2play', 'bigwar5'];
 const PLAYER_TIMEOUT_MS = 8000;
 const BUDGET_MS = 45000;
 
@@ -337,6 +341,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                     }
 
                     if (url.startsWith('http')) {
+                        const urlLower = url.toLowerCase();
+                        const isUnresolvable = UNRESOLVABLE_HOSTS.some(h => urlLower.includes(h));
+                        if (isUnresolvable) {
+                            // Voe/Streamtape/Dood use React SPA or AES-GCM fingerprinting.
+                            // Return the embed URL directly — the native player may handle it.
+                            return {
+                                name: `Vostfree (${lang})`,
+                                title: `${playerName} - ${lang}`,
+                                url: url,
+                                quality: "HD",
+                                headers: { "Referer": BASE_URL },
+                                isDirect: false,
+                            };
+                        }
                         try {
                             const stream = await withTimeout(
                                 resolveStream({
@@ -376,8 +394,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    const validStreams = streams.filter(s => s && s.isDirect);
-    console.log(`[Vostfree] Total streams found: ${validStreams.length}`);
+    const directStreams = streams.filter(s => s && s.isDirect);
+    const embedStreams = streams.filter(s => s && !s.isDirect && s.url);
+
+    // Prefer direct streams. If none found, include embed URLs as fallback.
+    const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
+    if (directStreams.length === 0 && embedStreams.length > 0) {
+        console.log(`[Vostfree] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+    }
+    console.log(`[Vostfree] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
 
     const cleaned = validStreams.map(s => ({
         name: s.name || 'Vostfree',
@@ -385,7 +410,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         url: s.url || '',
         quality: s.quality || 'HD',
         language: s.language || null,
-        isDirect: true,
+        isDirect: !!s.isDirect,
         headers: s.headers || {}
     }));
     

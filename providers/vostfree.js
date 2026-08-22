@@ -1,6 +1,6 @@
 /**
  * vostfree - Built from src/vostfree/
- * Generated: 2026-08-01T15:57:14.551834497Z
+ * Generated: 2026-08-22T01:59:20.961960921Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -302,11 +302,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -449,8 +450,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -1338,8 +1340,7 @@ var __provider = (() => {
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -13934,6 +13935,18 @@ var __provider = (() => {
                 }
               }
               if (url.startsWith("http")) {
+                const urlLower = url.toLowerCase();
+                const isUnresolvable = UNRESOLVABLE_HOSTS.some((h) => urlLower.includes(h));
+                if (isUnresolvable) {
+                  return {
+                    name: `Vostfree (${lang})`,
+                    title: `${playerName} - ${lang}`,
+                    url,
+                    quality: "HD",
+                    headers: { "Referer": BASE_URL },
+                    isDirect: false
+                  };
+                }
                 try {
                   const stream = yield withTimeout(
                     resolveStream({
@@ -13958,36 +13971,41 @@ var __provider = (() => {
           for (const r of results) {
             if (r.status === "fulfilled" && r.value) streams.push(r.value);
           }
-          const directStreams = streams.filter((s) => s && s.isDirect);
-          if (directStreams.length > 0) {
+          const directStreams2 = streams.filter((s) => s && s.isDirect);
+          if (directStreams2.length > 0) {
             const matchSn = getSeasonNumber(match.title + " " + match.url);
             const isExplicitlyWrong = matchSn !== null && matchSn !== effectiveSeason;
             if (!isExplicitlyWrong) {
-              console.log(`[Vostfree] Found ${directStreams.length} direct streams from ${animeUrl}, stopping early`);
+              console.log(`[Vostfree] Found ${directStreams2.length} direct streams from ${animeUrl}, stopping early`);
               break;
             } else {
-              console.log(`[Vostfree] Found ${directStreams.length} direct streams but match season ${matchSn} != target ${effectiveSeason}, continuing search`);
+              console.log(`[Vostfree] Found ${directStreams2.length} direct streams but match season ${matchSn} != target ${effectiveSeason}, continuing search`);
             }
           }
         } catch (e) {
           console.error(`[Vostfree] Match handle error: ${e.message}`);
         }
       }
-      const validStreams = streams.filter((s) => s && s.isDirect);
-      console.log(`[Vostfree] Total streams found: ${validStreams.length}`);
+      const directStreams = streams.filter((s) => s && s.isDirect);
+      const embedStreams = streams.filter((s) => s && !s.isDirect && s.url);
+      const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
+      if (directStreams.length === 0 && embedStreams.length > 0) {
+        console.log(`[Vostfree] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+      }
+      console.log(`[Vostfree] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
       const cleaned = validStreams.map((s) => ({
         name: s.name || "Vostfree",
         title: s.title || "Stream",
         url: s.url || "",
         quality: s.quality || "HD",
         language: s.language || null,
-        isDirect: true,
+        isDirect: !!s.isDirect,
         headers: s.headers || {}
       }));
       return sortStreamsByLanguage(cleaned);
     });
   }
-  var import_cheerio_without_node_native2, BASE_URL, MAX_SEARCH_TITLES, MIN_QUERY_LENGTH, KNOWN_HOSTS, PLAYER_TIMEOUT_MS, BUDGET_MS;
+  var import_cheerio_without_node_native2, BASE_URL, MAX_SEARCH_TITLES, MIN_QUERY_LENGTH, KNOWN_HOSTS, UNRESOLVABLE_HOSTS, PLAYER_TIMEOUT_MS, BUDGET_MS;
   var init_extractor = __esm({
     "src/vostfree/extractor.js"() {
       init_http();
@@ -13999,6 +14017,7 @@ var __provider = (() => {
       MAX_SEARCH_TITLES = 9;
       MIN_QUERY_LENGTH = 5;
       KNOWN_HOSTS = ["sibnet", "uqload", "oneupload", "sendvid", "voe", "dood", "stape", "streamtape", "myvi", "mytv", "vidmoly", "fsvid", "vidzy"];
+      UNRESOLVABLE_HOSTS = ["voe", "streamtape", "stape", "dood", "ds2play", "bigwar5"];
       PLAYER_TIMEOUT_MS = 8e3;
       BUDGET_MS = 45e3;
     }

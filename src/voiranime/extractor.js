@@ -23,6 +23,11 @@ const slugProbeCache = new Map();
 
 const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid', 'Moon', 'FHD', 'SB'];
 
+// Hosts whose embed pages use React SPA / AES-GCM fingerprinting
+// and cannot be resolved to direct URLs without a browser.
+// We return the embed URL directly so the native player can attempt playback.
+const UNRESOLVABLE_HOSTS = ['voe', 'streamtape', 'stape', 'dood', 'ds2play', 'bigwar5'];
+
 const SPINOFF_KEYWORDS = ['fan letter', 'log:', 'memories', 'vigilante', 'illegals', 'film', 'movie', 'special', 'oav', 'ona', 'x ut', 'collab'];
 
 
@@ -448,6 +453,22 @@ async function resolveHost(host, episodeUrl, lang, streamHeaders) {
     }
 
     if (embedUrl) {
+      const embedLower = embedUrl.toLowerCase();
+      const isUnresolvable = UNRESOLVABLE_HOSTS.some(h => embedLower.includes(h));
+      if (isUnresolvable) {
+        // Voe/Streamtape/Dood use React SPA or AES-GCM fingerprinting.
+        // Return the embed URL directly — the native player (ExoPlayer/AVPlayer)
+        // may be able to handle it, or Nuvio's WebView fallback will play it.
+        console.log(`[VoirAnime] ${host} embed is unresolvable, returning embed URL directly`);
+        return {
+          name: `VoirAnime (${lang})`,
+          title: `${host} - ${lang}`,
+          url: embedUrl,
+          quality: "HD",
+          headers: { ...streamHeaders },
+          isDirect: false,
+        };
+      }
       return resolveStream({
         name: `VoirAnime (${lang})`,
         title: `${host} - ${lang}`,
@@ -742,8 +763,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     } catch (e) { console.warn(`[VoirAnime] Match processing failed: ${e?.message}`); }
   }
 
-  const validStreams = streams.filter(s => s && s.isDirect);
-  console.log(`[VoirAnime] Total streams: ${validStreams.length}`);
+  const directStreams = streams.filter(s => s && s.isDirect);
+  const embedStreams = streams.filter(s => s && !s.isDirect && s.url);
+
+  // Prefer direct streams. If none found, include embed URLs as fallback
+  // so the native player can attempt playback (ExoPlayer/AVPlayer handle some embeds).
+  const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
+  if (directStreams.length === 0 && embedStreams.length > 0) {
+    console.log(`[VoirAnime] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+  }
+  console.log(`[VoirAnime] Total streams: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
 
   return sortStreamsByLanguage(validStreams);
 }

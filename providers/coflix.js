@@ -1,6 +1,6 @@
 /**
  * coflix - Built from src/coflix/
- * Generated: 2026-08-01T15:57:13.487833435Z
+ * Generated: 2026-08-22T01:59:20.52496049Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12073,11 +12073,12 @@ var __provider = (() => {
   function inferType(url) {
     if (!url || typeof url !== "string") return null;
     const u = url.toLowerCase();
-    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8")) return "hls";
+    if (u.includes(".m3u8") || u.includes("/hls/") || u.includes("/hls2/") || u.includes("master.m3u8") || u.includes("playlist.m3u8")) return "hls";
     if (u.includes(".mpd")) return "dash";
     if (u.includes(".mp4")) return "mp4";
     if (u.includes(".mkv")) return "mkv";
     if (u.includes(".webm")) return "webm";
+    if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
   function inferLanguage(stream) {
@@ -12220,8 +12221,9 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
@@ -13109,8 +13111,7 @@ var __provider = (() => {
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
       HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept-Encoding": "identity"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       };
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
@@ -14089,7 +14090,7 @@ var __provider = (() => {
               const stream = toStream(result.url, result.lang, "Coflix", "https://coflix.cymru");
               const resolved = yield resolveStream(stream);
               if (resolved && resolved.url) return [__spreadProps(__spreadValues({}, resolved), { provider: "coflix" })];
-              return [__spreadProps(__spreadValues({}, stream), { provider: "coflix", type: "embed" })];
+              return [__spreadProps(__spreadValues({}, stream), { provider: "coflix" })];
             }
           }
         }
@@ -14099,7 +14100,7 @@ var __provider = (() => {
           const stream = toStream(wpResult2.url, wpResult2.lang, "Coflix", "https://coflix.cymru");
           const resolved = yield resolveStream(stream);
           if (resolved && resolved.url) return [__spreadProps(__spreadValues({}, resolved), { provider: "coflix" })];
-          return [__spreadProps(__spreadValues({}, stream), { provider: "coflix", type: "embed" })];
+          return [__spreadProps(__spreadValues({}, stream), { provider: "coflix" })];
         }
         console.log(`[Coflix] No movie match for ${tmdbId}`);
         return [];
@@ -14114,7 +14115,7 @@ var __provider = (() => {
               const stream = toStream(result.url, result.lang, "Coflix", "https://coflix.cymru");
               const resolved = yield resolveStream(stream);
               if (resolved && resolved.url) return [__spreadProps(__spreadValues({}, resolved), { provider: "coflix" })];
-              return [__spreadProps(__spreadValues({}, stream), { provider: "coflix", type: "embed" })];
+              return [__spreadProps(__spreadValues({}, stream), { provider: "coflix" })];
             }
           }
         }
@@ -14127,7 +14128,7 @@ var __provider = (() => {
                 const stream = toStream(result.url, result.lang, "Coflix", "https://coflix.cymru");
                 const resolved = yield resolveStream(stream);
                 if (resolved && resolved.url) return [__spreadProps(__spreadValues({}, resolved), { provider: "coflix" })];
-                return [__spreadProps(__spreadValues({}, stream), { provider: "coflix", type: "embed" })];
+                return [__spreadProps(__spreadValues({}, stream), { provider: "coflix" })];
               }
             }
           }
@@ -14139,7 +14140,7 @@ var __provider = (() => {
         const stream = toStream(wpResult.url, wpResult.lang, "Coflix", "https://coflix.cymru");
         const resolved = yield resolveStream(stream);
         if (resolved && resolved.url) return [__spreadProps(__spreadValues({}, resolved), { provider: "coflix" })];
-        return [__spreadProps(__spreadValues({}, stream), { provider: "coflix", type: "embed" })];
+        return [__spreadProps(__spreadValues({}, stream), { provider: "coflix" })];
       }
       console.log(`[Coflix] No match found for ${tmdbId} (${mediaType})`);
       return [];
