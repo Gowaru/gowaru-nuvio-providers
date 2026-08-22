@@ -136,9 +136,26 @@ async function probeUrl(url) {
   if (slugProbeCache.has(url)) return slugProbeCache.get(url);
   // safeFetch ne throw jamais (catch interne → retourne null) donc pas de try/catch nécessaire
   const res = await safeFetch(url, { method: "GET", timeout: HEAD_TIMEOUT * 4 });
-  const exists = res && res.ok;
-  slugProbeCache.set(url, exists);
-  return exists;
+  if (!res || !res.ok) {
+    slugProbeCache.set(url, false);
+    return false;
+  }
+  // Détecter les redirects 301/302 vers une page différente (ex: arc spécifique au lieu de la page principale)
+  // Si l'URL finale diffère de l'URL demandée, c'est un redirect → la page probeée n'est pas la bonne
+  const finalUrl = res.url || url;
+  if (finalUrl !== url) {
+    // Extraire le chemin après /anime/ pour comparer
+    const origPath = url.replace(/https?:\/\/[^/]+/, '');
+    const finalPath = finalUrl.replace(/https?:\/\/[^/]+/, '');
+    // Si le chemin final est différent, c'est un redirect vers une autre page
+    // (ex: /anime/X/ → /anime/X-arc-name/) → invalide
+    if (origPath !== finalPath) {
+      slugProbeCache.set(url, false);
+      return false;
+    }
+  }
+  slugProbeCache.set(url, true);
+  return true;
 }
 
 async function batchProbe(urls, batchSize = 5, delayMs = 0) {
@@ -753,6 +770,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             break;
           }
         }
+      }
+
+      // For movies, the player is on the main page itself — use match URL as fallback
+      if (!episodeUrl && mediaType === 'movie') {
+        episodeUrl = match.url;
+        console.log(`[VoirAnime] Movie fallback: using match URL as episode URL`);
       }
 
       if (!episodeUrl) continue;

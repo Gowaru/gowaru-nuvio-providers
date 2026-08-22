@@ -1,6 +1,6 @@
 /**
  * voiranime - Built from src/voiranime/
- * Generated: 2026-08-22T01:59:20.853960819Z
+ * Generated: 2026-08-22T04:02:48.938368914Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -13816,9 +13816,21 @@ var __provider = (() => {
     return __async(this, null, function* () {
       if (slugProbeCache.has(url)) return slugProbeCache.get(url);
       const res = yield safeFetch(url, { method: "GET", timeout: HEAD_TIMEOUT * 4 });
-      const exists = res && res.ok;
-      slugProbeCache.set(url, exists);
-      return exists;
+      if (!res || !res.ok) {
+        slugProbeCache.set(url, false);
+        return false;
+      }
+      const finalUrl = res.url || url;
+      if (finalUrl !== url) {
+        const origPath = url.replace(/https?:\/\/[^/]+/, "");
+        const finalPath = finalUrl.replace(/https?:\/\/[^/]+/, "");
+        if (origPath !== finalPath) {
+          slugProbeCache.set(url, false);
+          return false;
+        }
+      }
+      slugProbeCache.set(url, true);
+      return true;
     });
   }
   function batchProbe(urls, batchSize = 5, delayMs = 0) {
@@ -14319,6 +14331,10 @@ var __provider = (() => {
                 break;
               }
             }
+          }
+          if (!episodeUrl && mediaType === "movie") {
+            episodeUrl = match.url;
+            console.log(`[VoirAnime] Movie fallback: using match URL as episode URL`);
           }
           if (!episodeUrl) continue;
           const epStreams = yield resolveEpisodeStreams(episodeUrl, lang, streamHeaders);
