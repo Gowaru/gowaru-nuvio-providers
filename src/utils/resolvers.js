@@ -203,7 +203,6 @@ export function setupAbortSignal(externalSignal) {
 
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-    "Accept-Encoding": "identity",
 };
 
 /** User-Agent standard partagé par tous les providers */
@@ -432,7 +431,7 @@ function setCachedManifest(key, data) {
  * providers qui s'exécutent dans la même chaîne (ex: VoirAnime + Vostfree
  * pour le même titre). Évite ~60 appels API dupliqués sur une requête typique.
  */
-let FETCH_CACHE_TTL = 30000;
+let FETCH_CACHE_TTL = 300_000; // 5 minutes (augmenté de 30s → 5min pour TMDB API)
 
 /**
  * Permet de configurer le TTL du cache depuis l'extérieur.
@@ -451,8 +450,15 @@ function getCachedFetch(key) {
 }
 
 function setCachedFetch(key, data) {
-    // Nettoyage simple : si le cache dépasse 200 entrées, on vide tout
-    if (fetchCache.size >= 200) fetchCache.clear();
+    // Éviction LRU : si le cache dépasse 200 entrées, supprimer les 20% plus anciennes
+    // (au lieu de vider tout le cache, ce qui cassait le warm cache)
+    if (fetchCache.size >= 200) {
+        const toRemove = Math.ceil(200 * 0.2); // 40 entrées
+        const sorted = [...fetchCache.entries()]
+            .sort((a, b) => a[1].ts - b[1].ts)
+            .slice(0, toRemove);
+        for (const [k] of sorted) fetchCache.delete(k);
+    }
     fetchCache.set(key, { data, ts: Date.now() });
 }
 
@@ -477,11 +483,12 @@ function appendQualityToTitle(title, quality, codec, fps) {
 function inferType(url) {
     if (!url || typeof url !== 'string') return null;
     const u = url.toLowerCase();
-    if (u.includes('.m3u8') || u.includes('/hls/') || u.includes('/hls2/') || u.includes('master.m3u8')) return 'hls';
+    if (u.includes('.m3u8') || u.includes('/hls/') || u.includes('/hls2/') || u.includes('master.m3u8') || u.includes('playlist.m3u8')) return 'hls';
     if (u.includes('.mpd')) return 'dash';
     if (u.includes('.mp4')) return 'mp4';
     if (u.includes('.mkv')) return 'mkv';
     if (u.includes('.webm')) return 'webm';
+    if (u.includes('.ts') && !u.includes('test') && !u.includes('textures')) return 'hls';
     return null;
 }
 
@@ -638,8 +645,10 @@ export async function expandStreamQualities(streams, options = {}) {
     for (const stream of expanded) {
         if (!stream?.url) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        if (seen.has(stream.url)) continue;
-        seen.add(stream.url);
+        // Dedup by URL + language: keep streams with same URL but different languages
+        const dedupKey = `${stream.url}|${stream.language || ''}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         deduped.push(stream);
     }
 

@@ -251,50 +251,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    // Multi-title slug fallback: limité à 5 slugs vraiment uniques (pas juste des variantes de saison)
-    if (streams.length === 0 && titles.length > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const triedSlugs = new Set([slug]);
-        const altSlugTasks = [];
-        const seasonSuffixRe = /-(?:saison|season|s)\d+$/i;
-        let slugsAdded = 0;
-
-        for (let i = 1; i < titles.length && slugsAdded < 5; i++) {
-            const altSlug = toSlug(titles[i]);
-            if (!altSlug || triedSlugs.has(altSlug)) continue;
-            triedSlugs.add(altSlug);
-            // Skip season-only variants of the same base slug
-            if (altSlug.replace(seasonSuffixRe, '') === slug) continue;
-            slugsAdded++;
-
-            for (const lang of languages) {
-                const task = withTimeout(
-                    fetchAndGetUrl(altSlug, lang, effectiveSeason, episode, mediaType, altEpisodes),
-                    5000,
-                    `alt-slug ${altSlug}`
-                ).catch(() => []);
-                altSlugTasks.push(task);
-            }
-        }
-
-        if (altSlugTasks.length > 0) {
-            console.log(`[Anime-Sama] Trying ${altSlugTasks.length} alt slug probes (max 5 slugs)`);
-            // Limiter la concurrence à 3 pour éviter de flooder
-            let resolvedCount = 0;
-            while (resolvedCount < altSlugTasks.length && !isBudgetExhausted(startTime, BUDGET_MS)) {
-                const batch = altSlugTasks.slice(resolvedCount, resolvedCount + 3);
-                const batchResults = await Promise.allSettled(batch);
-                for (const r of batchResults) {
-                    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
-                        streams.push(...r.value);
-                    }
-                }
-                if (streams.length > 0) break;
-                resolvedCount += 3;
-            }
-        }
-    }
-
-    // Fallback search
+    // If primary failed, try search API to find correct slug (much faster than alt slug probing)
     if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const foundSlugs = [];
         for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
@@ -307,20 +264,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
 
         const checkedSlugs = new Set([slug]);
-        const fallbackPromises = [];
+        const searchPromises = [];
 
         for (const fSlug of foundSlugs) {
             if (checkedSlugs.has(fSlug)) continue;
             checkedSlugs.add(fSlug);
 
             for (const lang of languages) {
-                fallbackPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
+                searchPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
             }
         }
 
-        if (fallbackPromises.length > 0) {
-            const fallbackResults = await Promise.all(fallbackPromises);
-            for (const result of fallbackResults) {
+        if (searchPromises.length > 0) {
+            const searchResults = await Promise.all(searchPromises);
+            for (const result of searchResults) {
                 streams.push(...result);
             }
         }

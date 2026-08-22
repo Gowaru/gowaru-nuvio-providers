@@ -7,6 +7,7 @@ import { getTmdbTitles } from '../utils/metadata.js';
 const BASE_URL = "https://ww.animesultra.org";
 
 const searchCache = {};
+const searchPromisesCache = {};
 const CACHE_TTL = 60000;
 
 function scoreSearchMatch(resultTitle, searchTitle) {
@@ -64,6 +65,13 @@ async function searchAnime(title) {
     const cached = searchCache[title];
     if (cached && now - cached.time < CACHE_TTL) return cached.results;
 
+    if (searchPromisesCache[title]) return searchPromisesCache[title];
+    const promise = searchAnimeInner(title, now);
+    searchPromisesCache[title] = promise;
+    return promise;
+}
+
+async function searchAnimeInner(title, now) {
     try {
         const results = [];
         const seen = new Set();
@@ -160,7 +168,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         const sa = isName(a) ? 0 : isFr(a) ? 1 : 2;
         const sb = isName(b) ? 0 : isFr(b) ? 1 : 2;
         return sa - sb || a.length - b.length;
-    });
+    }).slice(0, 5);
 
     const searchedQueries = new Set();
     // Try all unique search queries in parallel. The site is slow, but queries

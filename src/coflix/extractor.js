@@ -285,7 +285,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
           const stream = toStream(result.url, result.lang, 'Coflix', 'https://coflix.cymru')
           const resolved = await resolveStream(stream)
           if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-          return [{ ...stream, provider: 'coflix', type: 'embed' }]
+          return [{ ...stream, provider: 'coflix' }]
         }
       }
     }
@@ -297,7 +297,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       const stream = toStream(wpResult.url, wpResult.lang, 'Coflix', 'https://coflix.cymru')
       const resolved = await resolveStream(stream)
       if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-      return [{ ...stream, provider: 'coflix', type: 'embed' }]
+      return [{ ...stream, provider: 'coflix' }]
     }
 
     console.log(`[Coflix] No movie match for ${tmdbId}`)
@@ -317,7 +317,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
           const stream = toStream(result.url, result.lang, 'Coflix', 'https://coflix.cymru')
           const resolved = await resolveStream(stream)
           if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-          return [{ ...stream, provider: 'coflix', type: 'embed' }]
+          return [{ ...stream, provider: 'coflix' }]
         }
       }
     }
@@ -332,7 +332,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             const stream = toStream(result.url, result.lang, 'Coflix', 'https://coflix.cymru')
             const resolved = await resolveStream(stream)
             if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-            return [{ ...stream, provider: 'coflix', type: 'embed' }]
+            return [{ ...stream, provider: 'coflix' }]
           }
         }
       }
@@ -346,7 +346,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const stream = toStream(wpResult.url, wpResult.lang, 'Coflix', 'https://coflix.cymru')
     const resolved = await resolveStream(stream)
     if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-    return [{ ...stream, provider: 'coflix', type: 'embed' }]
+    return [{ ...stream, provider: 'coflix' }]
   }
 
   console.log(`[Coflix] No match found for ${tmdbId} (${mediaType})`)

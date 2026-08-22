@@ -98,22 +98,40 @@ function parseVideoUrls(html) {
   }
   if (iframeSrc) {
     const pageLang = detectLanguage(html)
-    urls.push({ url: iframeSrc, lang: pageLang })
+    urls.push({ url: iframeSrc, lang: pageLang, _fromIframe: true })
   }
 
   // 2. Extract language-specific URLs from JS inline object
-  // Pattern: vostfr: 'https://...' or vf: 'https://...' (works for both videoUrls and filmUrls)
+  // Patterns: vostfr: 'https://...' OR "vostfr":"https://..." (JSON format)
   const text = $('script').text()
-  const regex = /(vostfr|vf)\s*:\s*['"]([^'"]+)['"]/gi
+  const regex = /['"]?(vostfr|vf)['"]?\s*[:=]\s*['"]?(https?:\/\/[^'\"\s;,}]+)/gi
   let m
   while ((m = regex.exec(text)) !== null) {
     const lang = m[1].toLowerCase() === 'vf' ? 'VF' : 'VOSTFR'
-    if (!urls.some(u => u.url === m[2])) {
-      urls.push({ url: m[2], lang })
-    }
+    // Don't skip duplicates here — dedup by URL + lang happens in step 3
+    urls.push({ url: m[2], lang })
   }
 
-  // 3. Fallback: detect page language and apply to any stream still without lang
+  // 3. Deduplicate by URL, keeping the entry with the more specific language label.
+  // Iframe gets labeled by detectLanguage (often wrong), JS regex labels are authoritative.
+  const urlMap = new Map()
+  for (const u of urls) {
+    const existing = urlMap.get(u.url)
+    if (!existing) {
+      urlMap.set(u.url, u)
+    } else {
+      // Prefer the entry with an explicit lang from JS regex over detectLanguage fallback
+      const existingExplicit = ['VF', 'VOSTFR'].includes(existing.lang) && !existing._fromIframe
+      const newExplicit = ['VF', 'VOSTFR'].includes(u.lang) && !u._fromIframe
+      if (newExplicit && !existingExplicit) {
+        urlMap.set(u.url, u)
+      }
+    }
+  }
+  urls.length = 0
+  urls.push(...urlMap.values())
+
+  // If we still have URLs without explicit lang, apply page detection
   if (urls.some(u => !u.lang)) {
     const pageLang = detectLanguage(html)
     if (pageLang) {

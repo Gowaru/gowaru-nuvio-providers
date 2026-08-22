@@ -10,10 +10,11 @@ const SEARCH_URL = `${BASE_URL}/search-autocomplete.php`;
 const TIMEOUT = 25000;
 
 const SPECIAL_SLUG_RE = /(?:ona|oav|film|movie|special|scan|chapitre|volume|dub|uncut)(?:-|$)/i;
-const MAX_TITLE_SEARCHES = 6;
+const MAX_TITLE_SEARCHES = 3;
+const MAX_TITLE_SEARCHES_MOVIE = 2;
 
-// Cache partagé LRU avec TTL auto (5min succès, 30s échecs)
-const withCache = createCache('af', 'AnimoFlix')
+// Cache partagé LRU — TTL long sur échecs (rate limiting agressif sur ce site)
+const withCache = createCache('af', 'AnimoFlix', { failureTtl: 120_000, maxSize: 200 }) // 2min failure (vs 30s)
 
 async function searchAnime(title) {
     try {
@@ -22,7 +23,29 @@ async function searchAnime(title) {
     } catch (e) {
         console.warn(`[AnimoFlix] Search API failed for "${title}": ${e.message}`);
     }
-    // Fallback: scrape HTML search page
+    // Step 2: Slug probing — test URL directe avant la recherche HTML
+    // La search API peut échouer sur certains titres (surtout les titres avec
+    // des caractères spéciaux comme 'Your Name.'), on teste le slug directement.
+    const slug = toSlug(title)
+    if (slug && slug.length > 3) {
+      const slugUrl = `${BASE_URL}/anime/${slug}/`
+      try {
+        const slugHtml = await fetchText(slugUrl, { timeout: 8000 })
+        if (slugHtml && slugHtml.length > 1000) {
+          console.log(`[AnimoFlix] Slug probing match: ${slugUrl}`)
+          return [{
+            title: slug.replace(/-/g, ' '),
+            title2: title,
+            slug: slug,
+            url: slugUrl
+          }]
+        }
+      } catch (e) {
+        // slug not found, continue
+      }
+    }
+
+    // Step 3: Fallback — scrape HTML search page
     try {
         const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
         const $ = cheerio.load(html);
@@ -61,28 +84,6 @@ async function searchAnime(title) {
         if (results.length > 0) return results;
     } catch (e) {
         console.warn(`[AnimoFlix] Search HTML fallback failed: ${e.message}`);
-    }
-
-    // Step 3: Fallback — slug probing direct
-    // La search API peut échouer sur certains titres (surtout les longs titres japonais).
-    // On génère un slug depuis le titre TMDB et on teste l'URL directement.
-    const slug = toSlug(title)
-    if (slug && slug.length > 3) {
-      const slugUrl = `${BASE_URL}/anime/${slug}/`
-      try {
-        const slugHtml = await fetchText(slugUrl, { timeout: 8000 })
-        if (slugHtml && slugHtml.length > 1000) {
-          console.log(`[AnimoFlix] Slug probing match: ${slugUrl}`)
-          return [{
-            title: slug.replace(/-/g, ' '),
-            title2: title,
-            slug: slug,
-            url: slugUrl
-          }]
-        }
-      } catch (e) {
-        // slug not found, continue
-      }
     }
 
     return [];
@@ -180,18 +181,25 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
     let bestMatch = null;
     const badSlugs = new Set();
 
-    // Search all titles in parallel (up to MAX_TITLE_SEARCHES)
-    const searchPromises = titles.slice(0, MAX_TITLE_SEARCHES).map(searchTitle =>
-        searchAnime(searchTitle).then(results => {
+    // Search titles sequentially with small delays to avoid 429 rate limiting
+    // The site is very aggressive with rate limits — parallel requests trigger 429
+    const maxSearches = isMovie ? MAX_TITLE_SEARCHES_MOVIE : MAX_TITLE_SEARCHES;
+    const allResults = [];
+    for (const searchTitle of titles.slice(0, maxSearches)) {
+        if (isAborted(signal)) break;
+        try {
             const nt = normalize(searchTitle);
-            if (nt.length < 4) return [];
-            return results.filter(r => !SPECIAL_SLUG_RE.test(r.slug) && !badSlugs.has(r.slug))
+            if (nt.length < 4) continue;
+            const results = await searchAnime(searchTitle);
+            const filtered = results.filter(r => !SPECIAL_SLUG_RE.test(r.slug) && !badSlugs.has(r.slug))
                 .map(r => ({ ...r, _queryTitle: searchTitle }));
-        }).catch(() => [])
-    );
-
-    const allResults = (await Promise.allSettled(searchPromises))
-        .flatMap(r => r.status === 'fulfilled' ? r.value : []);
+            allResults.push(...filtered);
+            // Stop early if we already have good results
+            if (filtered.some(r => scoreSearchMatch(r, searchTitle) >= 100)) break;
+        } catch {}
+        // Small delay between searches to respect rate limits
+        if (allResults.length === 0) await sleep(500);
+    }
 
     // Score and deduplicate by slug
     const scored = new Map();
