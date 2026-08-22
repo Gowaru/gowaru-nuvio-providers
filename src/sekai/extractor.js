@@ -16,8 +16,8 @@ const BASE_URL = "https://sekai.one";
 const BUDGET_MS = 40000;
 const CACHE_TTL = 300000; // 5 min
 
-// Cache partagé (remplace les Maps slugsCache + sagaPageCache)
-const withCache = createCache('sk', 'Sekai');
+// Cache partagé — TTL long (données épisodes changent rarement)
+const withCache = createCache('sk', 'Sekai', { successTtl: 10 * 60_000, maxSize: 200 }); // 10min
 
 // Slug alternatif pour les séries dont le slug sekai diffère du toSlug()
 const SLUG_OVERRIDES = {

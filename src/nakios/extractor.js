@@ -22,7 +22,7 @@ import { createCache } from '../utils/cache.js';
 import { getTmdbTitle } from '../utils/search-fallback.js';
 import { safeConfig, isAborted } from '../utils/resolvers.js';
 
-const withCache = createCache('nk', 'Nakios');
+const withCache = createCache('nk', 'Nakios', { failureTtl: 120_000 }); // 2min failure
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 // NUVIO_NAKIOS_EXCLUDE_PREMIUM=1 → exclut toutes les sources premium

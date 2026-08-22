@@ -13,8 +13,8 @@ const SPECIAL_SLUG_RE = /(?:ona|oav|film|movie|special|scan|chapitre|volume|dub|
 const MAX_TITLE_SEARCHES = 3;
 const MAX_TITLE_SEARCHES_MOVIE = 2;
 
-// Cache partagé LRU avec TTL auto (5min succès, 30s échecs)
-const withCache = createCache('af', 'AnimoFlix')
+// Cache partagé LRU — TTL long sur échecs (rate limiting agressif sur ce site)
+const withCache = createCache('af', 'AnimoFlix', { failureTtl: 120_000, maxSize: 200 }) // 2min failure (vs 30s)
 
 async function searchAnime(title) {
     try {

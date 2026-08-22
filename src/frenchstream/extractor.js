@@ -5,7 +5,7 @@ import { getTmdbTitles } from '../utils/metadata.js';
 import { fetchText, fetchJson, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
 
-const withCache = createCache('fs', 'FrenchStream');
+const withCache = createCache('fs', 'FrenchStream', { failureTtl: 120_000, maxSize: 200 }); // 2min failure (rate limiting)
 
 const MIN_MATCH_SCORE = 60;
 const MOVIE_MATCH_SCORE = 55;

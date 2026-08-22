@@ -1,6 +1,6 @@
 /**
  * voiranime-homes - Built from src/voiranime-homes/
- * Generated: 2026-08-22T04:10:26.245826223Z
+ * Generated: 2026-08-22T04:22:39.064559037Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12073,7 +12073,11 @@ var __provider = (() => {
     return null;
   }
   function setCachedFetch(key, data) {
-    if (fetchCache.size >= 200) fetchCache.clear();
+    if (fetchCache.size >= 200) {
+      const toRemove = Math.ceil(200 * 0.2);
+      const sorted = [...fetchCache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, toRemove);
+      for (const [k] of sorted) fetchCache.delete(k);
+    }
     fetchCache.set(key, { data, ts: Date.now() });
   }
   function qualityRank(value) {
@@ -13166,7 +13170,7 @@ var __provider = (() => {
       };
       manifestCache = /* @__PURE__ */ new Map();
       MANIFEST_CACHE_TTL = 12e4;
-      FETCH_CACHE_TTL = 3e4;
+      FETCH_CACHE_TTL = 3e5;
       fetchCache = /* @__PURE__ */ new Map();
       KNOWN_HOST_NAMES = [
         { name: "streamtape", domain: "streamtape.com" },

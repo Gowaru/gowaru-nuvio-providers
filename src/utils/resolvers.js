@@ -431,7 +431,7 @@ function setCachedManifest(key, data) {
  * providers qui s'exécutent dans la même chaîne (ex: VoirAnime + Vostfree
  * pour le même titre). Évite ~60 appels API dupliqués sur une requête typique.
  */
-let FETCH_CACHE_TTL = 30000;
+let FETCH_CACHE_TTL = 300_000; // 5 minutes (augmenté de 30s → 5min pour TMDB API)
 
 /**
  * Permet de configurer le TTL du cache depuis l'extérieur.
@@ -450,8 +450,15 @@ function getCachedFetch(key) {
 }
 
 function setCachedFetch(key, data) {
-    // Nettoyage simple : si le cache dépasse 200 entrées, on vide tout
-    if (fetchCache.size >= 200) fetchCache.clear();
+    // Éviction LRU : si le cache dépasse 200 entrées, supprimer les 20% plus anciennes
+    // (au lieu de vider tout le cache, ce qui cassait le warm cache)
+    if (fetchCache.size >= 200) {
+        const toRemove = Math.ceil(200 * 0.2); // 40 entrées
+        const sorted = [...fetchCache.entries()]
+            .sort((a, b) => a[1].ts - b[1].ts)
+            .slice(0, toRemove);
+        for (const [k] of sorted) fetchCache.delete(k);
+    }
     fetchCache.set(key, { data, ts: Date.now() });
 }
 

@@ -346,11 +346,11 @@ function collectStreamsForLang(saison, lang, episodeIndex, seasonName) {
     });
 }
 
-// Cache partagé LRU avec TTL auto (5min succès, 30s échecs)
+// Cache partagé LRU avec TTL configuré par type de donnée
 // slugCache: slug des animes par titre TMDB (multi-clés, lookup rapide)
-const slugCache = createCache('mg_slug', 'MugiwaraSlug');
+const slugCache = createCache('mg_slug', 'MugiwaraSlug', { successTtl: 10 * 60_000, maxSize: 200 }); // 10min
 // animeDataCache: données extraites des pages Next.js par slug+type (fetch intensif)
-const animeDataCache = createCache('mg_data', 'MugiwaraData');
+const animeDataCache = createCache('mg_data', 'MugiwaraData', { successTtl: 15 * 60_000, maxSize: 100 }); // 15min
 
 async function findCachedSlugs(titles) {
     // Le cache stocke le tableau complet des slugs tries par score.

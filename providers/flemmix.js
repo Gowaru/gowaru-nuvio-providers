@@ -1,6 +1,6 @@
 /**
  * flemmix - Built from src/flemmix/
- * Generated: 2026-08-22T04:10:25.985825955Z
+ * Generated: 2026-08-22T04:22:38.779558742Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -267,7 +267,11 @@ var __provider = (() => {
     return null;
   }
   function setCachedFetch(key, data) {
-    if (fetchCache.size >= 200) fetchCache.clear();
+    if (fetchCache.size >= 200) {
+      const toRemove = Math.ceil(200 * 0.2);
+      const sorted = [...fetchCache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, toRemove);
+      for (const [k] of sorted) fetchCache.delete(k);
+    }
     fetchCache.set(key, { data, ts: Date.now() });
   }
   function qualityRank(value) {
@@ -1360,7 +1364,7 @@ var __provider = (() => {
       };
       manifestCache = /* @__PURE__ */ new Map();
       MANIFEST_CACHE_TTL = 12e4;
-      FETCH_CACHE_TTL = 3e4;
+      FETCH_CACHE_TTL = 3e5;
       fetchCache = /* @__PURE__ */ new Map();
       KNOWN_HOST_NAMES = [
         { name: "streamtape", domain: "streamtape.com" },
@@ -13874,9 +13878,9 @@ var __provider = (() => {
     for (const key of expired) {
       cache.delete(key);
     }
-    if (cache.size > CACHE_MAX_SIZE) {
+    if (cache.size > DEFAULT_MAX_SIZE) {
       const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts);
-      const toRemove = sorted.slice(0, cache.size - CACHE_MAX_SIZE);
+      const toRemove = sorted.slice(0, cache.size - DEFAULT_MAX_SIZE);
       for (const [key] of toRemove) {
         cache.delete(key);
       }
@@ -13886,9 +13890,12 @@ var __provider = (() => {
     }
     lastCleanup = now;
   }
-  function createCache(namespace, tag) {
+  function createCache(namespace, tag, opts = {}) {
     const logTag = tag || namespace.toUpperCase();
     const prefix = `${namespace}_`;
+    const successTtl = opts.successTtl || DEFAULT_SUCCESS_TTL;
+    const failureTtl = opts.failureTtl || DEFAULT_FAILURE_TTL;
+    const maxSize = opts.maxSize || DEFAULT_MAX_SIZE;
     function cacheKey(raw) {
       return `${prefix}${String(raw).replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "")}`;
     }
@@ -13906,21 +13913,22 @@ var __provider = (() => {
       if (Date.now() - lastCleanup > CLEANUP_INTERVAL) {
         cleanCache(logTag);
       }
-      if (cache.size >= CACHE_MAX_SIZE) {
-        const oldest = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-        if (oldest) cache.delete(oldest[0]);
+      if (cache.size >= maxSize) {
+        const toRemove = Math.ceil(maxSize * 0.2);
+        const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, toRemove);
+        for (const [k] of sorted) cache.delete(k);
       }
       cache.set(key, {
         data,
         ts: Date.now(),
-        ttl: success ? CACHE_SUCCESS_TTL : CACHE_FAILURE_TTL,
+        ttl: success ? successTtl : failureTtl,
         success
       });
     }
     return function withCache2(_0, _1) {
-      return __async(this, arguments, function* (rawKey, fn, opts = {}) {
+      return __async(this, arguments, function* (rawKey, fn, opts2 = {}) {
         const key = cacheKey(rawKey);
-        if (!opts.bypass) {
+        if (!opts2.bypass) {
           const cached = cacheGet(key);
           if (cached !== void 0) {
             console.log(`[${logTag}] Cache HIT: ${rawKey.slice(0, 60)}`);
@@ -13943,12 +13951,12 @@ var __provider = (() => {
       });
     };
   }
-  var CACHE_SUCCESS_TTL, CACHE_FAILURE_TTL, CACHE_MAX_SIZE, CLEANUP_INTERVAL, cache, lastCleanup;
+  var DEFAULT_SUCCESS_TTL, DEFAULT_FAILURE_TTL, DEFAULT_MAX_SIZE, CLEANUP_INTERVAL, cache, lastCleanup;
   var init_cache = __esm({
     "src/utils/cache.js"() {
-      CACHE_SUCCESS_TTL = 3e5;
-      CACHE_FAILURE_TTL = 3e4;
-      CACHE_MAX_SIZE = 150;
+      DEFAULT_SUCCESS_TTL = 3e5;
+      DEFAULT_FAILURE_TTL = 3e4;
+      DEFAULT_MAX_SIZE = 150;
       CLEANUP_INTERVAL = 6e4;
       cache = /* @__PURE__ */ new Map();
       lastCleanup = Date.now();

@@ -18,10 +18,10 @@
  */
 
 // ─── Defaults ───────────────────────────────────────────────────────────────
-const CACHE_SUCCESS_TTL = 300_000;  // 5 min pour les résultats positifs
-const CACHE_FAILURE_TTL = 30_000;   // 30s pour les échecs (évite de spammer)
-const CACHE_MAX_SIZE = 150;         // Nombre max d'entrées avant éviction
-const CLEANUP_INTERVAL = 60_000;    // Nettoyage auto toutes les 60s
+const DEFAULT_SUCCESS_TTL = 300_000;  // 5 min pour les résultats positifs
+const DEFAULT_FAILURE_TTL = 30_000;   // 30s pour les échecs (évite de spammer)
+const DEFAULT_MAX_SIZE = 150;          // Nombre max d'entrées avant éviction
+const CLEANUP_INTERVAL = 60_000;       // Nettoyage auto toutes les 60s
 
 // ─── Global Cache Store ─────────────────────────────────────────────────────
 // Un seul Map partagé entre tous les providers — le namespace dans la clé
@@ -47,11 +47,11 @@ function cleanCache(tag) {
         cache.delete(key);
     }
 
-    // 2. Si le cache dépasse la limite, supprimer les plus vieilles
-    if (cache.size > CACHE_MAX_SIZE) {
+    // 2. Si le cache dépasse la limite, supprimer les plus vieilles (LRU)
+    if (cache.size > DEFAULT_MAX_SIZE) {
         const sorted = [...cache.entries()]
             .sort((a, b) => a[1].ts - b[1].ts);
-        const toRemove = sorted.slice(0, cache.size - CACHE_MAX_SIZE);
+        const toRemove = sorted.slice(0, cache.size - DEFAULT_MAX_SIZE);
         for (const [key] of toRemove) {
             cache.delete(key);
         }
@@ -71,9 +71,12 @@ function cleanCache(tag) {
  * @param {string} [tag] - Tag pour les logs (défaut = namespace en majuscule)
  * @returns {Function} withCache(rawKey, fn, opts?) → Promise
  */
-export function createCache(namespace, tag) {
+export function createCache(namespace, tag, opts = {}) {
     const logTag = tag || namespace.toUpperCase();
     const prefix = `${namespace}_`;
+    const successTtl = opts.successTtl || DEFAULT_SUCCESS_TTL;
+    const failureTtl = opts.failureTtl || DEFAULT_FAILURE_TTL;
+    const maxSize = opts.maxSize || DEFAULT_MAX_SIZE;
 
     /**
      * Génère une clé de cache déterministe avec le namespace.
@@ -106,17 +109,19 @@ export function createCache(namespace, tag) {
             cleanCache(logTag);
         }
 
-        // Si le cache est plein, faire de la place (supprimer la plus vieille)
-        if (cache.size >= CACHE_MAX_SIZE) {
-            const oldest = [...cache.entries()]
-                .sort((a, b) => a[1].ts - b[1].ts)[0];
-            if (oldest) cache.delete(oldest[0]);
+        // Si le cache est plein, supprimer les 20% plus anciennes (LRU)
+        if (cache.size >= maxSize) {
+            const toRemove = Math.ceil(maxSize * 0.2);
+            const sorted = [...cache.entries()]
+                .sort((a, b) => a[1].ts - b[1].ts)
+                .slice(0, toRemove);
+            for (const [k] of sorted) cache.delete(k);
         }
 
         cache.set(key, {
             data,
             ts: Date.now(),
-            ttl: success ? CACHE_SUCCESS_TTL : CACHE_FAILURE_TTL,
+            ttl: success ? successTtl : failureTtl,
             success,
         });
     }
