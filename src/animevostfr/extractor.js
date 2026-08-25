@@ -532,8 +532,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         console.warn(`[AnimeVOSTFR] Episode S${searchSeason}E${searchEpisode} not found (targets: ${targetEpisodes.join(', ')})`);
     }
 
-    const validStreams = streams.filter(s => s && s.isDirect);
-    console.log(`[AnimeVOSTFR] Total streams found: ${validStreams.length}`);
+    const directStreams = streams.filter(s => s && s.isDirect);
+    const embedStreams = streams.filter(s => s && !s.isDirect && s.url);
+
+    // Prefer direct streams. If none found, include embed URLs as fallback
+    // so the native player can attempt playback (ExoPlayer/AVPlayer handle some embeds).
+    const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
+    if (directStreams.length === 0 && embedStreams.length > 0) {
+        console.log(`[AnimeVOSTFR] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+    }
+    console.log(`[AnimeVOSTFR] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
     
     return sortStreamsByLanguage(validStreams);
 }

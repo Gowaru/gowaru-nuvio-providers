@@ -1,6 +1,6 @@
 /**
  * waveanime - Built from src/waveanime/
- * Generated: 2026-08-25T23:37:03.846023813Z
+ * Generated: 2026-08-25T23:54:02.674042643Z
  */
 var __provider = (() => {
   var __create = Object.create;

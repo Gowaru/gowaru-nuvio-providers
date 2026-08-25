@@ -1,6 +1,6 @@
 /**
  * animesultra - Built from src/animesultra/
- * Generated: 2026-08-25T23:37:03.285023256Z
+ * Generated: 2026-08-25T23:54:01.896041836Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12573,8 +12573,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.me/";
-        const tldVariants = ["biz", "me", "net", "to", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
+        const tldVariants = ["to", "net", "ru", "is"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -12588,7 +12588,8 @@ var __provider = (() => {
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
             let html = yield res.text();
-            if (html.length < 500 || html.includes("finisheddaysflamboyant")) continue;
+            const hasJsRedirect = /window\.location\.replace/.test(html);
+            if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
             if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
@@ -13322,7 +13323,7 @@ var __provider = (() => {
       KNOWN_HOST_NAMES = [
         { name: "streamtape", domain: "streamtape.com" },
         { name: "sibnet", domain: "sibnet.ru" },
-        { name: "vidmoly", domain: "vidmoly.biz" },
+        { name: "vidmoly", domain: "vidmoly.to" },
         { name: "uqload", domain: "uqload.co" },
         { name: "voe", domain: "voe.sx" },
         { name: "dood", domain: "dood.to" },

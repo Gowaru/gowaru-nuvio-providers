@@ -1068,13 +1068,13 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        // Support all known vidmoly TLDs: .net, .to, .ru, .is, .biz, .me
-        // Try original URL FIRST (avoids dead .me which returns 404+ads)
+        // Support all known vidmoly TLDs: .to, .biz, .net, .ru, .is, .me
+        // vidmoly.to is the active domain; .biz and .me are dead
         const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || '';
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.me/';
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.to/';
 
-        // Try all possible domains: original first, then alternative TLDs
-        const tldVariants = ['biz', 'me', 'net', 'to', 'ru', 'is'];
+        // Priority: original domain first, then to, net, ru (skip dead .biz and .me)
+        const tldVariants = ['to', 'net', 'ru', 'is'];
         const domains = [url]; // Original domain first
         for (const tld of tldVariants) {
             const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -1090,7 +1090,9 @@ export async function resolveVidmoly(url) {
                 if (!res || !res.ok) continue;
                 let html = await res.text();
                 // Skip if response is ad/404 page (short or contains ad scripts)
-                if (html.length < 500 || html.includes('finisheddaysflamboyant')) continue;
+                // But allow JWT redirect pages (contain window.location.replace) even if short
+                const hasJsRedirect = /window\.location\.replace/.test(html);
+                if ((html.length < 500 && !hasJsRedirect) || html.includes('finisheddaysflamboyant')) continue;
                 
                 if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
@@ -1099,6 +1101,8 @@ export async function resolveVidmoly(url) {
                               html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
                 if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
 
+                // Vidmoly uses JWT redirect: window.location.replace('URL?ch=1&js=JWT')
+                // Follow the redirect and try again
                 const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
                                    html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
                 if (jsRedirect && jsRedirect[1] !== fetchUrl) {
@@ -1631,7 +1635,7 @@ export async function resolveUp4fun(url) {
 const KNOWN_HOST_NAMES = [
     { name: 'streamtape', domain: 'streamtape.com' },
     { name: 'sibnet', domain: 'sibnet.ru' },
-    { name: 'vidmoly', domain: 'vidmoly.biz' },
+    { name: 'vidmoly', domain: 'vidmoly.to' },
     { name: 'uqload', domain: 'uqload.co' },
     { name: 'voe', domain: 'voe.sx' },
     { name: 'dood', domain: 'dood.to' },
