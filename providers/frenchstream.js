@@ -1,6 +1,6 @@
 /**
  * frenchstream - Built from src/frenchstream/
- * Generated: 2026-08-25T22:46:20.888980833Z
+ * Generated: 2026-08-25T23:37:03.534023495Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -13925,6 +13925,34 @@ var __provider = (() => {
       }
     });
   }
+  function fetchPost(_0, _1) {
+    return __async(this, arguments, function* (url, body, options = {}) {
+      const signal = options.signal || _currentSignal;
+      if (isAborted(signal)) throw new Error("AbortError: Request aborted");
+      yield rateLimit(DOMAIN);
+      console.log(`[Frenchstream] POST: ${url}`);
+      const base = options.baseUrl || (() => {
+        try {
+          return new URL(url).origin;
+        } catch (e) {
+          return BASE_URL;
+        }
+      })();
+      const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
+      const mergedHeaders = __spreadValues(__spreadProps(__spreadValues({}, HEADERS2), {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: `${base}/`,
+        Origin: base
+      }), options.headers || {});
+      const _a = options, { baseUrl, headers } = _a, restOptions = __objRest(_a, ["baseUrl", "headers"]);
+      const res = yield safeFetch(url, __spreadProps(__spreadValues({ method: "POST", body, headers: mergedHeaders }, restOptions), { timeout, signal }));
+      if (!res || !res.ok) {
+        const status = res && typeof res.status === "number" ? res.status : "no-response";
+        throw new Error(`HTTP error ${status} for POST ${url}`);
+      }
+      return yield res.text();
+    });
+  }
   var rateLimit, _currentSignal, DOMAIN, BASE_URLS, BASE_URL, GLOBAL_TIMEOUT_MS, HEADERS2;
   var init_http = __esm({
     "src/frenchstream/http.js"() {
@@ -14111,7 +14139,14 @@ var __provider = (() => {
         if (!title) return;
         const onclick = $card.find(".info-button").attr("onclick") || "";
         const dataId = $card.find("[data-id]").first().attr("data-id") || $card.attr("data-id") || "";
-        const newsId = pickNewsId(onclick, hrefRaw) || dataId;
+        let newsId = pickNewsId(onclick, hrefRaw) || dataId;
+        if (!newsId) {
+          $card.find("a[href]").each((_2, el) => {
+            if (newsId) return;
+            const h = $(el).attr("href") || "";
+            newsId = pickNewsId("", h);
+          });
+        }
         if (!newsId) return;
         if (cards.some((c) => c.newsId === newsId)) return;
         cards.push({ newsId, href, title, isSeries: isSeriesCard($card, href, title), baseUrl });
@@ -14142,7 +14177,7 @@ var __provider = (() => {
     if (t === q) score += 120;
     if (hay.includes(q)) {
       score += 70;
-      const extra = countExtraWords(hay, q);
+      const extra = countExtraWords(t, q);
       if (extra > 0) score -= Math.min(extra * 25, 55);
     }
     if (q.includes(t)) score += 40;
@@ -14167,13 +14202,21 @@ var __provider = (() => {
     }
     return score;
   }
+  function extractSerieTag(html) {
+    const tagMatch = html.match(/sd-tagz[^>]*>[\s\S]*?(s-[A-Za-z0-9_-]+)/);
+    if (tagMatch) return tagMatch[1];
+    const dataTagMatch = html.match(/data-tagz=["']([^"']+)/);
+    if (dataTagMatch) return dataTagMatch[1];
+    return null;
+  }
   function searchByTitle(title, mediaType, season) {
     return __async(this, null, function* () {
       const allCards = [];
       const results = yield Promise.allSettled(
         BASE_URLS.map((baseUrl) => {
-          const url = baseUrl + "/index.php?do=search&subaction=search&story=" + encodeURIComponent(title);
-          return fetchText(url, { baseUrl }).then((html) => parseSearchCards(html, baseUrl));
+          const url = baseUrl + "/index.php";
+          const body = "do=search&subaction=search&story=" + encodeURIComponent(title);
+          return fetchPost(url, body, { baseUrl }).then((html) => parseSearchCards(html, baseUrl));
         })
       );
       for (const r of results) {
@@ -14247,8 +14290,13 @@ var __provider = (() => {
   function fetchSeasons(tmdbId) {
     return __async(this, null, function* () {
       const tag = "s-" + tmdbId;
-      const url = BASE_URL + "/engine/ajax/get_seasons.php?serie_tag=" + tag + "&news_id=0";
-      return withCache("seasons_" + tmdbId, () => __async(null, null, function* () {
+      return fetchSeasonsRaw(tag, tmdbId);
+    });
+  }
+  function fetchSeasonsRaw(tag, cacheKey) {
+    return __async(this, null, function* () {
+      const url = BASE_URL + "/engine/ajax/get_seasons.php?serie_tag=" + encodeURIComponent(tag) + "&news_id=0";
+      return withCache("seasons_" + (cacheKey || tag), () => __async(null, null, function* () {
         const data = yield fetchJson(url, { baseUrl: BASE_URL });
         if (!Array.isArray(data)) return [];
         return data;
@@ -14491,11 +14539,57 @@ var __provider = (() => {
       if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return [];
       if (mediaType === "tv") {
         const targetEpisodes = yield resolveTargetEpisodes(tmdbId, mediaType, season, episode);
-        let seasons = [];
+        let serieTag = null;
+        let firstSeasonNewsId = null;
         try {
-          seasons = yield fetchSeasons(tmdbId);
+          for (const title of buildTitleQueries(titles)) {
+            const ranked = yield searchByTitle(title, "tv", effectiveSeason);
+            if (ranked.length > 0 && ranked[0]._score >= MIN_MATCH_SCORE) {
+              const card = ranked[0];
+              const pageHtml = yield fetchText(card.href || card.baseUrl + "/index.php?newsid=" + card.newsId, { baseUrl: card.baseUrl || BASE_URL, timeout: 1e4 });
+              serieTag = extractSerieTag(pageHtml);
+              const firstSeasonMatch = pageHtml.match(/data-news-id=["']?(\d+)/);
+              if (firstSeasonMatch) firstSeasonNewsId = firstSeasonMatch[1];
+              if (serieTag) {
+                console.log("[Frenchstream] Extracted serie_tag: " + serieTag + " from search");
+                break;
+              }
+            }
+          }
         } catch (e) {
-          console.warn(`[Frenchstream] fetchSeasons failed: ${e.message}`);
+          console.warn("[Frenchstream] Serie tag extraction failed: " + e.message);
+        }
+        let seasons = [];
+        if (serieTag) {
+          try {
+            seasons = yield fetchSeasonsRaw(serieTag);
+          } catch (e) {
+            console.warn(`[Frenchstream] fetchSeasons(tag=${serieTag}) failed: ${e.message}`);
+          }
+        }
+        if (seasons.length === 0) {
+          try {
+            seasons = yield fetchSeasons(tmdbId);
+          } catch (e) {
+            console.warn(`[Frenchstream] fetchSeasons(tmdbId=${tmdbId}) failed: ${e.message}`);
+          }
+        }
+        if (seasons.length === 0 && firstSeasonNewsId) {
+          try {
+            const epData = yield fetchEpisodeData(firstSeasonNewsId);
+            if (epData) {
+              for (const ep of targetEpisodes) {
+                const candidates = collectTvSiteCandidates(epData, ep, subType);
+                if (candidates.length > 0) {
+                  const streams = yield resolveCandidates(candidates);
+                  console.log("[Frenchstream] Direct eps " + firstSeasonNewsId + ": " + candidates.length + " candidates, " + streams.length + " streams (ep=" + ep + ")");
+                  return streams;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("[Frenchstream] Direct episode data failed: " + e.message);
+          }
         }
         if (seasons.length > 0) {
           const sn = Number(effectiveSeason) || 1;

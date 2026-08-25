@@ -1,6 +1,6 @@
 /**
  * coflix - Built from src/coflix/
- * Generated: 2026-08-25T22:46:20.627980572Z
+ * Generated: 2026-08-25T23:37:03.396023359Z
  */
 var __provider = (() => {
   var __create = Object.create;
