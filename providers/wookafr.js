@@ -1,6 +1,6 @@
 /**
  * wookafr - Built from src/wookafr/
- * Generated: 2026-08-25T21:28:14.561294519Z
+ * Generated: 2026-08-25T21:55:21.170921128Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -1127,28 +1127,47 @@ var __provider = (() => {
   }
   function resolveLecteurVideo(url) {
     return __async(this, null, function* () {
-      var _a;
+      var _a, _b;
       try {
         const origin = ((_a = url.match(/^https?:\/\/[^/]+/)) == null ? void 0 : _a[0]) || "https://lecteurvideo.com";
-        const res = yield safeFetch(url, { headers: { "Referer": origin + "/", "Origin": origin } });
+        const refParam = ((_b = url.match(/[?&]url=([^&]+)/)) == null ? void 0 : _b[1]) || "";
+        const referrerMap = {
+          "wookafr.tel": "https://wookafr.center",
+          "wookafr.to": "https://wookafr.center",
+          "wookafr.app": "https://wookafr.center",
+          "wookafr.fyi": "https://wookafr.center"
+        };
+        const referer = referrerMap[refParam] || `https://${refParam}` || origin + "/";
+        const res = yield safeFetch(url, {
+          headers: { "Referer": referer, "Origin": referer.replace(/\/$/, "") },
+          timeout: 12e3
+        });
         if (!res) return { url };
         let html = yield res.text();
         if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
-        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/['"]?url['"]?\s*[:=]\s*['"]([^"']+\/videos\/[^"']+\.[^"']+)['"]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-        if (match) {
-          let videoUrl = match[1] || match[0];
+        const directMatch = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+        if (directMatch) {
+          let videoUrl = directMatch[1];
           if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
           if (!isKnownFakeDirectUrl(videoUrl)) {
             return { url: videoUrl, headers: { "Referer": origin + "/" } };
           }
         }
+        const hostPriority = ["filemoon.sx", "voe.sx", "veev.to", "listeamed.net", "dood.to", "sibnet.ru", "sendvid.com"];
+        const allUrls = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)].map((m) => m[1]).concat([...html.matchAll(/["'](https?:\/\/[^"']+)["']/gi)].map((m) => m[1])).filter((u) => !u.includes("lecteurvideo.com") && !u.includes("youtube.com") && !u.includes("googlevideo.com") && !u.includes("fonts.googleapis.com") && !u.includes("jsdelivr.net") && !u.includes("cloudflareinsights.com") && !u.includes("themoviedb.org") && !u.includes("imagizer.imageshack.com"));
+        for (const host of hostPriority) {
+          const found = allUrls.find((u) => u.includes(host));
+          if (found) return { url: found, headers: { "Referer": origin + "/" } };
+        }
         const iframeMatch = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
         if (iframeMatch) {
           const iframeSrc = iframeMatch[1];
-          if (!iframeSrc.includes("lecteurvideo.com") && !iframeSrc.includes("youtube.com") && !iframeSrc.includes("googlevideo.com")) {
+          if (!iframeSrc.includes("lecteurvideo.com") && !iframeSrc.includes("youtube.com")) {
             return { url: iframeSrc, headers: { "Referer": origin + "/" } };
           }
         }
+        const downloadLink = allUrls.find((u) => u.includes("1fichier.com") || u.includes("megaup.net") || u.includes("filemoon") || u.includes("voe.sx") || u.includes("veev.to") || u.includes("listeamed.net"));
+        if (downloadLink) return { url: downloadLink, headers: { "Referer": origin + "/" } };
       } catch (e) {
       }
       return { url };
@@ -1543,9 +1562,9 @@ var __provider = (() => {
   var init_config = __esm({
     "src/wookafr/config.js"() {
       SITE = {
-        BASE_URL: "https://wookafr.cymru",
-        DOMAINS: ["https://wookafr.cymru", "https://wookafr.fyi", "https://wookafr.app", "https://wookafr.to"],
-        DOMAIN: "wookafr.cymru"
+        BASE_URL: "https://wookafr.center",
+        DOMAINS: ["https://wookafr.center", "https://wookafr.cymru", "https://wookafr.fyi", "https://wookafr.bond", "https://wookafr.blue"],
+        DOMAIN: "wookafr.center"
       };
       ENDPOINTS = {
         SEARCH: `${SITE.BASE_URL}/?s=`,
@@ -1575,10 +1594,10 @@ var __provider = (() => {
         SM_PUBLIC: /sm_Public\s*=\s*\{[^}]*?url\s*:\s*["']([^"']+)["'][^}]*?nonce\s*:\s*["']([^"']+)["']/
       };
       TIMEOUTS = {
-        SEARCH: 5e3,
-        PAGE: 6e3,
-        AJAX: 5e3,
-        RESOLVE: 8e3,
+        SEARCH: 8e3,
+        PAGE: 12e3,
+        AJAX: 8e3,
+        RESOLVE: 12e3,
         PROVIDER: 6e4
       };
       SCORES = {
@@ -14468,7 +14487,7 @@ var __provider = (() => {
         const quality = detectQuality(iframeUrl, match.title);
         console.log(`[Wookafr] Iframe: ${iframeUrl} [${lang}]`);
         const stream = toStream(iframeUrl, lang, "Wookafr", SITE.BASE_URL, { quality, subType });
-        const resolved = yield withTimeout(resolveStream(stream), 8e3);
+        const resolved = yield withTimeout(resolveStream(stream), 15e3);
         if (resolved && resolved.url) return [__spreadProps(__spreadValues({}, resolved), { provider: "wookafr" })];
       } catch (e) {
         console.warn(`[Wookafr] Movie extraction failed: ${e.message}`);
@@ -14498,7 +14517,7 @@ var __provider = (() => {
             const lang2 = detectLanguage(match.url, seriesHtml);
             const quality2 = detectQuality(iframeUrl2, match.title);
             const stream2 = toStream(iframeUrl2, lang2, "Wookafr", SITE.BASE_URL, { quality: quality2, subType });
-            const resolved2 = yield withTimeout(resolveStream(stream2), 8e3);
+            const resolved2 = yield withTimeout(resolveStream(stream2), 15e3);
             if (resolved2 && resolved2.url) return [__spreadProps(__spreadValues({}, resolved2), { provider: "wookafr" })];
           }
           return [];

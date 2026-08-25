@@ -1,6 +1,6 @@
 /**
  * voiranime-rip - Built from src/voiranime-rip/
- * Generated: 2026-08-25T21:28:14.442294398Z
+ * Generated: 2026-08-25T21:55:21.050920995Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12933,28 +12933,47 @@ var __provider = (() => {
   }
   function resolveLecteurVideo(url) {
     return __async(this, null, function* () {
-      var _a;
+      var _a, _b;
       try {
         const origin = ((_a = url.match(/^https?:\/\/[^/]+/)) == null ? void 0 : _a[0]) || "https://lecteurvideo.com";
-        const res = yield safeFetch(url, { headers: { "Referer": origin + "/", "Origin": origin } });
+        const refParam = ((_b = url.match(/[?&]url=([^&]+)/)) == null ? void 0 : _b[1]) || "";
+        const referrerMap = {
+          "wookafr.tel": "https://wookafr.center",
+          "wookafr.to": "https://wookafr.center",
+          "wookafr.app": "https://wookafr.center",
+          "wookafr.fyi": "https://wookafr.center"
+        };
+        const referer = referrerMap[refParam] || `https://${refParam}` || origin + "/";
+        const res = yield safeFetch(url, {
+          headers: { "Referer": referer, "Origin": referer.replace(/\/$/, "") },
+          timeout: 12e3
+        });
         if (!res) return { url };
         let html = yield res.text();
         if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
-        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/['"]?url['"]?\s*[:=]\s*['"]([^"']+\/videos\/[^"']+\.[^"']+)['"]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-        if (match) {
-          let videoUrl = match[1] || match[0];
+        const directMatch = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+        if (directMatch) {
+          let videoUrl = directMatch[1];
           if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
           if (!isKnownFakeDirectUrl(videoUrl)) {
             return { url: videoUrl, headers: { "Referer": origin + "/" } };
           }
         }
+        const hostPriority = ["filemoon.sx", "voe.sx", "veev.to", "listeamed.net", "dood.to", "sibnet.ru", "sendvid.com"];
+        const allUrls = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)].map((m) => m[1]).concat([...html.matchAll(/["'](https?:\/\/[^"']+)["']/gi)].map((m) => m[1])).filter((u) => !u.includes("lecteurvideo.com") && !u.includes("youtube.com") && !u.includes("googlevideo.com") && !u.includes("fonts.googleapis.com") && !u.includes("jsdelivr.net") && !u.includes("cloudflareinsights.com") && !u.includes("themoviedb.org") && !u.includes("imagizer.imageshack.com"));
+        for (const host of hostPriority) {
+          const found = allUrls.find((u) => u.includes(host));
+          if (found) return { url: found, headers: { "Referer": origin + "/" } };
+        }
         const iframeMatch = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
         if (iframeMatch) {
           const iframeSrc = iframeMatch[1];
-          if (!iframeSrc.includes("lecteurvideo.com") && !iframeSrc.includes("youtube.com") && !iframeSrc.includes("googlevideo.com")) {
+          if (!iframeSrc.includes("lecteurvideo.com") && !iframeSrc.includes("youtube.com")) {
             return { url: iframeSrc, headers: { "Referer": origin + "/" } };
           }
         }
+        const downloadLink = allUrls.find((u) => u.includes("1fichier.com") || u.includes("megaup.net") || u.includes("filemoon") || u.includes("voe.sx") || u.includes("veev.to") || u.includes("listeamed.net"));
+        if (downloadLink) return { url: downloadLink, headers: { "Referer": origin + "/" } };
       } catch (e) {
       }
       return { url };

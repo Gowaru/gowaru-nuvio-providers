@@ -1493,41 +1493,68 @@ export async function resolvePackedPlayer(url) {
 }
 
 export async function resolveLecteurVideo(url) {
-    // lecteurvideo.com: embed player WordPress/WP theme.
+    // lecteurvideo.com: aggrégateur de liens vidéo (ex: wookafr → lecteurvideo → filemoon/voe).
     // Format: /embed.php?id={id}&tp={type}&url={referrer}
     // Le paramètre `url` est le nom du site référant (ex: wookafr.tel).
-    // La page contient généralement un player JS avec l'URL vidéo encodée.
+    // La page contient des liens vers des hébergeurs (filemoon, voe, veev, etc.).
     try {
         const origin = url.match(/^https?:\/\/[^/]+/)?.[0] || 'https://lecteurvideo.com';
-        const res = await safeFetch(url, { headers: { 'Referer': origin + '/', 'Origin': origin } });
+        // Mapping referrer → domaine de travail (wookafr.tel → wookafr.center)
+        const refParam = url.match(/[?&]url=([^&]+)/)?.[1] || '';
+        const referrerMap = {
+            'wookafr.tel': 'https://wookafr.center',
+            'wookafr.to': 'https://wookafr.center',
+            'wookafr.app': 'https://wookafr.center',
+            'wookafr.fyi': 'https://wookafr.center',
+        };
+        const referer = referrerMap[refParam] || `https://${refParam}` || origin + '/';
+        const res = await safeFetch(url, {
+            headers: { 'Referer': referer, 'Origin': referer.replace(/\/$/, '') },
+            timeout: 12000,
+        });
         if (!res) return { url };
         let html = await res.text();
         if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
-        // Recherche dans l'ordre : file:, sources:, src:, puis URLs directes m3u8/mp4
-        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+        // 1. Chercher des URLs vidéo directes (m3u8/mp4) — ancien format
+        const directMatch = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                       html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                       html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
-                      html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
-                      html.match(/['"]?url['"]?\s*[:=]\s*['"]([^"']+\/videos\/[^"']+\.[^"']+)['"]/i) ||
-                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-
-        if (match) {
-            let videoUrl = match[1] || match[0];
+                      html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+        if (directMatch) {
+            let videoUrl = directMatch[1];
             if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
             if (!isKnownFakeDirectUrl(videoUrl)) {
                 return { url: videoUrl, headers: { 'Referer': origin + '/' } };
             }
         }
 
-        // Chercher un iframe vers un autre hébergeur (sibnet, sendvid, etc.)
+        // 2. Nouveau format : extraire les liens hébergeurs (filemoon, voe, veev, etc.)
+        const hostPriority = ['filemoon.sx', 'voe.sx', 'veev.to', 'listeamed.net', 'dood.to', 'sibnet.ru', 'sendvid.com'];
+        const allUrls = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1])
+            .concat([...html.matchAll(/["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1]))
+            .filter(u => !u.includes('lecteurvideo.com') && !u.includes('youtube.com') &&
+                         !u.includes('googlevideo.com') && !u.includes('fonts.googleapis.com') &&
+                         !u.includes('jsdelivr.net') && !u.includes('cloudflareinsights.com') &&
+                         !u.includes('themoviedb.org') && !u.includes('imagizer.imageshack.com'));
+        // Trier par priorité des hébergeurs connus
+        for (const host of hostPriority) {
+            const found = allUrls.find(u => u.includes(host));
+            if (found) return { url: found, headers: { 'Referer': origin + '/' } };
+        }
+        // 3. Chercher un iframe vers un autre hébergeur
         const iframeMatch = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
         if (iframeMatch) {
             const iframeSrc = iframeMatch[1];
-            if (!iframeSrc.includes('lecteurvideo.com') && !iframeSrc.includes('youtube.com') && !iframeSrc.includes('googlevideo.com')) {
+            if (!iframeSrc.includes('lecteurvideo.com') && !iframeSrc.includes('youtube.com')) {
                 return { url: iframeSrc, headers: { 'Referer': origin + '/' } };
             }
         }
+        // 4. Retourner le premier lien non-tracké
+        const downloadLink = allUrls.find(u =>
+            u.includes('1fichier.com') || u.includes('megaup.net') || u.includes('filemoon') ||
+            u.includes('voe.sx') || u.includes('veev.to') || u.includes('listeamed.net'));
+        if (downloadLink) return { url: downloadLink, headers: { 'Referer': origin + '/' } };
     } catch (e) {}
     return { url };
 }
