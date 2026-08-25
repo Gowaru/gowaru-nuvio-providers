@@ -1532,19 +1532,35 @@ export async function resolveLecteurVideo(url) {
             }
         }
 
-        // 2. Nouveau format : extraire les liens hébergeurs (filemoon, voe, veev, etc.)
-        const hostPriority = ['filemoon.sx', 'voe.sx', 'veev.to', 'listeamed.net', 'dood.to', 'sibnet.ru', 'sendvid.com'];
+        // 2. Nouveau format : extraire TOUS les liens externes
         const allUrls = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1])
             .concat([...html.matchAll(/["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1]))
             .filter(u => !u.includes('lecteurvideo.com') && !u.includes('youtube.com') &&
                          !u.includes('googlevideo.com') && !u.includes('fonts.googleapis.com') &&
                          !u.includes('jsdelivr.net') && !u.includes('cloudflareinsights.com') &&
-                         !u.includes('themoviedb.org') && !u.includes('imagizer.imageshack.com'));
-        // Trier par priorité des hébergeurs connus
-        for (const host of hostPriority) {
+                         !u.includes('themoviedb.org') && !u.includes('imagizer.imageshack.com') &&
+                         !u.includes('cloudflare') && !u.includes('plyr.'));
+
+        // 2a. PRIORITÉ MAX: URLs directes avec extension vidéo (.mp4/.m3u8/.mkv/.webm)
+        const DIRECT_VIDEO_RE = /^https?:\/\/[^"']+\.(?:m3u8|mp4|mkv|webm)(?:\?[^"']*)?$/i;
+        const directVideo = allUrls.find(u => DIRECT_VIDEO_RE.test(u) && !isKnownFakeDirectUrl(u));
+        if (directVideo) return { url: directVideo, headers: { 'Referer': origin + '/' } };
+
+        // 2b. URLs directes des hébergeurs de download (megaup, 1fichier)
+        //     megaup.net/.../file.mp4 est souvent une URL directe jouable
+        const directHosts = ['megaup.net', '1fichier.com'];
+        for (const host of directHosts) {
             const found = allUrls.find(u => u.includes(host));
             if (found) return { url: found, headers: { 'Referer': origin + '/' } };
         }
+
+        // 2c. Fallback: hébergeurs SPA connus (filemoon, voe, etc.) — moins fiables
+        const spaHosts = ['sibnet.ru', 'sendvid.com', 'dood.to', 'listeamed.net', 'voe.sx', 'veev.to', 'filemoon.sx'];
+        for (const host of spaHosts) {
+            const found = allUrls.find(u => u.includes(host));
+            if (found) return { url: found, headers: { 'Referer': origin + '/' } };
+        }
+
         // 3. Chercher un iframe vers un autre hébergeur
         const iframeMatch = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
         if (iframeMatch) {

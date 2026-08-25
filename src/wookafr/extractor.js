@@ -514,7 +514,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
     console.log(`[Wookafr] Iframe: ${iframeUrl} [${lang}]`)
     const stream = toStream(iframeUrl, lang, 'Wookafr', SITE.BASE_URL, { quality, subType })
-    const resolved = await withTimeout(resolveStream(stream), 8000)
+    const resolved = await withTimeout(resolveStream(stream), 20000)
     if (resolved && resolved.url) return [{ ...resolved, provider: 'wookafr' }]
   } catch (e) {
     console.warn(`[Wookafr] Series extraction failed: ${e.message}`)
