@@ -5,7 +5,7 @@
 
 import { fetchText, setCurrentSignal } from "./http.js";
 import cheerio from "cheerio-without-node-native";
-import { resolveStream, isBudgetExhausted, sanitizeSearchQuery, sortStreamsByLanguage, sleep, fetchWithRetry, isAborted, safeFetch } from "../utils/resolvers.js";
+import { resolveStream, isBudgetExhausted, sanitizeSearchQuery, sortStreamsByLanguage, sleep, fetchWithRetry, isAborted, safeFetch, USER_AGENT } from "../utils/resolvers.js";
 import { toSlug, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from "../utils/metadata.js";
 
@@ -554,7 +554,7 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
           title: `Default Player - ${lang}`,
           quality: "HD",
           url: iframe,
-          headers: { Referer: BASE_URL, Origin: BASE_URL, "User-Agent": "Mozilla/5.0" },
+          headers: { Referer: BASE_URL, Origin: BASE_URL, "User-Agent": USER_AGENT },
         });
         if (stream) return [stream];
       }
@@ -669,7 +669,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
   const streams = [];
   const checkedUrls = new Set();
-  const streamHeaders = { Referer: BASE_URL, Origin: BASE_URL, "User-Agent": "Mozilla/5.0" };
+  const streamHeaders = { Referer: BASE_URL, Origin: BASE_URL, "User-Agent": USER_AGENT };
 
   for (const match of matches) {
     if (isBudgetExhausted(startTime, BUDGET_MS)) break;

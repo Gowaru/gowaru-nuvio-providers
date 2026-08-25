@@ -1,7 +1,7 @@
 import { stripSeasonSuffix, normalize, resolveTargetEpisodes, toStream } from '../utils/dle-extractor.js';
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://ww.animesultra.org";
@@ -90,7 +90,7 @@ async function searchAnimeInner(title, now) {
         const searchUrl = `${BASE_URL}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
         const html = await fetchText(searchUrl, {
             timeout: 8000,
-            headers: { "User-Agent": "Mozilla/5.0" }
+            headers: { "User-Agent": USER_AGENT }
         });
         const $ = cheerio.load(html);
 
@@ -231,7 +231,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         try {
             const sf = await safeFetch(`${BASE_URL}/engine/ajax/full-story.php?newsId=${newsId}`, {
                 timeout: 10000,
-                headers: { "User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest" }
+                headers: { "User-Agent": USER_AGENT, "X-Requested-With": "XMLHttpRequest" }
             });
             if (sf) {
                 const d = await sf.json();
@@ -257,7 +257,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     };
 
     const fetchEpisodeServers = async (epHref, $context, lang) => {
-        const epRes = await safeFetch(epHref, { timeout: 10000, headers: { "User-Agent": "Mozilla/5.0" }});
+        const epRes = await safeFetch(epHref, { timeout: 10000, headers: { "User-Agent": USER_AGENT }});
         if (!epRes || !epRes.ok) {
             console.log(`[AnimesUltra] Episode page not OK (${epRes?.status}) for ${epHref}`);
             return [];

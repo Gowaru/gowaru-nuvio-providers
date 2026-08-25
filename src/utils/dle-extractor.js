@@ -210,7 +210,7 @@ export async function detectSubType(tmdbId, mediaType) {
  * @param {string} [opts.title] - Titre personnalisé (remplace le format par défaut)
  */
 export function toStream(url, language, providerName, siteUrl, opts = {}) {
-  const { quality, subType, title } = opts;
+  const { quality, subType, title, size } = opts;
   const origin = (() => { try { return new URL(url).origin } catch { return siteUrl } })()
   const result = {
     name: `${providerName} (${language})`,
@@ -221,10 +221,11 @@ export function toStream(url, language, providerName, siteUrl, opts = {}) {
     headers: {
       Referer: `${origin}/`,
       Origin: origin,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
     },
   }
   if (subType) result.subType = subType
+  if (size) result.size = size
   return result
 }
 

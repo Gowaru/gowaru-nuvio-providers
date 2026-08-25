@@ -216,6 +216,40 @@ const _atob = (str) => {
     catch (e) { return str; }
 };
 
+/**
+ * Formate une taille en octets vers une chaîne lisible parsable par NuvioTV
+ * (regex: \d+(,\d+)?\s*(TB|GB|MB|KB)).
+ * @param {number} bytes
+ * @returns {string|null}
+ */
+export function formatSizeBytes(bytes) {
+    if (!bytes || bytes <= 0) return null;
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${Math.round(gb * 10) / 10} GB`;
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1) return `${Math.round(mb * 10) / 10} MB`;
+    const kb = bytes / 1024;
+    return `${Math.round(kb)} KB`;
+}
+
+/**
+ * Récupère la taille d'une vidéo via une requête HEAD (Content-Length).
+ * Retourne une chaîne formatée ex. "1.4 GB" ou null si indisponible.
+ * @param {string} url
+ * @param {object} [headers]
+ * @returns {Promise<string|null>}
+ */
+export async function fetchVideoSize(url, headers = {}) {
+    if (!url) return null;
+    try {
+        const res = await safeFetch(url, { method: 'HEAD', headers, timeout: 5000 });
+        if (!res || !res.ok) return null;
+        const cl = res.headers['content-length'];
+        if (!cl) return null;
+        return formatSizeBytes(Number(cl));
+    } catch { return null; }
+}
+
 const CODEC_PREFERENCE = ['AV1', 'H.265', 'H.264', 'VP9'];
 
 
@@ -492,6 +526,74 @@ function inferType(url) {
     return null;
 }
 
+/**
+ * Construit un champ quality enrichi avec les tokens debrid (codec, audio, HDR)
+ * pour que le filtrage debrid de NuvioTV puisse les extraire via streamSearchText().
+ * Ex: "1080p" + codec H.265 + audio AAC → "1080p H.265 AAC"
+ * @param {object} stream - stream avec quality, codec, audioCodec optionnels
+ * @returns {string} quality enrichie
+ */
+function buildEnrichedQuality(stream) {
+    const base = normalizeQualityLabel(stream.quality || 'HD');
+    const parts = [base];
+    // Codec vidéo (depuis HLS expansion ou metadata)
+    if (stream.codec) {
+        const c = String(stream.codec).toUpperCase();
+        if (c && !base.toUpperCase().includes(c)) parts.push(c);
+    }
+    // Codec audio (depuis HLS expansion)
+    if (stream.audioCodec) {
+        const a = String(stream.audioCodec).toUpperCase();
+        if (a && !parts.some(p => p.toUpperCase() === a)) parts.push(a);
+    }
+    return parts.join(' ');
+}
+
+/**
+ * Enrichit la taille avec les métadonnées de qualité pour que le champ
+ * description (= size dans Stream TV) aide le filtrage debrid.
+ * Ex: "1.4 GB" + quality "1080p H.265" → "1.4 GB H.265"
+ * @param {string} size - taille formatée (ex: "1.4 GB")
+ * @param {object} stream - stream avec codec, quality
+ * @returns {string} taille enrichie
+ */
+function formatSizeWithMetadata(size, stream) {
+    if (!size) return size;
+    const extras = [];
+    if (stream.codec) extras.push(String(stream.codec).toUpperCase());
+    if (stream.audioCodec) extras.push(String(stream.audioCodec).toUpperCase());
+    if (extras.length === 0) return size;
+    return `${size} ${extras.join(' ')}`;
+}
+
+/**
+ * Codes de langue compris par NuvioTV/NuvioMobile (DebridStreamLanguage).
+ * L'app compare `language` à ces codes (ou labels anglais) pour les filtres
+ * et le tri ; des valeurs comme "VOSTFR"/"VF" sont classées "Unknown".
+ */
+const LANGUAGE_CODE_MAP = {
+    VF: 'fr', VFQ: 'fr', VFF: 'fr', VFI: 'fr', VFK: 'fr', FRA: 'fr', FR: 'fr', FRENCH: 'fr', 'FRANÇAIS': 'fr',
+    VOSTFR: 'fr', VOSTF: 'fr', VOST: 'fr', SUBF: 'fr',
+    MULTI: 'multi', FAN: 'multi',
+    EN: 'en', ENG: 'en', ENGLISH: 'en', VOA: 'en',
+    VO: 'ja', JA: 'ja', JP: 'ja', JAP: 'ja', JAPANESE: 'ja', VOSTA: 'ja',
+};
+
+/**
+ * Normalise un label de langue brut (VF, VOSTFR, Multi...) vers un code
+ * compris par les apps Nuvio (fr/en/multi/ja). Valeur inconnue → minuscule.
+ * @param {string|null} raw
+ * @returns {string|null}
+ */
+export function normalizeLanguageCode(raw) {
+    if (!raw) return null;
+    const key = String(raw).trim().toUpperCase();
+    if (!key) return null;
+    if (LANGUAGE_CODE_MAP[key]) return LANGUAGE_CODE_MAP[key];
+    const lower = key.toLowerCase();
+    return lower;
+}
+
 function inferLanguage(stream) {
     if (stream.language) return stream.language;
     const name = stream.name || '';
@@ -645,8 +747,9 @@ export async function expandStreamQualities(streams, options = {}) {
     for (const stream of expanded) {
         if (!stream?.url) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        // Dedup by URL + language: keep streams with same URL but different languages
-        const dedupKey = `${stream.url}|${stream.language || ''}`;
+        // Dedup by URL + normalized language: keep streams with same URL but different languages
+        const dedupLang = normalizeLanguageCode(stream.language || inferLanguage(stream)) || stream.language || '';
+        const dedupKey = `${stream.url}|${dedupLang}`;
         if (seen.has(dedupKey)) continue;
         seen.add(dedupKey);
         deduped.push(stream);
@@ -654,11 +757,48 @@ export async function expandStreamQualities(streams, options = {}) {
 
     let sorted = sortStreams(deduped);
 
-    sorted = sorted.map(s => ({
-        ...s,
-        type: s.type || inferType(s.url),
-        language: inferLanguage(s) || s.language || null,
-    }));
+    sorted = sorted.map(s => {
+        const rawLang = inferLanguage(s) || s.language || null;
+        const lang = normalizeLanguageCode(rawLang);
+        const baseTitle = s.title || s.name;
+        let title = s.title;
+        // Conserver le label FR (VF/VOSTFR...) dans le titre si absent :
+        // utile pour l'affichage et sortStreamsByLanguage()
+        if (rawLang && lang && baseTitle &&
+            String(rawLang).toUpperCase() !== lang.toUpperCase() &&
+            !baseTitle.toUpperCase().includes(String(rawLang).toUpperCase())) {
+            title = `${baseTitle} [${String(rawLang).toUpperCase()}]`;
+        }
+        // Enrichir quality avec tokens debrid (codec/audio) si disponibles
+        // depuis l'expansion HLS. Le debrid filter de NuvioTV parse ces tokens
+        // depuis streamSearchText() qui inclut stream.quality.
+        const enrichedQuality = buildEnrichedQuality(s);
+        return {
+            ...s,
+            ...(title !== s.title ? { title } : {}),
+            ...(enrichedQuality !== s.quality ? { quality: enrichedQuality } : {}),
+            type: s.type || inferType(s.url),
+            language: lang,
+        };
+    });
+
+    // Lazy size enrichment : requête HEAD sur les URLs directes (.mp4/.mkv/.webm)
+    // pour fournir la taille aux filtres/tri NuvioTV. Parallélisé, max 5 simultanées.
+    // La taille est enrichie avec les métadonnées de qualité (codec, type) pour que
+    // le champ description (= size dans Stream TV) aide le filtrage debrid.
+    const DIRECT_VIDEO_RE = /\.(mp4|mkv|webm)(\?.*)?$/i;
+    const streamsNeedingSize = sorted
+        .filter(s => !s.size && s.url && DIRECT_VIDEO_RE.test(s.url))
+        .slice(0, 5);
+    if (streamsNeedingSize.length > 0) {
+        const sizeResults = await Promise.allSettled(
+            streamsNeedingSize.map(s => fetchVideoSize(s.url, s.headers))
+        );
+        for (let i = 0; i < streamsNeedingSize.length; i++) {
+            const size = sizeResults[i].status === 'fulfilled' ? sizeResults[i].value : null;
+            if (size) streamsNeedingSize[i].size = formatSizeWithMetadata(size, streamsNeedingSize[i]);
+        }
+    }
 
     if (options.preferredCodec) {
         return filterByPreferredCodec(sorted, options.preferredCodec);

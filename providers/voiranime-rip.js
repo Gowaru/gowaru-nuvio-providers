@@ -1,6 +1,6 @@
 /**
  * voiranime-rip - Built from src/voiranime-rip/
- * Generated: 2026-08-22T04:30:26.79802677Z
+ * Generated: 2026-08-25T21:28:14.442294398Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -11960,6 +11960,29 @@ var __provider = (() => {
     }
     return { signal, controller };
   }
+  function formatSizeBytes(bytes) {
+    if (!bytes || bytes <= 0) return null;
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${Math.round(gb * 10) / 10} GB`;
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1) return `${Math.round(mb * 10) / 10} MB`;
+    const kb = bytes / 1024;
+    return `${Math.round(kb)} KB`;
+  }
+  function fetchVideoSize(_0) {
+    return __async(this, arguments, function* (url, headers = {}) {
+      if (!url) return null;
+      try {
+        const res = yield safeFetch(url, { method: "HEAD", headers, timeout: 5e3 });
+        if (!res || !res.ok) return null;
+        const cl = res.headers["content-length"];
+        if (!cl) return null;
+        return formatSizeBytes(Number(cl));
+      } catch (e) {
+        return null;
+      }
+    });
+  }
   function sanitizeSearchQuery(query) {
     return (query || "").replace(/[–—]/g, " ").replace(/[''`]/g, "'").replace(/[()\[\]{}:;,!?]/g, " ").replace(/\s+/g, " ").trim();
   }
@@ -12107,6 +12130,35 @@ var __provider = (() => {
     if (u.includes(".ts") && !u.includes("test") && !u.includes("textures")) return "hls";
     return null;
   }
+  function buildEnrichedQuality(stream) {
+    const base = normalizeQualityLabel(stream.quality || "HD");
+    const parts = [base];
+    if (stream.codec) {
+      const c = String(stream.codec).toUpperCase();
+      if (c && !base.toUpperCase().includes(c)) parts.push(c);
+    }
+    if (stream.audioCodec) {
+      const a = String(stream.audioCodec).toUpperCase();
+      if (a && !parts.some((p) => p.toUpperCase() === a)) parts.push(a);
+    }
+    return parts.join(" ");
+  }
+  function formatSizeWithMetadata(size, stream) {
+    if (!size) return size;
+    const extras = [];
+    if (stream.codec) extras.push(String(stream.codec).toUpperCase());
+    if (stream.audioCodec) extras.push(String(stream.audioCodec).toUpperCase());
+    if (extras.length === 0) return size;
+    return `${size} ${extras.join(" ")}`;
+  }
+  function normalizeLanguageCode(raw) {
+    if (!raw) return null;
+    const key = String(raw).trim().toUpperCase();
+    if (!key) return null;
+    if (LANGUAGE_CODE_MAP[key]) return LANGUAGE_CODE_MAP[key];
+    const lower = key.toLowerCase();
+    return lower;
+  }
   function inferLanguage(stream) {
     if (stream.language) return stream.language;
     const name = stream.name || "";
@@ -12247,16 +12299,38 @@ var __provider = (() => {
       for (const stream of expanded) {
         if (!(stream == null ? void 0 : stream.url)) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        const dedupKey = `${stream.url}|${stream.language || ""}`;
+        const dedupLang = normalizeLanguageCode(stream.language || inferLanguage(stream)) || stream.language || "";
+        const dedupKey = `${stream.url}|${dedupLang}`;
         if (seen.has(dedupKey)) continue;
         seen.add(dedupKey);
         deduped.push(stream);
       }
       let sorted = sortStreams(deduped);
-      sorted = sorted.map((s) => __spreadProps(__spreadValues({}, s), {
-        type: s.type || inferType(s.url),
-        language: inferLanguage(s) || s.language || null
-      }));
+      sorted = sorted.map((s) => {
+        const rawLang = inferLanguage(s) || s.language || null;
+        const lang = normalizeLanguageCode(rawLang);
+        const baseTitle = s.title || s.name;
+        let title = s.title;
+        if (rawLang && lang && baseTitle && String(rawLang).toUpperCase() !== lang.toUpperCase() && !baseTitle.toUpperCase().includes(String(rawLang).toUpperCase())) {
+          title = `${baseTitle} [${String(rawLang).toUpperCase()}]`;
+        }
+        const enrichedQuality = buildEnrichedQuality(s);
+        return __spreadProps(__spreadValues(__spreadValues(__spreadValues({}, s), title !== s.title ? { title } : {}), enrichedQuality !== s.quality ? { quality: enrichedQuality } : {}), {
+          type: s.type || inferType(s.url),
+          language: lang
+        });
+      });
+      const DIRECT_VIDEO_RE = /\.(mp4|mkv|webm)(\?.*)?$/i;
+      const streamsNeedingSize = sorted.filter((s) => !s.size && s.url && DIRECT_VIDEO_RE.test(s.url)).slice(0, 5);
+      if (streamsNeedingSize.length > 0) {
+        const sizeResults = yield Promise.allSettled(
+          streamsNeedingSize.map((s) => fetchVideoSize(s.url, s.headers))
+        );
+        for (let i = 0; i < streamsNeedingSize.length; i++) {
+          const size = sizeResults[i].status === "fulfilled" ? sizeResults[i].value : null;
+          if (size) streamsNeedingSize[i].size = formatSizeWithMetadata(size, streamsNeedingSize[i]);
+        }
+      }
       if (options.preferredCodec) {
         return filterByPreferredCodec(sorted, options.preferredCodec);
       }
@@ -13132,7 +13206,7 @@ var __provider = (() => {
       return __spreadProps(__spreadValues({}, stream), { isDirect: false });
     });
   }
-  var PROVIDER_BUDGET_MS, RETRY_DELAYS, HEADERS, USER_AGENT, BASE_HEADERS, _atob, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, KNOWN_HOST_NAMES, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
+  var PROVIDER_BUDGET_MS, RETRY_DELAYS, HEADERS, USER_AGENT, BASE_HEADERS, _atob, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, LANGUAGE_CODE_MAP, KNOWN_HOST_NAMES, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
@@ -13172,6 +13246,33 @@ var __provider = (() => {
       MANIFEST_CACHE_TTL = 12e4;
       FETCH_CACHE_TTL = 3e5;
       fetchCache = /* @__PURE__ */ new Map();
+      LANGUAGE_CODE_MAP = {
+        VF: "fr",
+        VFQ: "fr",
+        VFF: "fr",
+        VFI: "fr",
+        VFK: "fr",
+        FRA: "fr",
+        FR: "fr",
+        FRENCH: "fr",
+        "FRAN\xC7AIS": "fr",
+        VOSTFR: "fr",
+        VOSTF: "fr",
+        VOST: "fr",
+        SUBF: "fr",
+        MULTI: "multi",
+        FAN: "multi",
+        EN: "en",
+        ENG: "en",
+        ENGLISH: "en",
+        VOA: "en",
+        VO: "ja",
+        JA: "ja",
+        JP: "ja",
+        JAP: "ja",
+        JAPANESE: "ja",
+        VOSTA: "ja"
+      };
       KNOWN_HOST_NAMES = [
         { name: "streamtape", domain: "streamtape.com" },
         { name: "sibnet", domain: "sibnet.ru" },
@@ -13822,7 +13923,7 @@ var __provider = (() => {
     });
   }
   function toStream(url, language, providerName, siteUrl, opts = {}) {
-    const { quality, subType, title } = opts;
+    const { quality, subType, title, size } = opts;
     const origin = (() => {
       try {
         return new URL(url).origin;
@@ -13839,10 +13940,11 @@ var __provider = (() => {
       headers: {
         Referer: `${origin}/`,
         Origin: origin,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
       }
     };
     if (subType) result.subType = subType;
+    if (size) result.size = size;
     return result;
   }
   function resolveTargetEpisodes(_0, _1, _2, _3) {

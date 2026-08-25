@@ -28,7 +28,10 @@ async function searchAnime(title) {
             const t = $(el).text().trim();
             if (h.includes('/animes/')) {
                 // Use image alt as title if available (more accurate than link text)
-                const imgAlt = $(el).closest('.TPost, .TPostMv, article').find('img').first().attr('alt');
+                // TV-safe : .closest() n'existe pas dans le runtime cheerio de NuvioTV
+                const imgAlt = (typeof $(el).closest === 'function')
+                    ? $(el).closest('.TPost, .TPostMv, article').find('img').first().attr('alt')
+                    : null;
                 results.push({ title: imgAlt || t || h.split('/').pop().replace(/-/g, ' '), url: h, rawText: t });
             }
         });
@@ -39,7 +42,9 @@ async function searchAnime(title) {
                 const h = $(el).attr('href') || '';
                 const t = $(el).text().trim();
                 if (h.includes('/animes/') && t.length > 2) {
-                    const imgAlt = $(el).closest('li, div').find('img').first().attr('alt');
+                    const imgAlt = (typeof $(el).closest === 'function')
+                        ? $(el).closest('li, div').find('img').first().attr('alt')
+                        : null;
                     results.push({ title: imgAlt || t, url: h, rawText: t });
                 }
             });
