@@ -1244,48 +1244,62 @@ export async function resolveFsvidVidzy(url) {
         const res = await safeFetch(url, { headers: { Referer: embedRef } });
         if (!res) return { url };
         let html = await res.text();
-        if (!html.includes('p,a,c,k,e,d')) return { url };
-        html = unpack(html);
+        // Unpack si le JS est packé (eval(function(p,a,c,k,e,d)...));
+        // Nouveau pattern (2024+): HTML non packé, IIFE en clair avec reverse+hash.
+        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
-        // La vraie URL HLS est encodée en base64 XORée avec une clé statique
-        // (var k=[...],b=atob(s),r="";...return r})("BASE64") dans le script packé.
+        // La vraie URL HLS est encodée en base64 puis XORée.
         // Le m3u8 "s1.fsvid.lol/troll/master.m3u8" présent dans la page est un
         // LEURRE anti-scraper (identique pour tous les embeds) → à rejeter absolument.
-        // Tolérant aux variations d'obfuscation : var|let|const, espaces,
-        // et base64 standard OU URL-safe (- et _ mappés vers + et /).
-        const pattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
-        let match, videoUrl = null;
+        let videoUrl = null;
 
-        while ((match = pattern.exec(html)) !== null) {
-            const key = match[1].split(',').map(n => parseInt(n, 10));
-            const b64 = match[2].replace(/-/g, '+').replace(/_/g, '/');
-
-            // Décodage base64 via atob() natif — polyfillé sur NuvioMobile ET NuvioTV
-            // (vérifié dans le code des apps : base64Polyfill / getStaticPolyfillCode).
-            // Remplace l'ancien décodage maison B64_ALPHABET (superflu).
+        // --- Pattern 1 (2024+): clé dynamique via hostname hash + reverse ---
+        // IIFE: (function(s){var h=(location&&location.hostname)||"",H=0;...
+        //   var b=atob(s),a=b.split("").reverse().join(""),r="";...
+        //   var kk=(0x3d+i*89+H)&255; r+=String.fromCharCode(a.charCodeAt(i)^kk)
+        //   ...return /^https?:/.test(r)?r:"troll"})("BASE64")
+        const hostname = embedDomain ? embedDomain.split('/')[0] : (embedRef.split('//')[1] || '').replace(/\//g, '');
+        const newPattern = html.match(/\}\)\(["']([A-Za-z0-9+/=_-]{50,})["']\)/);
+        if (newPattern && html.includes('reverse().join')) {
+            const b64 = newPattern[1].replace(/-/g, '+').replace(/_/g, '/');
             let bin = '';
-            try {
-                bin = atob(b64);
-            } catch (e) {
-                continue;
+            try { bin = atob(b64); } catch (e) {}
+            if (bin) {
+                // Compute hostname hash H
+                let H = 0;
+                for (let j = 0; j < hostname.length; j++) {
+                    H = (H + hostname.charCodeAt(j)) & 255;
+                }
+                // Reverse + XOR with dynamic key
+                const a = bin.split('').reverse().join('');
+                let decoded = '';
+                for (let i = 0; i < a.length; i++) {
+                    const kk = (0x3d + i * 89 + H) & 255;
+                    decoded += String.fromCharCode(a.charCodeAt(i) ^ kk);
+                }
+                if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
+                    videoUrl = decoded;
+                }
             }
+        }
 
-            // XOR avec la clé
-            let decoded = '';
-            for (let i = 0; i < bin.length; i++) {
-                decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
-            }
-
-            // Garde anti-faux-positif : URL http + playlist + pas de leurre troll.
-            // NB: les URLs multiaudio se terminent par ",.urlset/master.m3u8?t=..." —
-            // ce sont des masters HLS STANDARD directement jouables (pistes AUDIO
-            // FR/EN + SUBTITLES, vérifié en live : master 200 + segments 200).
-            // Le proxy /ad-et/es.ad?m= du player n'est utilisé que par le chemin
-            // Chromecast (cast.framework.CastSession.loadMedia), PAS par les
-            // lecteurs natifs — donc on renvoie l'URL telle quelle.
-            if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
-                videoUrl = decoded;
-                break;
+        // --- Pattern 2 (legacy): clé statique var k=[...] ---
+        if (!videoUrl) {
+            const legacyPattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
+            let match;
+            while ((match = legacyPattern.exec(html)) !== null) {
+                const key = match[1].split(',').map(n => parseInt(n, 10));
+                const b64 = match[2].replace(/-/g, '+').replace(/_/g, '/');
+                let bin = '';
+                try { bin = atob(b64); } catch (e) { continue; }
+                let decoded = '';
+                for (let i = 0; i < bin.length; i++) {
+                    decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
+                }
+                if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
+                    videoUrl = decoded;
+                    break;
+                }
             }
         }
 

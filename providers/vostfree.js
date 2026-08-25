@@ -1,6 +1,6 @@
 /**
  * vostfree - Built from src/vostfree/
- * Generated: 2026-08-25T22:34:37.420277371Z
+ * Generated: 2026-08-25T22:46:21.372981312Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -917,26 +917,53 @@ var __provider = (() => {
         const res = yield safeFetch(url, { headers: { Referer: embedRef } });
         if (!res) return { url };
         let html = yield res.text();
-        if (!html.includes("p,a,c,k,e,d")) return { url };
-        html = unpack(html);
-        const pattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
-        let match, videoUrl = null;
-        while ((match = pattern.exec(html)) !== null) {
-          const key = match[1].split(",").map((n) => parseInt(n, 10));
-          const b64 = match[2].replace(/-/g, "+").replace(/_/g, "/");
+        if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
+        let videoUrl = null;
+        const hostname = embedDomain ? embedDomain.split("/")[0] : (embedRef.split("//")[1] || "").replace(/\//g, "");
+        const newPattern = html.match(/\}\)\(["']([A-Za-z0-9+/=_-]{50,})["']\)/);
+        if (newPattern && html.includes("reverse().join")) {
+          const b64 = newPattern[1].replace(/-/g, "+").replace(/_/g, "/");
           let bin = "";
           try {
             bin = atob(b64);
           } catch (e) {
-            continue;
           }
-          let decoded = "";
-          for (let i = 0; i < bin.length; i++) {
-            decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
+          if (bin) {
+            let H = 0;
+            for (let j = 0; j < hostname.length; j++) {
+              H = H + hostname.charCodeAt(j) & 255;
+            }
+            const a = bin.split("").reverse().join("");
+            let decoded = "";
+            for (let i = 0; i < a.length; i++) {
+              const kk = 61 + i * 89 + H & 255;
+              decoded += String.fromCharCode(a.charCodeAt(i) ^ kk);
+            }
+            if (decoded.startsWith("http") && decoded.includes(".m3u8") && !decoded.includes("/troll/")) {
+              videoUrl = decoded;
+            }
           }
-          if (decoded.startsWith("http") && decoded.includes(".m3u8") && !decoded.includes("/troll/")) {
-            videoUrl = decoded;
-            break;
+        }
+        if (!videoUrl) {
+          const legacyPattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
+          let match;
+          while ((match = legacyPattern.exec(html)) !== null) {
+            const key = match[1].split(",").map((n) => parseInt(n, 10));
+            const b64 = match[2].replace(/-/g, "+").replace(/_/g, "/");
+            let bin = "";
+            try {
+              bin = atob(b64);
+            } catch (e) {
+              continue;
+            }
+            let decoded = "";
+            for (let i = 0; i < bin.length; i++) {
+              decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
+            }
+            if (decoded.startsWith("http") && decoded.includes(".m3u8") && !decoded.includes("/troll/")) {
+              videoUrl = decoded;
+              break;
+            }
           }
         }
         if (!videoUrl) return { url };

@@ -1,6 +1,6 @@
 /**
  * nakios - Built from src/nakios/
- * Generated: 2026-08-25T22:34:37.143277102Z
+ * Generated: 2026-08-25T22:46:21.041980991Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
