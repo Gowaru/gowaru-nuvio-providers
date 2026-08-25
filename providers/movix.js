@@ -1,6 +1,6 @@
 /**
  * movix - Built from src/movix/
- * Generated: 2026-08-25T21:55:20.695920655Z
+ * Generated: 2026-08-25T22:12:30.395950345Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -824,7 +824,9 @@ var __provider = (() => {
                 resolve({ url, isDead: true });
                 return;
               }
-              const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
+              let content = html;
+              if (content.includes("p,a,c,k,e,d") || content.includes("eval(function")) content = unpack(content);
+              const match = content.match(/sources\s*:\s*\[[^\]]*?\{[^}]*?file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/i) || content.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/i) || content.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/i);
               if (match && !resolved) {
                 resolved = true;
                 resolve({ url: match[1], headers: { "Referer": ref } });
@@ -13513,7 +13515,7 @@ var __provider = (() => {
         resolved = __spreadProps(__spreadValues({}, stream), { isDirect: true });
       } else {
         try {
-          resolved = yield withTimeout(resolveStream(stream), 4e3);
+          resolved = yield withTimeout(resolveStream(stream), 8e3);
         } catch (e) {
           console.warn(`[Movix] resolveStream timeout: ${e == null ? void 0 : e.message}`);
         }
@@ -13680,8 +13682,8 @@ var __provider = (() => {
         }
       }
       unique.sort((a, b) => streamPriority(a.url, a.language) - streamPriority(b.url, b.language));
-      const MAX_RESOLVE = 3;
-      const BATCH_SIZE = 2;
+      const MAX_RESOLVE = 5;
+      const BATCH_SIZE = 3;
       const playable = [];
       const seenPlayable = /* @__PURE__ */ new Set();
       const toResolve = unique.slice(0, MAX_RESOLVE);

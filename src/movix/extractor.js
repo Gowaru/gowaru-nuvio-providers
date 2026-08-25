@@ -71,7 +71,7 @@ async function resolveForExo(stream) {
     if (isExoPlayableUrl(stream.url)) {
         resolved = { ...stream, isDirect: true };
     } else {
-        try { resolved = await withTimeout(resolveStream(stream), 4000); }
+        try { resolved = await withTimeout(resolveStream(stream), 8000); }
         catch (e) { console.warn(`[Movix] resolveStream timeout: ${e?.message}`); }
     }
     if (!resolved || !resolved.url || !resolved.isDirect) return null;
@@ -305,8 +305,8 @@ async function resolveStreamsToPlayable(streams) {
     }
     unique.sort((a, b) => streamPriority(a.url, a.language) - streamPriority(b.url, b.language));
 
-    const MAX_RESOLVE = 3;
-    const BATCH_SIZE = 2;
+    const MAX_RESOLVE = 5;
+    const BATCH_SIZE = 3;
     const playable = [];
     const seenPlayable = new Set();
 

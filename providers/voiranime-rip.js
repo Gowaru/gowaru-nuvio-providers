@@ -1,6 +1,6 @@
 /**
  * voiranime-rip - Built from src/voiranime-rip/
- * Generated: 2026-08-25T21:55:21.050920995Z
+ * Generated: 2026-08-25T22:12:30.691950649Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12653,7 +12653,9 @@ var __provider = (() => {
                 resolve({ url, isDead: true });
                 return;
               }
-              const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
+              let content = html;
+              if (content.includes("p,a,c,k,e,d") || content.includes("eval(function")) content = unpack(content);
+              const match = content.match(/sources\s*:\s*\[[^\]]*?\{[^}]*?file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/i) || content.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/i) || content.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/i);
               if (match && !resolved) {
                 resolved = true;
                 resolve({ url: match[1], headers: { "Referer": ref } });
