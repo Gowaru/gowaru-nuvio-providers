@@ -25,7 +25,16 @@ const SEARCH_CACHE_TTL = 300000;
 // Cache des slugs déjà testés (évite les doubles HEAD requests dans la même exécution)
 const slugProbeCache = new Map();
 
-const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid', 'Moon', 'FHD', 'SB'];
+// Labels LECTEUR du site → noms de domaines réels (pour logging)
+const HOST_LABEL_MAP = {
+  'LECTEUR myTV': 'voembed.net',      // VidMoly wrapper
+  'LECTEUR MOON': 'gn1r5n.org',       // Byse/myTV SPA
+  'LECTEUR SB': 'streamhide.to',       // ParkLogic gate (mort)
+  'LECTEUR VOE': 'voe.sx',            // Voe SPA
+  'LECTEUR Stape': 'streamtape.com',   // StreamTape
+  'LECTEUR FHD1': 'my.mail.ru',       // Mail.ru
+  'LECTEUR YU': 'yourupload.com',      // YourUpload
+};
 
 // Embeds dont la page utilise une SPA React / une gate JS (ParkLogic) et ne
 // PEUVENT PAS être résolus vers une URL directe sans navigateur.
@@ -479,9 +488,12 @@ function extractHosts(html) {
   let m;
   while ((m = regex.exec(html)) !== null) {
     const val = m[1];
-    if (val && val !== "Choisir un lecteur") urls.push(val);
+    // Filtrer les vrais lecteurs : les options LECTEUR xxx sont les seules valides.
+    // Les autres <option> contiennent des slugs d'épisodes (navigation) qui ne
+    // sont PAS des hosts d'embed. L'ancien filtre "Choisir un lecteur" ne suffisait pas.
+    if (val && val.startsWith('LECTEUR ')) urls.push(val);
   }
-  return urls;
+  return [...new Set(urls)];
 }
 
 /**
@@ -577,11 +589,10 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime)
       console.log(`[VoirAnime] No player options on episode page (anti-bot response or unavailable): ${episodeUrl.slice(0, 70)}`);
     }
 
-    const filteredHosts = allHosts.filter(h => {
-      const hl = h.toLowerCase();
-      return KNOWN_HOSTS.some(prefix => hl.includes(prefix.toLowerCase())) &&
-             !/YU|YourUpload/i.test(h);
-    });
+    // Les hosts sont déjà filtrés par extractHosts ( commence par "LECTEUR ")
+    // On les déduplique et on skip les hosts connus morts
+    const deadHosts = ['LECTEUR SB']; // streamhide.to = ParkLogic gate
+    const filteredHosts = allHosts.filter(h => !deadHosts.includes(h));
 
     // --- Fallback: pas de lecteurs <option> → iframe par défaut de la page ---
     if (filteredHosts.length === 0) {
@@ -613,13 +624,23 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime)
       return [];
     }
 
-    // --- Phase 1: collecter tous les embeds en parallèle ---
+    // --- Phase 1: collecter tous les embeds en parallèle (avec timeout court) ---
     const collected = await Promise.allSettled(
       filteredHosts.map(host => fetchHostEmbed(host, episodeUrl))
     );
     const embedUrls = [...new Set(
       collected.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value)
     )];
+
+    // Fallback: si aucun embed récupéré via les options, essayer l'iframe par défaut
+    if (embedUrls.length === 0) {
+      const $ = cheerio.load(epRawHtml);
+      const defaultIframe = $('iframe[src*="vidmoly"], iframe[src*="voembed"], iframe[src*="mail.ru"]').first().attr('src');
+      if (defaultIframe && classifyEmbed(defaultIframe) === 'resolvable') {
+        embedUrls.push(defaultIframe);
+        console.log(`[VoirAnime] Using default iframe fallback: ${embedDomain(defaultIframe)}`);
+      }
+    }
 
     // --- Phase 2: filtrer placeholders + trier (résolvables d'abord) ---
     const candidates = embedUrls
@@ -910,8 +931,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     } catch (e) { console.warn(`[VoirAnime] Match processing failed: ${e?.message}`); }
   }
 
-  const directStreams = streams.filter(s => s && s.isDirect);
-  const embedStreams = streams.filter(s => s && !s.isDirect && s.url);
+  // Dédupliquer les streams par URL (VF et VOSTFR peuvent servir les mêmes sources)
+  const seenUrls = new Set();
+  const deduped = [];
+  for (const s of streams) {
+    if (!s || !s.url) continue;
+    // Normaliser l'URL pour la dédup (ignorer les params de token qui changent)
+    const baseUrl = s.url.split('?')[0];
+    if (seenUrls.has(baseUrl)) continue;
+    seenUrls.add(baseUrl);
+    deduped.push(s);
+  }
+
+  const directStreams = deduped.filter(s => s && s.isDirect);
+  const embedStreams = deduped.filter(s => s && !s.isDirect && s.url);
 
   // Prefer direct streams. If none found, include embed URLs as fallback
   // so the native player can attempt playback (ExoPlayer/AVPlayer handle some embeds).

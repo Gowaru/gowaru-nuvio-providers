@@ -244,6 +244,30 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "french-anime",
+      "name": "French-Anime",
+      "description": "Animes VF et VOSTFR en streaming sur French-Anime.com (DLE CMS, catalogue riche).",
+      "version": "1.0.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/french-anime.js",
+      "enabled": true,
+      "logo": "https://french-anime.com/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "voiranime-homes",
       "name": "VoirAnime.homes",
       "description": "Animes VF et VOSTFR en streaming sur voiranime.homes (moteur DLE, miroir French-Manga).",
