@@ -1388,6 +1388,13 @@ export async function resolveSendvid(url) {
         const embedUrl = url.includes('/embed/') ? url : url.replace(/sendvid\.com\/([a-z0-9]+)/i, 'sendvid.com/embed/$1');
         const res = await safeFetch(embedUrl, { headers: { 'Referer': 'https://sendvid.com/' } });
         if (!res) return { url };
+
+        // Detect service outage (502/503 = Technical Difficulties page)
+        if (res.status === 502 || res.status === 503) {
+            console.warn(`[Sendvid] Service temporarily unavailable (${res.status}): ${embedUrl.slice(0, 60)}`);
+            return { url, isDead: true };
+        }
+
         const html = await res.text();
         // Try multiple extraction patterns
         const match = html.match(/video_source\s*:\s*["']([^"']+\.mp4[^"']*)["|']/) ||
