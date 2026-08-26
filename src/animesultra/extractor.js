@@ -26,10 +26,15 @@ function scoreSearchMatch(resultTitle, searchTitle) {
     return score;
 }
 
-function detectLang(title) {
-    const t = title.trim();
-    if (t.endsWith(' VF')) return 'vf';
-    if (t.endsWith(' VOSTFR')) return 'vostfr';
+function detectLang(title, url) {
+    const t = (title || '').trim();
+    const u = (url || '').toLowerCase();
+    // Check title suffix
+    if (/\bVF\b/i.test(t)) return 'vf';
+    if (/\bVOSTFR?\b/i.test(t)) return 'vostfr';
+    // Check URL patterns
+    if (/-vf(?:\/|$|\.)/i.test(u) || /\/vf\//i.test(u)) return 'vf';
+    if (/-vostfr?(?:\/|$|\.)/i.test(u) || /\/vostfr?\//i.test(u)) return 'vostfr';
     return null;
 }
 
@@ -253,6 +258,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (!url || seenStreamUrls.has(dedupKey)) return;
         seenStreamUrls.add(dedupKey);
         if (/^[0-9]+$/.test(url)) url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
+        // Skip dead Sendvid URLs (service down 502)
+        if (url.includes('sendvid.com')) {
+            console.log(`[AnimesUltra] Skipping Sendvid URL (service down): ${url.slice(0, 60)}`);
+            return;
+        }
         streams.push(toStream(url, lang, 'AnimesUltra', BASE_URL, { title: `[${lang}] ${serverName}` }));
     };
 

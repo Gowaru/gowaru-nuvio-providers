@@ -1122,6 +1122,41 @@ export async function resolveVidmoly(url) {
     return { url };
 }
 
+/**
+ * Résolveur pour my.mail.ru/video/embed/<ID>.
+ * L'endpoint metadata https://my.mail.ru/+/video/meta/<ID> renvoie un JSON
+ * contenant un tableau `videos` avec des MP4 directs signés (1080p, 720p, 360p).
+ * Vérifié en live : HTTP 200 avec Referer sur la page embed.
+ */
+export async function resolveMailRu(url) {
+    try {
+        const id = url.match(/\/video\/embed\/(\d+)/)?.[1];
+        if (!id) return { url };
+        const metaUrl = `https://my.mail.ru/+/video/meta/${id}`;
+        const res = await safeFetch(metaUrl, {
+            headers: { 'Referer': url, 'Accept': 'application/json' },
+        });
+        if (!res || !res.ok) return { url };
+        // response.json() peut renvoyer null dans le runtime QuickJS → parser le texte
+        let data = null;
+        try { data = JSON.parse(await res.text()); } catch (e) { return { url }; }
+        const videos = Array.isArray(data?.videos) ? data.videos : [];
+        // Meilleure qualité d'abord (keys "1080p", "720p", "360p"...)
+        const sorted = [...videos].sort((a, b) =>
+            (parseInt(b.key, 10) || 0) - (parseInt(a.key, 10) || 0)
+        );
+        const best = sorted.find(v => v && v.url);
+        if (!best) return { url };
+        let videoUrl = best.url.startsWith('//') ? 'https:' + best.url : best.url;
+        return {
+            url: videoUrl,
+            headers: { 'Referer': 'https://my.mail.ru/' },
+            quality: best.key || undefined,
+        };
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveUqload(url) {
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
     const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || 'uqload.co';
@@ -1353,6 +1388,13 @@ export async function resolveSendvid(url) {
         const embedUrl = url.includes('/embed/') ? url : url.replace(/sendvid\.com\/([a-z0-9]+)/i, 'sendvid.com/embed/$1');
         const res = await safeFetch(embedUrl, { headers: { 'Referer': 'https://sendvid.com/' } });
         if (!res) return { url };
+
+        // Detect service outage (502/503 = Technical Difficulties page)
+        if (res.status === 502 || res.status === 503) {
+            console.warn(`[Sendvid] Service temporarily unavailable (${res.status}): ${embedUrl.slice(0, 60)}`);
+            return { url, isDead: true };
+        }
+
         const html = await res.text();
         // Try multiple extraction patterns
         const match = html.match(/video_source\s*:\s*["']([^"']+\.mp4[^"']*)["|']/) ||
@@ -1662,11 +1704,31 @@ const KNOWN_HOST_NAMES = [
  * @param {string} url - URL potentiellement déformée
  * @returns {string} URL corrigée (inchangée si aucune déformation détectée)
  */
+/**
+ * Domaines parfaitement valides à NE JAMAIS "corriger".
+ * Le matching flou ci-dessous (deformedBase.includes(host.name) + lenDiff<=4)
+ * transforme sinon des domaines légitimes : ex "voembed".includes('voe') avec
+ * |7-3|=4 → voembed.net réécrit en voe.sx, ce qui casse la résolution VidMoly.
+ */
+const NEVER_CORRECT_DOMAINS = [
+    'voembed.net',      // famille VidMoly (m3u8 en clair) — PAS voe
+    'gn1r5n.org',       // embed "myTV" de VoirAnime
+    'streamhide.to',    // gate ParkLogic — PAS streamtape
+];
+
 function correctDeformedVideoUrl(url) {
     if (!url || typeof url !== 'string') return url;
 
     const urlMatch = url.match(/^https?:\/\/([^\/]+)(.*)/);
     if (!urlMatch) return url;
+
+    // Whitelist: domaines valides à préserver tels quels
+    const fullDomainForWhitelist = urlMatch[1].toLowerCase();
+    if (NEVER_CORRECT_DOMAINS.some(d =>
+        fullDomainForWhitelist === d || fullDomainForWhitelist.endsWith('.' + d)
+    )) {
+        return url;
+    }
 
     const fullDeformedDomain = urlMatch[1].toLowerCase();
 
@@ -1918,7 +1980,8 @@ export async function resolveStream(stream, depth = 0) {
 
         // 2. Specific Host Resolvers
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
-        else if (urlLower.includes('vidmoly.')) result = await resolveVidmoly(originalUrl);
+        else if (urlLower.includes('vidmoly.') || urlLower.includes('voembed.')) result = await resolveVidmoly(originalUrl);
+        else if (urlLower.includes('.mail.ru')) result = await resolveMailRu(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
         else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
@@ -1956,6 +2019,7 @@ export async function resolveStream(stream, depth = 0) {
                 ...stream,
                 url: finalUrl,
                 headers: { ...stream.headers, ...(result.headers || {}) },
+                quality: result.quality || stream.quality,
                 isDirect: true,
                 originalUrl: originalUrl
             };
@@ -2070,6 +2134,7 @@ export async function resolveStream(stream, depth = 0) {
                 ...stream,
                 url: finalUrl,
                 headers: { ...stream.headers, ...(result.headers || {}) },
+                quality: result.quality || stream.quality,
                 isDirect: true,
                 originalUrl: originalUrl
             };

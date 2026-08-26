@@ -15,22 +15,59 @@ const PAGE_TIMEOUT = 10000;
 const HOST_TIMEOUT = 8000;
 const SEARCH_TIMEOUT = 15000;
 const BUDGET_MS = 45000;
+// Timeout pour les probes de slugs (GET headers only). Les grosses pages
+// (ex: naruto-shippuden ~180KB derrière Cloudflare) peuvent mettre >3s à
+// répondre — l'ancien timeout de 3.2s les déclarait inexistantes à tort.
+const PROBE_TIMEOUT = 6000;
 const SEARCH_CACHE = new Map();
 const SEARCH_CACHE_TTL = 300000;
 
 // Cache des slugs déjà testés (évite les doubles HEAD requests dans la même exécution)
 const slugProbeCache = new Map();
 
-const KNOWN_HOSTS = ['myTV', 'Stape', 'Streamtape', 'Uqload', 'Vidzy', 'fsvid', 'Dood', 'Voe', 'Sendvid', 'Sibnet', 'Netu', 'Younetu', 'Vidoza', 'Vidmoly', 'Luluvid', 'Moon', 'FHD', 'SB'];
+// Labels LECTEUR du site → noms de domaines réels (pour logging)
+const HOST_LABEL_MAP = {
+  'LECTEUR myTV': 'voembed.net',      // VidMoly wrapper
+  'LECTEUR MOON': 'gn1r5n.org',       // Byse/myTV SPA
+  'LECTEUR SB': 'streamhide.to',       // ParkLogic gate (mort)
+  'LECTEUR VOE': 'voe.sx',            // Voe SPA
+  'LECTEUR Stape': 'streamtape.com',   // StreamTape
+  'LECTEUR FHD1': 'my.mail.ru',       // Mail.ru
+  'LECTEUR YU': 'yourupload.com',      // YourUpload
+};
 
-// Hosts whose embed pages use React SPA / AES-GCM fingerprinting
-// and cannot be resolved to direct URLs without a browser.
-// We return the embed URL directly so the native player can attempt playback.
-const UNRESOLVABLE_HOSTS = ['voe', 'streamtape', 'stape', 'dood', 'ds2play', 'bigwar5'];
+// Embeds dont la page utilise une SPA React / une gate JS (ParkLogic) et ne
+// PEUVENT PAS être résolus vers une URL directe sans navigateur.
+// ATTENTION au matching : 'voe.' ne doit PAS matcher "voembed.net" (famille
+// VidMoly, résolvable en m3u8 !). Bug historique: le pattern 'voe' classait
+// voembed comme non résolvable → 0 stream direct sur tous les épisodes.
+const UNRESOLVABLE_EMBEDS = ['voe.', 'streamhide.', 'gn1r5n.', 'parklogic', 'ds2play', 'dood.', 'bigwar5'];
+
+// Iframes placeholder servies par l'anti-bot de VoirAnime quand les vrais
+// lecteurs sont indisponibles (détection bot / rate-limit / épisode non
+// encore disponible). Ces iframes ne sont PAS des vidéos : les retourner
+// produisait des streams qui ne démarrent jamais dans l'app.
+const PLACEHOLDER_IFRAMES = ['youtube.com/embed', 'youtu.be/', 'facebook.com/plugins', 'twitter.com/i/videos', 'ok.ru/videoembed'];
 
 const SPINOFF_KEYWORDS = ['fan letter', 'log:', 'memories', 'vigilante', 'illegals', 'film', 'movie', 'special', 'oav', 'ona', 'x ut', 'collab'];
 
 
+
+/**
+ * Double les voyelles à macron (translittération japonaise) : "Shippūden" → "Shippuuden".
+ * Beaucoup de sites FR écrivent les voyelles longues en double (uu, aa, oo)
+ * alors que TMDB utilise les macrons (ū, ā, ō).
+ */
+function expandMacrons(s) {
+  if (!s) return s;
+  let out = '';
+  for (const ch of s) {
+    const d = ch.normalize('NFD');
+    if (d.length > 1 && d.includes('\u0304') && 'aeiouAEIOU'.includes(d[0])) out += d[0] + d[0];
+    else out += ch;
+  }
+  return out;
+}
 
 function isSpinoff(title) {
   const t = title.toLowerCase();
@@ -135,7 +172,7 @@ function cleanSlug(slug) {
 async function probeUrl(url) {
   if (slugProbeCache.has(url)) return slugProbeCache.get(url);
   // safeFetch ne throw jamais (catch interne → retourne null) donc pas de try/catch nécessaire
-  const res = await safeFetch(url, { method: "GET", timeout: HEAD_TIMEOUT * 4 });
+  const res = await safeFetch(url, { method: "GET", timeout: PROBE_TIMEOUT });
   if (!res || !res.ok) {
     slugProbeCache.set(url, false);
     return false;
@@ -451,12 +488,21 @@ function extractHosts(html) {
   let m;
   while ((m = regex.exec(html)) !== null) {
     const val = m[1];
-    if (val && val !== "Choisir un lecteur") urls.push(val);
+    // Filtrer les vrais lecteurs : les options LECTEUR xxx sont les seules valides.
+    // Les autres <option> contiennent des slugs d'épisodes (navigation) qui ne
+    // sont PAS des hosts d'embed. L'ancien filtre "Choisir un lecteur" ne suffisait pas.
+    if (val && val.startsWith('LECTEUR ')) urls.push(val);
   }
-  return urls;
+  return [...new Set(urls)];
 }
 
-async function resolveHost(host, episodeUrl, lang, streamHeaders) {
+/**
+ * Récupère l'URL d'embed d'un lecteur depuis la page ?host=X d'un épisode.
+ * Retourne l'URL brute SANS classification — le filtrage placeholder et le tri
+ * se font globalement dans resolveEpisodeStreams (les labels LECTEUR du site
+ * ne correspondent PAS aux domaines réels : myTV→voembed, FHD1→mail.ru, etc.).
+ */
+async function fetchHostEmbed(host, episodeUrl) {
   try {
     const hostUrl = `${episodeUrl}${episodeUrl.includes("?") ? "&" : "?"}host=${encodeURIComponent(host)}`;
     const hostHtml = await fetchText(hostUrl, { timeout: HOST_TIMEOUT });
@@ -468,34 +514,28 @@ async function resolveHost(host, episodeUrl, lang, streamHeaders) {
       const scriptMatch = hostHtml.match(/https?:\/\/[^"'\s<>]+\/(?:embed|e|v|player)\/[^"'\s<>]+/);
       if (scriptMatch && !scriptMatch[0].includes("voiranime.com")) embedUrl = scriptMatch[0];
     }
+    return embedUrl;
+  } catch (err) {
+    console.warn(`[VoirAnime] fetchHostEmbed(${host}) failed: ${err?.message}`);
+    return null;
+  }
+}
 
-    if (embedUrl) {
-      const embedLower = embedUrl.toLowerCase();
-      const isUnresolvable = UNRESOLVABLE_HOSTS.some(h => embedLower.includes(h));
-      if (isUnresolvable) {
-        // Voe/Streamtape/Dood use React SPA or AES-GCM fingerprinting.
-        // Return the embed URL directly — the native player (ExoPlayer/AVPlayer)
-        // may be able to handle it, or Nuvio's WebView fallback will play it.
-        console.log(`[VoirAnime] ${host} embed is unresolvable, returning embed URL directly`);
-        return {
-          name: `VoirAnime (${lang})`,
-          title: `${host} - ${lang}`,
-          url: embedUrl,
-          quality: "HD",
-          headers: { ...streamHeaders },
-          isDirect: false,
-        };
-      }
-      return resolveStream({
-        name: `VoirAnime (${lang})`,
-        title: `${host} - ${lang}`,
-        url: embedUrl,
-        quality: "HD",
-        headers: { ...streamHeaders },
-      });
-    }
-  } catch (err) { console.warn(`[VoirAnime] resolveHost failed: ${err?.message}`); }
-  return null;
+function embedDomain(url) {
+  return (url || '').replace(/^https?:\/\//, '').split('/')[0];
+}
+
+/**
+ * Classifie un embed :
+ *   - 'placeholder'   : iframe anti-bot YouTube/etc. à EXCLURE absolument
+ *   - 'unresolvable'  : SPA/gate JS (voe.sx, streamhide/ParkLogic) → dernier recours
+ *   - 'resolvable'    : page avec m3u8/mp4 extractible → à résoudre en priorité
+ */
+function classifyEmbed(url) {
+  const u = (url || '').toLowerCase();
+  if (PLACEHOLDER_IFRAMES.some(p => u.includes(p))) return 'placeholder';
+  if (UNRESOLVABLE_EMBEDS.some(p => u.includes(p))) return 'unresolvable';
+  return 'resolvable';
 }
 
 async function generateEpisodeUrl(html, targetEp, startTime) {
@@ -527,28 +567,48 @@ async function generateEpisodeUrl(html, targetEp, startTime) {
   return null;
 }
 
-async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
+const MAX_DIRECT_STREAMS = 4;
+
+/**
+ * Résout les streams d'un épisode en 3 phases :
+ *   1. Collecte parallèle des embeds de tous les lecteurs
+ *   2. Filtrage des placeholders anti-bot + tri (résolvables d'abord)
+ *   3. Résolution séquentielle avec early-exit dès MAX_DIRECT_STREAMS directs
+ *
+ * Les embeds non résolus (SPA/gates) ne sont retournés qu'en DERNIER recours
+ * si aucun stream direct n'a pu être obtenu.
+ */
+async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime) {
   try {
     const epRawHtml = await fetchWithRetry(() => fetchText(episodeUrl, { timeout: PAGE_TIMEOUT }), { retries: 1 });
     const allHosts = extractHosts(epRawHtml);
 
-    const filteredHosts = allHosts.filter(h => {
-      const hl = h.toLowerCase();
-      return KNOWN_HOSTS.some(prefix => hl.includes(prefix.toLowerCase())) &&
-             !/YU|YourUpload/i.test(h);
-    });
+    if (allHosts.length === 0) {
+      // Page sans aucun lecteur = réponse dégradée anti-bot du site (ou épisode
+      // pas encore disponible). On log pour faciliter le diagnostic.
+      console.log(`[VoirAnime] No player options on episode page (anti-bot response or unavailable): ${episodeUrl.slice(0, 70)}`);
+    }
 
+    // Les hosts sont déjà filtrés par extractHosts ( commence par "LECTEUR ")
+    // On les déduplique et on skip les hosts connus morts
+    const deadHosts = ['LECTEUR SB']; // streamhide.to = ParkLogic gate
+    const filteredHosts = allHosts.filter(h => !deadHosts.includes(h));
+
+    // --- Fallback: pas de lecteurs <option> → iframe par défaut de la page ---
     if (filteredHosts.length === 0) {
       const $ = cheerio.load(epRawHtml);
       let iframe = null;
       $("iframe").each((_, el) => {
         const src = $(el).attr("src") || "";
-        if (src.startsWith("http") && !src.includes("voiranime.com")) {
+        if (src.startsWith("http") && !src.includes("voiranime.com") &&
+            classifyEmbed(src) !== 'placeholder') {
           iframe = src;
           return false;
         }
       });
-      if (iframe) {
+      if (!iframe) return [];
+
+      if (classifyEmbed(iframe) === 'resolvable') {
         const stream = await resolveStream({
           name: `VoirAnime (${lang})`,
           title: `Default Player - ${lang}`,
@@ -556,14 +616,90 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders) {
           url: iframe,
           headers: { Referer: BASE_URL, Origin: BASE_URL, "User-Agent": USER_AGENT },
         });
-        if (stream) return [stream];
+        if (stream && stream.isDirect) return [stream];
+        console.log(`[VoirAnime] Default player not resolvable, skipping (${embedDomain(iframe)})`);
+      } else {
+        console.log(`[VoirAnime] Default player is unresolvable, skipping (${embedDomain(iframe)})`);
       }
       return [];
     }
 
-    const hostPromises = filteredHosts.map(host => resolveHost(host, episodeUrl, lang, streamHeaders));
-    const resolved = await Promise.all(hostPromises);
-    return resolved.filter(Boolean);
+    // --- Phase 1: collecter tous les embeds en parallèle (avec timeout court) ---
+    const collected = await Promise.allSettled(
+      filteredHosts.map(host => fetchHostEmbed(host, episodeUrl))
+    );
+    const embedUrls = [...new Set(
+      collected.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value)
+    )];
+
+    // Fallback: si aucun embed récupéré via les options, essayer l'iframe par défaut
+    if (embedUrls.length === 0) {
+      const $ = cheerio.load(epRawHtml);
+      const defaultIframe = $('iframe[src*="vidmoly"], iframe[src*="voembed"], iframe[src*="mail.ru"]').first().attr('src');
+      if (defaultIframe && classifyEmbed(defaultIframe) === 'resolvable') {
+        embedUrls.push(defaultIframe);
+        console.log(`[VoirAnime] Using default iframe fallback: ${embedDomain(defaultIframe)}`);
+      }
+    }
+
+    // --- Phase 2: filtrer placeholders + trier (résolvables d'abord) ---
+    const candidates = embedUrls
+      .map(u => ({ url: u, cls: classifyEmbed(u) }))
+      .filter(e => e.cls !== 'placeholder');
+    const order = { resolvable: 0, unresolvable: 1 };
+    candidates.sort((a, b) => order[a.cls] - order[b.cls]);
+
+    if (candidates.length === 0) {
+      console.log('[VoirAnime] Only placeholder iframes found (anti-bot response), no real players available');
+      return [];
+    }
+    console.log(`[VoirAnime] ${candidates.length} embed(s): ${candidates.map(c => `${embedDomain(c.url)}[${c.cls}]`).join(', ')}`);
+
+    // --- Phase 3: résoudre dans l'ordre de priorité, early-exit ---
+    const direct = [];
+    const unresolved = [];
+    for (const cand of candidates) {
+      if (direct.length >= MAX_DIRECT_STREAMS) break;
+      if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+
+      if (cand.cls === 'unresolvable') { unresolved.push(cand); continue; }
+
+      try {
+        const stream = await resolveStream({
+          name: `VoirAnime (${lang})`,
+          title: `${embedDomain(cand.url)} - ${lang}`,
+          quality: "HD",
+          url: cand.url,
+          headers: { ...streamHeaders },
+        });
+        if (stream && stream.isDirect) {
+          console.log(`[VoirAnime] Resolved direct: ${embedDomain(cand.url)} -> ${String(stream.url).slice(0, 70)}`);
+          direct.push(stream);
+        } else {
+          console.log(`[VoirAnime] Not resolved: ${embedDomain(cand.url)}`);
+          unresolved.push(cand);
+        }
+      } catch (e) {
+        console.warn(`[VoirAnime] Resolve failed for ${embedDomain(cand.url)}: ${e?.message}`);
+        unresolved.push(cand);
+      }
+    }
+
+    if (direct.length > 0) return direct;
+
+    // --- Dernier recours: exposer les embeds non résolus (SPA/gates) ---
+    if (unresolved.length > 0) {
+      console.log(`[VoirAnime] No direct streams, returning ${unresolved.length} embed URL(s) as last resort`);
+      return unresolved.map(c => ({
+        name: `VoirAnime (${lang})`,
+        title: `${embedDomain(c.url)} - ${lang}`,
+        url: c.url,
+        quality: "HD",
+        headers: { ...streamHeaders },
+        isDirect: false,
+      }));
+    }
+    return [];
   } catch (e) {
     console.warn(`[VoirAnime] resolveEpisodeStreams failed: ${e?.message}`);
     return [];
@@ -618,6 +754,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         const yearVariants = uniqueSlugs.map(s => `${s}-${year}`)
         for (const v of yearVariants) {
           if (!uniqueSlugs.includes(v)) uniqueSlugs.push(v)
+        }
+      }
+
+      // Variantes avec voyelles longues doublées (ex: "Naruto: Shippūden"
+      // → naruto-shippuden sur TMDB mais naruto-shippuuden sur le site)
+      for (const t of allTitles) {
+        const expanded = toSlug(expandMacrons(t));
+        if (expanded && expanded.length > 3 && !uniqueSlugs.includes(expanded)) {
+          uniqueSlugs.push(expanded);
         }
       }
 
@@ -780,14 +925,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
       if (!episodeUrl) continue;
 
-      const epStreams = await resolveEpisodeStreams(episodeUrl, lang, streamHeaders);
+      const epStreams = await resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime);
       streams.push(...epStreams);
 
     } catch (e) { console.warn(`[VoirAnime] Match processing failed: ${e?.message}`); }
   }
 
-  const directStreams = streams.filter(s => s && s.isDirect);
-  const embedStreams = streams.filter(s => s && !s.isDirect && s.url);
+  // Dédupliquer les streams par URL (VF et VOSTFR peuvent servir les mêmes sources)
+  const seenUrls = new Set();
+  const deduped = [];
+  for (const s of streams) {
+    if (!s || !s.url) continue;
+    // Normaliser l'URL pour la dédup (ignorer les params de token qui changent)
+    const baseUrl = s.url.split('?')[0];
+    if (seenUrls.has(baseUrl)) continue;
+    seenUrls.add(baseUrl);
+    deduped.push(s);
+  }
+
+  const directStreams = deduped.filter(s => s && s.isDirect);
+  const embedStreams = deduped.filter(s => s && !s.isDirect && s.url);
 
   // Prefer direct streams. If none found, include embed URLs as fallback
   // so the native player can attempt playback (ExoPlayer/AVPlayer handle some embeds).

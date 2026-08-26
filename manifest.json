@@ -77,7 +77,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.33",
+      "version": "1.0.34",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -101,7 +101,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.48",
+      "version": "1.1.49",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -244,6 +244,30 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "french-anime",
+      "name": "French-Anime",
+      "description": "Animes VF et VOSTFR en streaming sur French-Anime.com (DLE CMS, catalogue riche).",
+      "version": "1.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/french-anime.js",
+      "enabled": true,
+      "logo": "https://french-anime.com/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "voiranime-homes",
       "name": "VoirAnime.homes",
       "description": "Animes VF et VOSTFR en streaming sur voiranime.homes (moteur DLE, miroir French-Manga).",
@@ -373,7 +397,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.19",
+      "version": "1.2.20",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
