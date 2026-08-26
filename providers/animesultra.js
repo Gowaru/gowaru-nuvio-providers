@@ -1,6 +1,6 @@
 /**
  * animesultra - Built from src/animesultra/
- * Generated: 2026-08-25T23:54:01.896041836Z
+ * Generated: 2026-08-26T00:35:44.565544513Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -14114,28 +14114,43 @@ var __provider = (() => {
         }
         const epHtml = yield epRes.text();
         const $ep = import_cheerio_without_node_native2.default.load(epHtml);
-        if ($ep(".server-item").length === 0) {
-          console.log(`[AnimesUltra] No server items on ${epHref}`);
-          return [];
-        }
         const servers = [];
-        $ep(".server-item").each((i, el) => {
-          const sId = $ep(el).attr("data-server-id");
-          const embed = $ep(el).attr("data-embed");
-          const sname = $ep(el).text().trim() || `Srv_${sId}`;
-          let url = null;
-          if (embed && (embed.startsWith("http") || /^[0-9]+$/.test(embed))) url = embed;
-          if (sId) {
-            const box = $context(`#content_player_${sId}`);
-            if (box.length > 0) {
-              const textUrl = box.text().trim();
-              const iframeUrl = box.find("iframe").attr("src");
-              const altUrl = textUrl || iframeUrl;
-              if (altUrl && (altUrl.startsWith("http") || /^[0-9]+$/.test(altUrl))) url = altUrl;
+        if ($ep(".server-item").length > 0) {
+          $ep(".server-item").each((i, el) => {
+            const sId = $ep(el).attr("data-server-id");
+            const embed = $ep(el).attr("data-embed");
+            const sname = $ep(el).text().trim() || `Srv_${sId}`;
+            let url = null;
+            if (embed && (embed.startsWith("http") || /^[0-9]+$/.test(embed))) url = embed;
+            if (sId) {
+              const box = $context(`#content_player_${sId}`);
+              if (box.length > 0) {
+                const textUrl = box.text().trim();
+                const iframeUrl = box.find("iframe").attr("src");
+                const altUrl = textUrl || iframeUrl;
+                if (altUrl && (altUrl.startsWith("http") || /^[0-9]+$/.test(altUrl))) url = altUrl;
+              }
             }
+            if (url) servers.push({ url, lang, sname });
+          });
+          return servers;
+        }
+        $ep('[id^="content_player_"]').each((i, el) => {
+          const id = $ep(el).attr("id") || "";
+          const url = $ep(el).text().trim();
+          if (url && url.startsWith("http")) {
+            const serverId = id.replace("content_player_", "").replace(/vidc$/, "");
+            servers.push({ url, lang, sname: `UltraCDN ${serverId}` });
           }
-          if (url) servers.push({ url, lang, sname });
         });
+        if (servers.length === 0) {
+          $ep("iframe[src]").each((i, el) => {
+            const src = $ep(el).attr("src") || "";
+            if (src.startsWith("http") && !src.includes("google") && !src.includes("disqus")) {
+              servers.push({ url: src, lang, sname: "iframe" });
+            }
+          });
+        }
         return servers;
       });
       const isSpinoffMatch = (m) => /(?:\s*:\s*|\s+-\s+)(?!\d|saison|partie|part)/i.test(m.title.replace(/ (VF|VOSTFR)$/i, ""));
@@ -14162,12 +14177,16 @@ var __provider = (() => {
           const html = yield getFullStory(newsId);
           if (!html) continue;
           const $ = import_cheerio_without_node_native2.default.load(html);
+          const targetNums = targetEpisodes.map((e) => parseInt(e, 10));
           const epHrefs = [];
+          const epContentPlayers = [];
           $(".ep-item").each((i, el) => {
-            const epNum2 = $(el).attr("data-number");
-            if (epNum2 && targetEpisodes.map((e) => parseInt(e, 10)).includes(parseInt(epNum2, 10))) {
+            const epNum2 = parseInt($(el).attr("data-number"), 10);
+            if (epNum2 && targetNums.includes(epNum2)) {
               const href = $(el).attr("href");
               if (href) epHrefs.push(href);
+              const dataId = $(el).attr("data-id") || "";
+              epContentPlayers.push({ epNum: epNum2, dataId });
             }
           });
           if (epHrefs.length === 0) continue;
@@ -14175,10 +14194,41 @@ var __provider = (() => {
           const epResults = yield Promise.allSettled(
             epHrefs.map((epHref) => fetchEpisodeServers(epHref, $, lang))
           );
+          let foundServers = false;
           for (const r of epResults) {
-            if (r.status === "fulfilled") {
+            if (r.status === "fulfilled" && r.value.length > 0) {
+              foundServers = true;
               for (const { url, sname } of r.value) {
                 pushStream(url, lang, sname);
+              }
+            }
+          }
+          if (!foundServers) {
+            const targetEp = targetNums[0];
+            const allEpItems = [];
+            $(".ep-item").each((i, el) => {
+              allEpItems.push({
+                num: parseInt($(el).attr("data-number"), 10),
+                dataId: $(el).attr("data-id") || ""
+              });
+            });
+            const targetIdx = allEpItems.findIndex((e) => e.num === targetEp);
+            if (targetIdx >= 0) {
+              const cpRegex = /<div id="content_player_(\d+)(vidc?)" class="player_box">([^<]+)<\/div>/gi;
+              let cpMatch;
+              const contentPlayers = [];
+              while ((cpMatch = cpRegex.exec(html)) !== null) {
+                contentPlayers.push({
+                  id: cpMatch[1],
+                  suffix: cpMatch[2],
+                  url: cpMatch[3].trim()
+                });
+              }
+              if (contentPlayers.length > 0) {
+                const epContentPlayer = contentPlayers[targetIdx];
+                if (epContentPlayer && epContentPlayer.url.startsWith("http")) {
+                  pushStream(epContentPlayer.url, lang, `UltraCDN ${epContentPlayer.id}`);
+                }
               }
             }
           }
@@ -14307,6 +14357,11 @@ var __provider = (() => {
         if (resolvable.length > 0) {
           console.log(`[AnimesUltra] resolveStream filtered all, returning ${resolvable.length} streams from known hosts`);
           return resolvable;
+        }
+        const embedStreams = streams.filter((s) => s && s.url);
+        if (embedStreams.length > 0) {
+          console.log(`[AnimesUltra] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+          return embedStreams;
         }
         console.log(`[AnimesUltra] No resolvable streams (all ${streams.length} from unresolvable hosts)`);
         return [];

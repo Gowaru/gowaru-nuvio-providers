@@ -1,6 +1,6 @@
 /**
  * wookafr - Built from src/wookafr/
- * Generated: 2026-08-25T23:54:02.704042674Z
+ * Generated: 2026-08-26T00:35:45.404545362Z
  */
 var __provider = (() => {
   var __create = Object.create;

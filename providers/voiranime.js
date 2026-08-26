@@ -1,6 +1,6 @@
 /**
  * voiranime - Built from src/voiranime/
- * Generated: 2026-08-25T23:54:02.406042371Z
+ * Generated: 2026-08-26T00:35:45.184545133Z
  */
 var __provider = (() => {
   var __create = Object.create;
