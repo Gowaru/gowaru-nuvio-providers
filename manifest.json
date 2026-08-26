@@ -77,7 +77,7 @@
       "id": "animesultra",
       "name": "AnimesUltra",
       "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.32",
+      "version": "1.0.33",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -101,7 +101,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.47",
+      "version": "1.1.48",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -271,7 +271,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (séries site-native, films par catégories).",
-      "version": "2.0.14",
+      "version": "2.0.16",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -495,7 +495,7 @@
       "id": "wookafr",
       "name": "Wookafr",
       "description": "Films et séries en streaming VF sur Wookafr.",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
