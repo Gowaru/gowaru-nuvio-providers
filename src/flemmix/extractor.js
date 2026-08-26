@@ -67,7 +67,8 @@ function parseServerTabs($, tabSelector, qualitySelector, langSelector) {
     const url = $tab.attr(SELECTORS.TAB_DATA_URL)
     if (!url) return
 
-    const isActive = $tab.hasClass(SELECTORS.TAB_ACTIVE)
+    // TV-safe : .hasClass() n'existe pas dans le runtime cheerio de NuvioTV
+    const isActive = ($tab.attr('class') || '').split(/\s+/).includes(SELECTORS.TAB_ACTIVE)
     const quality = $tab.find(qualitySelector).first().text().trim() || 'HD'
     const langRaw = $tab.find(langSelector).first().text().trim().toLowerCase()
     const lang = LANGUAGE_MAP[langRaw] || 'VF'

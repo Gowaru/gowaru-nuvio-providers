@@ -69,7 +69,10 @@ async function searchAnime(title) {
                 if (href && href.includes('/anime/') && text.length > 2) {
                     const slugRaw = href.replace(/.*\/anime\//, '').replace(/\/$/, '');
                     if (slugRaw.includes('/') || results.some(r => r.slug === slugRaw)) return;
-                    const imgAlt = $(el).closest('.TPost, .TPostMv, article, li, .card, .result-item, .search-item').find('img').first().attr('alt');
+                    // TV-safe : .closest() n'existe pas dans le runtime cheerio de NuvioTV
+                    const imgAlt = (typeof $(el).closest === 'function')
+                        ? $(el).closest('.TPost, .TPostMv, article, li, .card, .result-item, .search-item').find('img').first().attr('alt')
+                        : null;
                     const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
                     results.push({
                         title: cleanTitle,

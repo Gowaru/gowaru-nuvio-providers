@@ -216,6 +216,40 @@ const _atob = (str) => {
     catch (e) { return str; }
 };
 
+/**
+ * Formate une taille en octets vers une chaîne lisible parsable par NuvioTV
+ * (regex: \d+(,\d+)?\s*(TB|GB|MB|KB)).
+ * @param {number} bytes
+ * @returns {string|null}
+ */
+export function formatSizeBytes(bytes) {
+    if (!bytes || bytes <= 0) return null;
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${Math.round(gb * 10) / 10} GB`;
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1) return `${Math.round(mb * 10) / 10} MB`;
+    const kb = bytes / 1024;
+    return `${Math.round(kb)} KB`;
+}
+
+/**
+ * Récupère la taille d'une vidéo via une requête HEAD (Content-Length).
+ * Retourne une chaîne formatée ex. "1.4 GB" ou null si indisponible.
+ * @param {string} url
+ * @param {object} [headers]
+ * @returns {Promise<string|null>}
+ */
+export async function fetchVideoSize(url, headers = {}) {
+    if (!url) return null;
+    try {
+        const res = await safeFetch(url, { method: 'HEAD', headers, timeout: 5000 });
+        if (!res || !res.ok) return null;
+        const cl = res.headers['content-length'];
+        if (!cl) return null;
+        return formatSizeBytes(Number(cl));
+    } catch { return null; }
+}
+
 const CODEC_PREFERENCE = ['AV1', 'H.265', 'H.264', 'VP9'];
 
 
@@ -492,6 +526,74 @@ function inferType(url) {
     return null;
 }
 
+/**
+ * Construit un champ quality enrichi avec les tokens debrid (codec, audio, HDR)
+ * pour que le filtrage debrid de NuvioTV puisse les extraire via streamSearchText().
+ * Ex: "1080p" + codec H.265 + audio AAC → "1080p H.265 AAC"
+ * @param {object} stream - stream avec quality, codec, audioCodec optionnels
+ * @returns {string} quality enrichie
+ */
+function buildEnrichedQuality(stream) {
+    const base = normalizeQualityLabel(stream.quality || 'HD');
+    const parts = [base];
+    // Codec vidéo (depuis HLS expansion ou metadata)
+    if (stream.codec) {
+        const c = String(stream.codec).toUpperCase();
+        if (c && !base.toUpperCase().includes(c)) parts.push(c);
+    }
+    // Codec audio (depuis HLS expansion)
+    if (stream.audioCodec) {
+        const a = String(stream.audioCodec).toUpperCase();
+        if (a && !parts.some(p => p.toUpperCase() === a)) parts.push(a);
+    }
+    return parts.join(' ');
+}
+
+/**
+ * Enrichit la taille avec les métadonnées de qualité pour que le champ
+ * description (= size dans Stream TV) aide le filtrage debrid.
+ * Ex: "1.4 GB" + quality "1080p H.265" → "1.4 GB H.265"
+ * @param {string} size - taille formatée (ex: "1.4 GB")
+ * @param {object} stream - stream avec codec, quality
+ * @returns {string} taille enrichie
+ */
+function formatSizeWithMetadata(size, stream) {
+    if (!size) return size;
+    const extras = [];
+    if (stream.codec) extras.push(String(stream.codec).toUpperCase());
+    if (stream.audioCodec) extras.push(String(stream.audioCodec).toUpperCase());
+    if (extras.length === 0) return size;
+    return `${size} ${extras.join(' ')}`;
+}
+
+/**
+ * Codes de langue compris par NuvioTV/NuvioMobile (DebridStreamLanguage).
+ * L'app compare `language` à ces codes (ou labels anglais) pour les filtres
+ * et le tri ; des valeurs comme "VOSTFR"/"VF" sont classées "Unknown".
+ */
+const LANGUAGE_CODE_MAP = {
+    VF: 'fr', VFQ: 'fr', VFF: 'fr', VFI: 'fr', VFK: 'fr', FRA: 'fr', FR: 'fr', FRENCH: 'fr', 'FRANÇAIS': 'fr',
+    VOSTFR: 'fr', VOSTF: 'fr', VOST: 'fr', SUBF: 'fr',
+    MULTI: 'multi', FAN: 'multi',
+    EN: 'en', ENG: 'en', ENGLISH: 'en', VOA: 'en',
+    VO: 'ja', JA: 'ja', JP: 'ja', JAP: 'ja', JAPANESE: 'ja', VOSTA: 'ja',
+};
+
+/**
+ * Normalise un label de langue brut (VF, VOSTFR, Multi...) vers un code
+ * compris par les apps Nuvio (fr/en/multi/ja). Valeur inconnue → minuscule.
+ * @param {string|null} raw
+ * @returns {string|null}
+ */
+export function normalizeLanguageCode(raw) {
+    if (!raw) return null;
+    const key = String(raw).trim().toUpperCase();
+    if (!key) return null;
+    if (LANGUAGE_CODE_MAP[key]) return LANGUAGE_CODE_MAP[key];
+    const lower = key.toLowerCase();
+    return lower;
+}
+
 function inferLanguage(stream) {
     if (stream.language) return stream.language;
     const name = stream.name || '';
@@ -645,8 +747,9 @@ export async function expandStreamQualities(streams, options = {}) {
     for (const stream of expanded) {
         if (!stream?.url) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        // Dedup by URL + language: keep streams with same URL but different languages
-        const dedupKey = `${stream.url}|${stream.language || ''}`;
+        // Dedup by URL + normalized language: keep streams with same URL but different languages
+        const dedupLang = normalizeLanguageCode(stream.language || inferLanguage(stream)) || stream.language || '';
+        const dedupKey = `${stream.url}|${dedupLang}`;
         if (seen.has(dedupKey)) continue;
         seen.add(dedupKey);
         deduped.push(stream);
@@ -654,11 +757,48 @@ export async function expandStreamQualities(streams, options = {}) {
 
     let sorted = sortStreams(deduped);
 
-    sorted = sorted.map(s => ({
-        ...s,
-        type: s.type || inferType(s.url),
-        language: inferLanguage(s) || s.language || null,
-    }));
+    sorted = sorted.map(s => {
+        const rawLang = inferLanguage(s) || s.language || null;
+        const lang = normalizeLanguageCode(rawLang);
+        const baseTitle = s.title || s.name;
+        let title = s.title;
+        // Conserver le label FR (VF/VOSTFR...) dans le titre si absent :
+        // utile pour l'affichage et sortStreamsByLanguage()
+        if (rawLang && lang && baseTitle &&
+            String(rawLang).toUpperCase() !== lang.toUpperCase() &&
+            !baseTitle.toUpperCase().includes(String(rawLang).toUpperCase())) {
+            title = `${baseTitle} [${String(rawLang).toUpperCase()}]`;
+        }
+        // Enrichir quality avec tokens debrid (codec/audio) si disponibles
+        // depuis l'expansion HLS. Le debrid filter de NuvioTV parse ces tokens
+        // depuis streamSearchText() qui inclut stream.quality.
+        const enrichedQuality = buildEnrichedQuality(s);
+        return {
+            ...s,
+            ...(title !== s.title ? { title } : {}),
+            ...(enrichedQuality !== s.quality ? { quality: enrichedQuality } : {}),
+            type: s.type || inferType(s.url),
+            language: lang,
+        };
+    });
+
+    // Lazy size enrichment : requête HEAD sur les URLs directes (.mp4/.mkv/.webm)
+    // pour fournir la taille aux filtres/tri NuvioTV. Parallélisé, max 5 simultanées.
+    // La taille est enrichie avec les métadonnées de qualité (codec, type) pour que
+    // le champ description (= size dans Stream TV) aide le filtrage debrid.
+    const DIRECT_VIDEO_RE = /\.(mp4|mkv|webm)(\?.*)?$/i;
+    const streamsNeedingSize = sorted
+        .filter(s => !s.size && s.url && DIRECT_VIDEO_RE.test(s.url))
+        .slice(0, 5);
+    if (streamsNeedingSize.length > 0) {
+        const sizeResults = await Promise.allSettled(
+            streamsNeedingSize.map(s => fetchVideoSize(s.url, s.headers))
+        );
+        for (let i = 0; i < streamsNeedingSize.length; i++) {
+            const size = sizeResults[i].status === 'fulfilled' ? sizeResults[i].value : null;
+            if (size) streamsNeedingSize[i].size = formatSizeWithMetadata(size, streamsNeedingSize[i]);
+        }
+    }
 
     if (options.preferredCodec) {
         return filterByPreferredCodec(sorted, options.preferredCodec);
@@ -928,13 +1068,13 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        // Support all known vidmoly TLDs: .net, .to, .ru, .is, .biz, .me
-        // Try original URL FIRST (avoids dead .me which returns 404+ads)
+        // Support all known vidmoly TLDs: .to, .biz, .net, .ru, .is, .me
+        // vidmoly.to is the active domain; .biz and .me are dead
         const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || '';
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.me/';
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.to/';
 
-        // Try all possible domains: original first, then alternative TLDs
-        const tldVariants = ['biz', 'me', 'net', 'to', 'ru', 'is'];
+        // Priority: original domain first, then to, net, ru (skip dead .biz and .me)
+        const tldVariants = ['to', 'net', 'ru', 'is'];
         const domains = [url]; // Original domain first
         for (const tld of tldVariants) {
             const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -950,7 +1090,9 @@ export async function resolveVidmoly(url) {
                 if (!res || !res.ok) continue;
                 let html = await res.text();
                 // Skip if response is ad/404 page (short or contains ad scripts)
-                if (html.length < 500 || html.includes('finisheddaysflamboyant')) continue;
+                // But allow JWT redirect pages (contain window.location.replace) even if short
+                const hasJsRedirect = /window\.location\.replace/.test(html);
+                if ((html.length < 500 && !hasJsRedirect) || html.includes('finisheddaysflamboyant')) continue;
                 
                 if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
@@ -959,6 +1101,8 @@ export async function resolveVidmoly(url) {
                               html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
                 if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
 
+                // Vidmoly uses JWT redirect: window.location.replace('URL?ch=1&js=JWT')
+                // Follow the redirect and try again
                 const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) ||
                                    html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
                 if (jsRedirect && jsRedirect[1] !== fetchUrl) {
@@ -1020,8 +1164,11 @@ export async function resolveUqload(url) {
                         resolve({ url, isDead: true });
                         return;
                     }
-                    const match = html.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/) ||
-                                  html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/);
+                    let content = html;
+                    if (content.includes('p,a,c,k,e,d') || content.includes('eval(function')) content = unpack(content);
+                    const match = content.match(/sources\s*:\s*\[[^\]]*?\{[^}]*?file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/i) ||
+                                  content.match(/sources\s*:\s*\[["']([^"']+\.(?:mp4|m3u8))["']\]/i) ||
+                                  content.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8))["']/i);
                     if (match && !resolved) {
                         resolved = true;
                         resolve({ url: match[1], headers: { "Referer": ref } });
@@ -1101,48 +1248,62 @@ export async function resolveFsvidVidzy(url) {
         const res = await safeFetch(url, { headers: { Referer: embedRef } });
         if (!res) return { url };
         let html = await res.text();
-        if (!html.includes('p,a,c,k,e,d')) return { url };
-        html = unpack(html);
+        // Unpack si le JS est packé (eval(function(p,a,c,k,e,d)...));
+        // Nouveau pattern (2024+): HTML non packé, IIFE en clair avec reverse+hash.
+        if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
-        // La vraie URL HLS est encodée en base64 XORée avec une clé statique
-        // (var k=[...],b=atob(s),r="";...return r})("BASE64") dans le script packé.
+        // La vraie URL HLS est encodée en base64 puis XORée.
         // Le m3u8 "s1.fsvid.lol/troll/master.m3u8" présent dans la page est un
         // LEURRE anti-scraper (identique pour tous les embeds) → à rejeter absolument.
-        // Tolérant aux variations d'obfuscation : var|let|const, espaces,
-        // et base64 standard OU URL-safe (- et _ mappés vers + et /).
-        const pattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
-        let match, videoUrl = null;
+        let videoUrl = null;
 
-        while ((match = pattern.exec(html)) !== null) {
-            const key = match[1].split(',').map(n => parseInt(n, 10));
-            const b64 = match[2].replace(/-/g, '+').replace(/_/g, '/');
-
-            // Décodage base64 via atob() natif — polyfillé sur NuvioMobile ET NuvioTV
-            // (vérifié dans le code des apps : base64Polyfill / getStaticPolyfillCode).
-            // Remplace l'ancien décodage maison B64_ALPHABET (superflu).
+        // --- Pattern 1 (2024+): clé dynamique via hostname hash + reverse ---
+        // IIFE: (function(s){var h=(location&&location.hostname)||"",H=0;...
+        //   var b=atob(s),a=b.split("").reverse().join(""),r="";...
+        //   var kk=(0x3d+i*89+H)&255; r+=String.fromCharCode(a.charCodeAt(i)^kk)
+        //   ...return /^https?:/.test(r)?r:"troll"})("BASE64")
+        const hostname = embedDomain ? embedDomain.split('/')[0] : (embedRef.split('//')[1] || '').replace(/\//g, '');
+        const newPattern = html.match(/\}\)\(["']([A-Za-z0-9+/=_-]{50,})["']\)/);
+        if (newPattern && html.includes('reverse().join')) {
+            const b64 = newPattern[1].replace(/-/g, '+').replace(/_/g, '/');
             let bin = '';
-            try {
-                bin = atob(b64);
-            } catch (e) {
-                continue;
+            try { bin = atob(b64); } catch (e) {}
+            if (bin) {
+                // Compute hostname hash H
+                let H = 0;
+                for (let j = 0; j < hostname.length; j++) {
+                    H = (H + hostname.charCodeAt(j)) & 255;
+                }
+                // Reverse + XOR with dynamic key
+                const a = bin.split('').reverse().join('');
+                let decoded = '';
+                for (let i = 0; i < a.length; i++) {
+                    const kk = (0x3d + i * 89 + H) & 255;
+                    decoded += String.fromCharCode(a.charCodeAt(i) ^ kk);
+                }
+                if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
+                    videoUrl = decoded;
+                }
             }
+        }
 
-            // XOR avec la clé
-            let decoded = '';
-            for (let i = 0; i < bin.length; i++) {
-                decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
-            }
-
-            // Garde anti-faux-positif : URL http + playlist + pas de leurre troll.
-            // NB: les URLs multiaudio se terminent par ",.urlset/master.m3u8?t=..." —
-            // ce sont des masters HLS STANDARD directement jouables (pistes AUDIO
-            // FR/EN + SUBTITLES, vérifié en live : master 200 + segments 200).
-            // Le proxy /ad-et/es.ad?m= du player n'est utilisé que par le chemin
-            // Chromecast (cast.framework.CastSession.loadMedia), PAS par les
-            // lecteurs natifs — donc on renvoie l'URL telle quelle.
-            if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
-                videoUrl = decoded;
-                break;
+        // --- Pattern 2 (legacy): clé statique var k=[...] ---
+        if (!videoUrl) {
+            const legacyPattern = /(?:var|let|const)\s*k=\[([0-9,\s]+)\],b=atob\(s\)[\s\S]*?return\s+\w+\}\)\(["']([A-Za-z0-9+/=_-]+)["']\)/g;
+            let match;
+            while ((match = legacyPattern.exec(html)) !== null) {
+                const key = match[1].split(',').map(n => parseInt(n, 10));
+                const b64 = match[2].replace(/-/g, '+').replace(/_/g, '/');
+                let bin = '';
+                try { bin = atob(b64); } catch (e) { continue; }
+                let decoded = '';
+                for (let i = 0; i < bin.length; i++) {
+                    decoded += String.fromCharCode(bin.charCodeAt(i) ^ key[i % key.length]);
+                }
+                if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
+                    videoUrl = decoded;
+                    break;
+                }
             }
         }
 
@@ -1353,41 +1514,84 @@ export async function resolvePackedPlayer(url) {
 }
 
 export async function resolveLecteurVideo(url) {
-    // lecteurvideo.com: embed player WordPress/WP theme.
+    // lecteurvideo.com: aggrégateur de liens vidéo (ex: wookafr → lecteurvideo → filemoon/voe).
     // Format: /embed.php?id={id}&tp={type}&url={referrer}
     // Le paramètre `url` est le nom du site référant (ex: wookafr.tel).
-    // La page contient généralement un player JS avec l'URL vidéo encodée.
+    // La page contient des liens vers des hébergeurs (filemoon, voe, veev, etc.).
     try {
         const origin = url.match(/^https?:\/\/[^/]+/)?.[0] || 'https://lecteurvideo.com';
-        const res = await safeFetch(url, { headers: { 'Referer': origin + '/', 'Origin': origin } });
+        // Mapping referrer → domaine de travail (wookafr.tel → wookafr.center)
+        const refParam = url.match(/[?&]url=([^&]+)/)?.[1] || '';
+        const referrerMap = {
+            'wookafr.tel': 'https://wookafr.center',
+            'wookafr.to': 'https://wookafr.center',
+            'wookafr.app': 'https://wookafr.center',
+            'wookafr.fyi': 'https://wookafr.center',
+        };
+        const referer = referrerMap[refParam] || `https://${refParam}` || origin + '/';
+        const res = await safeFetch(url, {
+            headers: { 'Referer': referer, 'Origin': referer.replace(/\/$/, '') },
+            timeout: 12000,
+        });
         if (!res) return { url };
         let html = await res.text();
         if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
-        // Recherche dans l'ordre : file:, sources:, src:, puis URLs directes m3u8/mp4
-        const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
+        // 1. Chercher des URLs vidéo directes (m3u8/mp4) — ancien format
+        const directMatch = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                       html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                       html.match(/src\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
-                      html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
-                      html.match(/['"]?url['"]?\s*[:=]\s*['"]([^"']+\/videos\/[^"']+\.[^"']+)['"]/i) ||
-                      html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-
-        if (match) {
-            let videoUrl = match[1] || match[0];
+                      html.match(/data-src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
+        if (directMatch) {
+            let videoUrl = directMatch[1];
             if (videoUrl.startsWith('//')) videoUrl = 'https:' + videoUrl;
             if (!isKnownFakeDirectUrl(videoUrl)) {
                 return { url: videoUrl, headers: { 'Referer': origin + '/' } };
             }
         }
 
-        // Chercher un iframe vers un autre hébergeur (sibnet, sendvid, etc.)
+        // 2. Nouveau format : extraire TOUS les liens externes
+        const allUrls = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1])
+            .concat([...html.matchAll(/["'](https?:\/\/[^"']+)["']/gi)].map(m => m[1]))
+            .filter(u => !u.includes('lecteurvideo.com') && !u.includes('youtube.com') &&
+                         !u.includes('googlevideo.com') && !u.includes('fonts.googleapis.com') &&
+                         !u.includes('jsdelivr.net') && !u.includes('cloudflareinsights.com') &&
+                         !u.includes('themoviedb.org') && !u.includes('imagizer.imageshack.com') &&
+                         !u.includes('cloudflare') && !u.includes('plyr.'));
+
+        // 2a. PRIORITÉ MAX: URLs directes avec extension vidéo (.mp4/.m3u8/.mkv/.webm)
+        const DIRECT_VIDEO_RE = /^https?:\/\/[^"']+\.(?:m3u8|mp4|mkv|webm)(?:\?[^"']*)?$/i;
+        const directVideo = allUrls.find(u => DIRECT_VIDEO_RE.test(u) && !isKnownFakeDirectUrl(u));
+        if (directVideo) return { url: directVideo, headers: { 'Referer': origin + '/' } };
+
+        // 2b. URLs directes des hébergeurs de download (megaup, 1fichier)
+        //     megaup.net/.../file.mp4 est souvent une URL directe jouable
+        const directHosts = ['megaup.net', '1fichier.com'];
+        for (const host of directHosts) {
+            const found = allUrls.find(u => u.includes(host));
+            if (found) return { url: found, headers: { 'Referer': origin + '/' } };
+        }
+
+        // 2c. Fallback: hébergeurs SPA connus (filemoon, voe, etc.) — moins fiables
+        const spaHosts = ['sibnet.ru', 'sendvid.com', 'dood.to', 'listeamed.net', 'voe.sx', 'veev.to', 'filemoon.sx'];
+        for (const host of spaHosts) {
+            const found = allUrls.find(u => u.includes(host));
+            if (found) return { url: found, headers: { 'Referer': origin + '/' } };
+        }
+
+        // 3. Chercher un iframe vers un autre hébergeur
         const iframeMatch = html.match(/<iframe[^>]+src=["'](https?:\/\/[^"']+)["']/i);
         if (iframeMatch) {
             const iframeSrc = iframeMatch[1];
-            if (!iframeSrc.includes('lecteurvideo.com') && !iframeSrc.includes('youtube.com') && !iframeSrc.includes('googlevideo.com')) {
+            if (!iframeSrc.includes('lecteurvideo.com') && !iframeSrc.includes('youtube.com')) {
                 return { url: iframeSrc, headers: { 'Referer': origin + '/' } };
             }
         }
+        // 4. Retourner le premier lien non-tracké
+        const downloadLink = allUrls.find(u =>
+            u.includes('1fichier.com') || u.includes('megaup.net') || u.includes('filemoon') ||
+            u.includes('voe.sx') || u.includes('veev.to') || u.includes('listeamed.net'));
+        if (downloadLink) return { url: downloadLink, headers: { 'Referer': origin + '/' } };
     } catch (e) {}
     return { url };
 }
@@ -1431,7 +1635,7 @@ export async function resolveUp4fun(url) {
 const KNOWN_HOST_NAMES = [
     { name: 'streamtape', domain: 'streamtape.com' },
     { name: 'sibnet', domain: 'sibnet.ru' },
-    { name: 'vidmoly', domain: 'vidmoly.biz' },
+    { name: 'vidmoly', domain: 'vidmoly.to' },
     { name: 'uqload', domain: 'uqload.co' },
     { name: 'voe', domain: 'voe.sx' },
     { name: 'dood', domain: 'dood.to' },

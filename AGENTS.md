@@ -44,6 +44,9 @@ Keep responses concise and to the point in French - unless the user asks otherwi
   - Optional: `title`, `name`, `quality`, `headers`, `provider`, `type`, `size`, `language`, `infoHash`, `seeders`, `peers`
   - `subtitles`: `[{ url, language, name, headers }]` — **NuvioMobile only** (NuvioTV ignores the field entirely). `language` defaults to `"Unknown"` when absent → always set it (`fra`, `eng`, …). `headers` are applied per-subtitle by the app player.
 - **Headers**: Applied via the app playback proxy — `behaviorHints.proxyHeaders` (both apps) + `notWebReady=true` (NuvioMobile only); `Range` and `Accept-Encoding` are stripped by the runtime — do not rely on them
+- **Language** : NuvioTV compare `language` aux codes app (`fr`, `en`, `multi`, `ja`) — des valeurs comme `"VOSTFR"`/`"VF"` sont classées "Unknown" dans les filtres/tri. Toujours normaliser via `normalizeLanguageCode()` de `src/utils/resolvers.js` (fait automatiquement dans `resolveStream`) ; garder VF/VOSTFR dans le `title` pour l'affichage
+- **Size** : format parsable requis pour filtres/tri app — regex `\d+(,\d+)?\s*(TB|GB|MB|KB)`, ex. `"1.4 GB"`
+- **Champs rejetés silencieusement** : toute valeur contenant `[object` (title, url, quality...) est filtrée par `parseJsonResults` côté NuvioTV
 - **`type` values**: `'dash'`/`'mpd'` → DASH (natively supported by ExoPlayer/Media3 on NuvioMobile Android **and** NuvioTV), `'hls'`/`'m3u8'` → HLS, `'mp4'`/`'mkv'` → progressive
 - **Manifest `disabledPlatforms`/`supportedPlatforms`**: currently **inert** — NuvioMobile hardcodes its platform to `android`/`ios` (never matches `tv`), NuvioTV parses the fields but never applies them. Keep as documentation/future-proofing only.
 
@@ -53,11 +56,16 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - **AbortController/AbortSignal**: Polyfilled on both, but does **not** cancel the in-flight native fetch — NuvioMobile ignores `signal` entirely, NuvioTV only checks `aborted` before/after. Use budget/time-guards instead
 - **Crypto**: `CryptoJS` via `require('crypto-js')` on both runtimes; `crypto.subtle` (WebCrypto: AES-GCM/CBC/ECB, HMAC, PBKDF2, SHA-1/256/384/512, RSA/ECDSA sign/verify) **additionally on NuvioMobile only**
 - **`TMDB_API_KEY`**: Exposed as `globalThis.TMDB_API_KEY` on **NuvioTV only** (not on Mobile) — use with `typeof` fallback
-- **Require()**: Only `cheerio` and `crypto-js`; all other deps must be bundled via esbuild
+- **Require()**: `cheerio` = sur NuvioTV c'est un **polyfill JS maison sur jsoup**, pas la vraie cheerio; `crypto-js` (bytecode précompilé, global `CryptoJS`); tous les autres deps doivent être bundlés via esbuild
+- **Polyfill cheerio NuvioTV — méthodes ABSENTES** (TypeError si utilisées) : `.closest()`, `.hasClass()`, `.siblings()`, `.parents()`, `.nextAll()`, `.prevAll()` ; `.parent()` retourne toujours vide. Feature-détecter (`typeof $(el).closest === 'function'`) ou éviter
 - **Fetch limits**: 
   - Response body truncated at **1 MB** (both apps; 256 KB in older runtimes)
-  - Headers truncated at **8 KB**
+  - Headers truncated at **8 KB**, clés en minuscules sur Mobile, valeurs jointes par `,`
   - `response.json()` returns `null` (not rejected) on parse failure → always guard
+- **Timeouts** : plugin **60 s** total, HTTP **30 s** connect/read/write → viser < 45 s par provider, paralléliser avec `Promise.allSettled`
+- **User-Agent** : un UA court sans version Chrome est injecté si absent → souvent rejeté par Cloudflare. Toujours utiliser le UA Chrome complet (`USER_AGENT` de `src/utils/resolvers.js`)
+- **Accept-Encoding** strippé par le runtime → OkHttp décompresse le gzip automatiquement (ne pas le définir)
+- **POST** : Content-Type défaut runtime = `application/x-www-form-urlencoded` → toujours définir explicitement
 - **Plugin timeout**: 60 seconds per scraper (scrapers run in parallel, each in its own isolated QuickJS instance)
 - **Provider size limit**: 5 MB download limit
 

@@ -2,7 +2,7 @@ import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords } f
 import cheerio from 'cheerio-without-node-native';
 import { safeFetch, resolveStream, isBudgetExhausted, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { fetchText, fetchJson, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
+import { fetchText, fetchJson, fetchPost, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
 
 const withCache = createCache('fs', 'FrenchStream', { failureTtl: 120_000, maxSize: 200 }); // 2min failure (rate limiting)
@@ -129,7 +129,15 @@ function parseSearchCards(html, baseUrl) {
             // Extract newsId from multiple possible sources
             const onclick = $card.find('.info-button').attr('onclick') || '';
             const dataId = $card.find('[data-id]').first().attr('data-id') || $card.attr('data-id') || '';
-            const newsId = pickNewsId(onclick, hrefRaw) || dataId;
+            // Chercher aussi dans tous les hrefs de la card (le lien newsid peut ne pas être le premier)
+            let newsId = pickNewsId(onclick, hrefRaw) || dataId;
+            if (!newsId) {
+                $card.find('a[href]').each((_, el) => {
+                    if (newsId) return;
+                    const h = $(el).attr('href') || '';
+                    newsId = pickNewsId('', h);
+                });
+            }
             if (!newsId) return;
 
             // Avoid duplicate cards with same newsId
@@ -166,11 +174,10 @@ function scoreCard(card, queryTitle, mediaType, season) {
     if (t === q) score += 120;
     if (hay.includes(q)) {
       score += 70;
-      // Pénalité anti-fan-edit : chaque mot significatif en trop du résultat
-      // (ex: requête "Naruto" → "Naruto Shippuden Kai" = 2 mots extra) retire -25.
-      // Utilise hay (titre + href normalisés) pour couvrir aussi les slugs de
-      // fan-edit (ex: card titrée "Naruto" avec href /naruto-shippuden-kai-1x1/).
-      const extra = countExtraWords(hay, q);
+      // Pénalité anti-fan-edit : utilise uniquement le titre (pas l'href)
+      // pour éviter les faux négatifs dus aux mots parasites dans l'URL
+      // (newsid, index, php, etc.).
+      const extra = countExtraWords(t, q);
       if (extra > 0) score -= Math.min(extra * 25, 55);
     }
     if (q.includes(t)) score += 40;
@@ -194,12 +201,25 @@ function scoreCard(card, queryTitle, mediaType, season) {
     return score;
 }
 
+function extractSerieTag(html) {
+    // Extraire le tagz depuis #serie-data > .sd-tagz dans la page d'une série.
+    // Le tag a le format 's-XXXXX' et est utilisé par get_seasons.php.
+    const tagMatch = html.match(/sd-tagz[^>]*>[\s\S]*?(s-[A-Za-z0-9_-]+)/);
+    if (tagMatch) return tagMatch[1];
+    // Fallback: chercher data-tagz attribute
+    const dataTagMatch = html.match(/data-tagz=["']([^"']+)/);
+    if (dataTagMatch) return dataTagMatch[1];
+    return null;
+}
+
 async function searchByTitle(title, mediaType, season) {
     const allCards = [];
+    // Le site bloque la recherche GET (302 → /). Utiliser POST.
     const results = await Promise.allSettled(
         BASE_URLS.map(baseUrl => {
-            const url = baseUrl + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(title);
-            return fetchText(url, { baseUrl }).then(html => parseSearchCards(html, baseUrl));
+            const url = baseUrl + '/index.php';
+            const body = 'do=search&subaction=search&story=' + encodeURIComponent(title);
+            return fetchPost(url, body, { baseUrl }).then(html => parseSearchCards(html, baseUrl));
         })
     );
     for (const r of results) {
@@ -273,8 +293,12 @@ function dedupeByUrl(streams) {
 
 async function fetchSeasons(tmdbId) {
     const tag = 's-' + tmdbId;
-    const url = BASE_URL + '/engine/ajax/get_seasons.php?serie_tag=' + tag + '&news_id=0';
-    return withCache('seasons_' + tmdbId, async () => {
+    return fetchSeasonsRaw(tag, tmdbId);
+}
+
+async function fetchSeasonsRaw(tag, cacheKey) {
+    const url = BASE_URL + '/engine/ajax/get_seasons.php?serie_tag=' + encodeURIComponent(tag) + '&news_id=0';
+    return withCache('seasons_' + (cacheKey || tag), async () => {
         const data = await fetchJson(url, { baseUrl: BASE_URL });
         if (!Array.isArray(data)) return [];
         return data;
@@ -547,11 +571,63 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode);
         // ------------------------------------
 
-        let seasons = [];
+        // Étape 1: Chercher la page de la série via POST search pour obtenir le bon tag
+        let serieTag = null;
+        let firstSeasonNewsId = null;
         try {
-            seasons = await fetchSeasons(tmdbId);
+            for (const title of buildTitleQueries(titles)) {
+                const ranked = await searchByTitle(title, 'tv', effectiveSeason);
+                if (ranked.length > 0 && ranked[0]._score >= MIN_MATCH_SCORE) {
+                    const card = ranked[0];
+                    const pageHtml = await fetchText(card.href || card.baseUrl + '/index.php?newsid=' + card.newsId, { baseUrl: card.baseUrl || BASE_URL, timeout: 10000 });
+                    serieTag = extractSerieTag(pageHtml);
+                    // Extraire aussi le newsId de la première saison depuis la page
+                    const firstSeasonMatch = pageHtml.match(/data-news-id=["']?(\d+)/);
+                    if (firstSeasonMatch) firstSeasonNewsId = firstSeasonMatch[1];
+                    if (serieTag) {
+                        console.log('[Frenchstream] Extracted serie_tag: ' + serieTag + ' from search');
+                        break;
+                    }
+                }
+            }
         } catch (e) {
-            console.warn(`[Frenchstream] fetchSeasons failed: ${e.message}`);
+            console.warn('[Frenchstream] Serie tag extraction failed: ' + e.message);
+        }
+
+        // Étape 2: Fetch les saisons avec le bon tag (extrait ou fallback TMDB ID)
+        let seasons = [];
+        if (serieTag) {
+            try {
+                seasons = await fetchSeasonsRaw(serieTag);
+            } catch (e) {
+                console.warn(`[Frenchstream] fetchSeasons(tag=${serieTag}) failed: ${e.message}`);
+            }
+        }
+        // Fallback: essayer avec s-{tmdbId} (ancien comportement)
+        if (seasons.length === 0) {
+            try {
+                seasons = await fetchSeasons(tmdbId);
+            } catch (e) {
+                console.warn(`[Frenchstream] fetchSeasons(tmdbId=${tmdbId}) failed: ${e.message}`);
+            }
+        }
+        // Si on a un firstSeasonNewsId, essayer directement fetchEpisodeData
+        if (seasons.length === 0 && firstSeasonNewsId) {
+            try {
+                const epData = await fetchEpisodeData(firstSeasonNewsId);
+                if (epData) {
+                    for (const ep of targetEpisodes) {
+                        const candidates = collectTvSiteCandidates(epData, ep, subType);
+                        if (candidates.length > 0) {
+                            const streams = await resolveCandidates(candidates);
+                            console.log('[Frenchstream] Direct eps ' + firstSeasonNewsId + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
+                            return streams;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[Frenchstream] Direct episode data failed: ' + e.message);
+            }
         }
         if (seasons.length > 0) {
             const sn = Number(effectiveSeason) || 1;

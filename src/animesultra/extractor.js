@@ -1,7 +1,7 @@
 import { stripSeasonSuffix, normalize, resolveTargetEpisodes, toStream } from '../utils/dle-extractor.js';
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
+import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://ww.animesultra.org";
@@ -90,7 +90,7 @@ async function searchAnimeInner(title, now) {
         const searchUrl = `${BASE_URL}/index.php?do=search&subaction=search&story=${encodeURIComponent(title)}`;
         const html = await fetchText(searchUrl, {
             timeout: 8000,
-            headers: { "User-Agent": "Mozilla/5.0" }
+            headers: { "User-Agent": USER_AGENT }
         });
         const $ = cheerio.load(html);
 
@@ -231,7 +231,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         try {
             const sf = await safeFetch(`${BASE_URL}/engine/ajax/full-story.php?newsId=${newsId}`, {
                 timeout: 10000,
-                headers: { "User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest" }
+                headers: { "User-Agent": USER_AGENT, "X-Requested-With": "XMLHttpRequest" }
             });
             if (sf) {
                 const d = await sf.json();
@@ -257,35 +257,58 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     };
 
     const fetchEpisodeServers = async (epHref, $context, lang) => {
-        const epRes = await safeFetch(epHref, { timeout: 10000, headers: { "User-Agent": "Mozilla/5.0" }});
+        const epRes = await safeFetch(epHref, { timeout: 10000, headers: { "User-Agent": USER_AGENT }});
         if (!epRes || !epRes.ok) {
             console.log(`[AnimesUltra] Episode page not OK (${epRes?.status}) for ${epHref}`);
             return [];
         }
         const epHtml = await epRes.text();
         const $ep = cheerio.load(epHtml);
-        if ($ep('.server-item').length === 0) {
-            console.log(`[AnimesUltra] No server items on ${epHref}`);
-            return [];
-        }
         const servers = [];
-        $ep('.server-item').each((i, el) => {
-            const sId = $ep(el).attr('data-server-id');
-            const embed = $ep(el).attr('data-embed');
-            const sname = $ep(el).text().trim() || `Srv_${sId}`;
-            let url = null;
-            if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) url = embed;
-            if (sId) {
-                const box = $context(`#content_player_${sId}`);
-                if (box.length > 0) {
-                    const textUrl = box.text().trim();
-                    const iframeUrl = box.find('iframe').attr('src');
-                    const altUrl = textUrl || iframeUrl;
-                    if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) url = altUrl;
+
+        // Format 1: Old .server-item divs with data-server-id / data-embed
+        if ($ep('.server-item').length > 0) {
+            $ep('.server-item').each((i, el) => {
+                const sId = $ep(el).attr('data-server-id');
+                const embed = $ep(el).attr('data-embed');
+                const sname = $ep(el).text().trim() || `Srv_${sId}`;
+                let url = null;
+                if (embed && (embed.startsWith('http') || /^[0-9]+$/.test(embed))) url = embed;
+                if (sId) {
+                    const box = $context(`#content_player_${sId}`);
+                    if (box.length > 0) {
+                        const textUrl = box.text().trim();
+                        const iframeUrl = box.find('iframe').attr('src');
+                        const altUrl = textUrl || iframeUrl;
+                        if (altUrl && (altUrl.startsWith('http') || /^[0-9]+$/.test(altUrl))) url = altUrl;
+                    }
                 }
+                if (url) servers.push({ url, lang, sname });
+            });
+            return servers;
+        }
+
+        // Format 2: New #content_player_Xvidc divs (VidCDN embed URLs)
+        // The site now embeds servers as <div id="content_player_Xvidc" class="player_box">URL</div>
+        $ep('[id^="content_player_"]').each((i, el) => {
+            const id = $ep(el).attr('id') || '';
+            const url = $ep(el).text().trim();
+            if (url && url.startsWith('http')) {
+                const serverId = id.replace('content_player_', '').replace(/vidc$/, '');
+                servers.push({ url, lang, sname: `UltraCDN ${serverId}` });
             }
-            if (url) servers.push({ url, lang, sname });
         });
+
+        // Format 3: Fallback - look for any iframe with video host URLs
+        if (servers.length === 0) {
+            $ep('iframe[src]').each((i, el) => {
+                const src = $ep(el).attr('src') || '';
+                if (src.startsWith('http') && !src.includes('google') && !src.includes('disqus')) {
+                    servers.push({ url: src, lang, sname: 'iframe' });
+                }
+            });
+        }
+
         return servers;
     };
 
@@ -322,12 +345,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             
             const $ = cheerio.load(html);
 
+            const targetNums = targetEpisodes.map(e => parseInt(e, 10));
             const epHrefs = [];
+            const epContentPlayers = [];
+
+            // Extract episode links and their corresponding content_player IDs
             $('.ep-item').each((i, el) => {
-                const epNum = $(el).attr('data-number');
-                if (epNum && targetEpisodes.map(e => parseInt(e, 10)).includes(parseInt(epNum, 10))) {
+                const epNum = parseInt($(el).attr('data-number'), 10);
+                if (epNum && targetNums.includes(epNum)) {
                     const href = $(el).attr('href');
                     if (href) epHrefs.push(href);
+                    // Extract the content_player ID from the ep-item data-id
+                    const dataId = $(el).attr('data-id') || '';
+                    epContentPlayers.push({ epNum, dataId });
                 }
             });
 
@@ -335,13 +365,55 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
             processedCount++;
 
+            // Strategy 1: Try fetching episode pages (old format with .server-item)
             const epResults = await Promise.allSettled(
                 epHrefs.map(epHref => fetchEpisodeServers(epHref, $, lang))
             );
+            let foundServers = false;
             for (const r of epResults) {
-                if (r.status === 'fulfilled') {
+                if (r.status === 'fulfilled' && r.value.length > 0) {
+                    foundServers = true;
                     for (const { url, sname } of r.value) {
                         pushStream(url, lang, sname);
+                    }
+                }
+            }
+
+            // Strategy 2: If no servers found, extract directly from full-story content_player divs
+            if (!foundServers) {
+                // The full-story HTML contains <div id="content_player_Xvidc" class="player_box">URL</div>
+                // These are indexed by episode order (1-based)
+                const targetEp = targetNums[0];
+                const allEpItems = [];
+                $('.ep-item').each((i, el) => {
+                    allEpItems.push({
+                        num: parseInt($(el).attr('data-number'), 10),
+                        dataId: $(el).attr('data-id') || ''
+                    });
+                });
+
+                // Find which position our target episode is in the list
+                const targetIdx = allEpItems.findIndex(e => e.num === targetEp);
+                if (targetIdx >= 0) {
+                    // Extract all content_player divs
+                    const cpRegex = /<div id="content_player_(\d+)(vidc?)" class="player_box">([^<]+)<\/div>/gi;
+                    let cpMatch;
+                    const contentPlayers = [];
+                    while ((cpMatch = cpRegex.exec(html)) !== null) {
+                        contentPlayers.push({
+                            id: cpMatch[1],
+                            suffix: cpMatch[2],
+                            url: cpMatch[3].trim()
+                        });
+                    }
+
+                    if (contentPlayers.length > 0) {
+                        // Match content_player to episodes by index
+                        // content_player_1vidc = episode 1, content_player_2vidc = episode 2, etc.
+                        const epContentPlayer = contentPlayers[targetIdx];
+                        if (epContentPlayer && epContentPlayer.url.startsWith('http')) {
+                            pushStream(epContentPlayer.url, lang, `UltraCDN ${epContentPlayer.id}`);
+                        }
                     }
                 }
             }
@@ -476,7 +548,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    // Fallback: if resolveStream filtered everything, keep only streams from resolvable hosts
+    // Fallback: if resolveStream filtered everything, keep streams from resolvable hosts or as embed URLs
     if (validStreams.length === 0 && streams.length > 0) {
         const resolvable = streams.filter(s => {
             const u = (s.url || '').toLowerCase();
@@ -485,6 +557,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (resolvable.length > 0) {
             console.log(`[AnimesUltra] resolveStream filtered all, returning ${resolvable.length} streams from known hosts`);
             return resolvable;
+        }
+        // Last resort: return embed URLs so native player can attempt playback
+        const embedStreams = streams.filter(s => s && s.url);
+        if (embedStreams.length > 0) {
+            console.log(`[AnimesUltra] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+            return embedStreams;
         }
         console.log(`[AnimesUltra] No resolvable streams (all ${streams.length} from unresolvable hosts)`);
         return [];

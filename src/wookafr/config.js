@@ -1,7 +1,7 @@
 export const SITE = {
-  BASE_URL: 'https://wookafr.cymru',
-  DOMAINS: ['https://wookafr.cymru', 'https://wookafr.fyi', 'https://wookafr.app', 'https://wookafr.to'],
-  DOMAIN: 'wookafr.cymru',
+  BASE_URL: 'https://wookafr.center',
+  DOMAINS: ['https://wookafr.center', 'https://wookafr.cymru', 'https://wookafr.fyi', 'https://wookafr.bond', 'https://wookafr.blue'],
+  DOMAIN: 'wookafr.center',
 }
 
 export const ENDPOINTS = {
@@ -35,10 +35,10 @@ export const PATTERNS = {
 }
 
 export const TIMEOUTS = {
-  SEARCH: 5000,
-  PAGE: 6000,
-  AJAX: 5000,
-  RESOLVE: 8000,
+  SEARCH: 8000,
+  PAGE: 12000,
+  AJAX: 8000,
+  RESOLVE: 12000,
   PROVIDER: 60000,
 }
 

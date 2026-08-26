@@ -58,3 +58,27 @@ export async function fetchJson(url, options = {}) {
         throw e;
     }
 }
+
+export async function fetchPost(url, body, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
+    await rateLimit(DOMAIN);
+    console.log(`[Frenchstream] POST: ${url}`);
+    const base = options.baseUrl || (() => { try { return new URL(url).origin; } catch (e) { return BASE_URL; } })();
+    const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
+    const mergedHeaders = {
+        ...HEADERS,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Referer: `${base}/`,
+        Origin: base,
+        ...(options.headers || {})
+    };
+    const { baseUrl, headers, ...restOptions } = options;
+    const res = await safeFetch(url, { method: 'POST', body, headers: mergedHeaders, ...restOptions, timeout, signal });
+    if (!res || !res.ok) {
+        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        throw new Error(`HTTP error ${status} for POST ${url}`);
+    }
+    return await res.text();
+}
