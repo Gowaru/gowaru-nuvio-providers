@@ -1,6 +1,6 @@
 /**
  * frenchstream - Built from src/frenchstream/
- * Generated: 2026-08-26T00:35:44.896544848Z
+ * Generated: 2026-08-26T01:19:12.703152651Z
  */
 var __provider = (() => {
   var __create = Object.create;

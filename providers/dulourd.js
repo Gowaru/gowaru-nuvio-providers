@@ -1,6 +1,6 @@
 /**
  * dulourd - Built from src/dulourd/
- * Generated: 2026-08-26T00:35:44.761544713Z
+ * Generated: 2026-08-26T01:19:12.544152482Z
  */
 var __provider = (() => {
   var __create = Object.create;
