@@ -282,33 +282,27 @@ async function buildSubtitles(epMeta, epId, signal) {
         { key: 'fra_full', flag: 'full', label: 'Français' },
         { key: 'fra_forced', flag: 'forced', label: 'Français (forced)' },
     ];
-    // Fetch tous les ASS en parallèle (2 fetches max, ~400ms chacun)
-    const trackPromises = tracks
-        .filter(track => epMeta.subtitles[track.key])
-        .map(async (track) => {
-            if (isAborted(signal)) return null;
-            const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${lang}-${track.flag}.ass`;
-            let url = assUrl;
-            try {
-                const assText = await fetchText(assUrl, { signal });
-                const vtt = assToVtt(assText);
-                if (vtt) url = vttToDataUri(vtt);
-            } catch (e) {
-                // fallback : garder l'URL ASS d'origine
-            }
-            return {
-                url,
-                language: 'fra',
-                name: track.label,
-                headers: {
-                    'Referer': `${BASE_URL}/`,
-                    'Origin': BASE_URL,
-                },
-            };
+    // Fetch ASS séquentiellement (QuickJS: fetch synchrone)
+    for (const track of tracks.filter(t => epMeta.subtitles[t.key])) {
+        if (isAborted(signal)) break;
+        const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${lang}-${track.flag}.ass`;
+        let url = assUrl;
+        try {
+            const assText = await fetchText(assUrl, { signal });
+            const vtt = assToVtt(assText);
+            if (vtt) url = vttToDataUri(vtt);
+        } catch (e) {
+            // fallback : garder l'URL ASS d'origine
+        }
+        subtitles.push({
+            url,
+            language: 'fra',
+            name: track.label,
+            headers: {
+                'Referer': `${BASE_URL}/`,
+                'Origin': BASE_URL,
+            },
         });
-    const results = await Promise.all(trackPromises);
-    for (const r of results) {
-        if (r) subtitles.push(r);
     }
     return subtitles;
 }
@@ -417,13 +411,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     const manifestUrl = `${BASE_URL}/playback/${ep.id}/manifest.mpd`;
 
-    // Paralléliser MPD quality + Episode meta (deux fetches indépendants)
-    const [quality, epMeta] = await Promise.all([
-        parseMpdQuality(manifestUrl, signal),
-        (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS))
-            ? fetchEpisodeMeta(ep.id, signal)
-            : Promise.resolve(null),
-    ]);
+    // MPD quality + Episode meta séquentiels (QuickJS: fetch synchrone)
+    const quality = await parseMpdQuality(manifestUrl, signal);
+    const epMeta = (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS))
+        ? await fetchEpisodeMeta(ep.id, signal)
+        : null;
 
     // Sous-titres ASS → WebVTT (data URI) — conversion en parallèle
     let subtitles = [];

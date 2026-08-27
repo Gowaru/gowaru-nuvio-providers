@@ -95,6 +95,7 @@ async function searchAnime(title) {
 function normalize(s) {
     return s.toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/-/g, ' ')
         .replace(/[':!.,?()[\]]/g, '').replace(/\b(the|vostfr|vost|vf|french|streaming|anime)\s+/g, '')
         .replace(/\s+/g, ' ').trim();
 }
@@ -217,49 +218,46 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
 
     const ranked = [...scored.values()].sort((a, b) => b.score - a.score);
 
-    // Verify candidates in parallel batches of 2 with 800ms gap between batches
-    // (site is very aggressive with rate limiting — 429 on >3 rapid requests)
-    const topCandidates = ranked.slice(0, 8);
+    // Verify top candidate only (site is very aggressive with rate limiting)
+    // If the top score is good enough, skip verification to save time
+    const topCandidates = ranked.slice(0, 3);
     let foundMatch = false;
     
-    for (let i = 0; i < topCandidates.length && !foundMatch; i += 2) {
-      const batch = topCandidates.slice(i, i + 2);
-      const batchResults = await Promise.allSettled(
-        batch.map(async (candidate) => {
-          try {
-            const verifyHtml = await fetchWithRetry(() => fetchText(`${BASE_URL}/anime/${candidate.slug}/`, { timeout: 10000 }));
-            const $v = cheerio.load(verifyHtml);
-            const pageTitle = $v('h1.hero-title').first().text().trim();
-            if (!pageTitle) {
-              badSlugs.add(candidate.slug);
-              return null;
-            }
-            const nPage = normalize(pageTitle);
-            const nTmdbTitles = titles.slice(0, 5).map(t => normalize(t));
-            const matchesTmdb = nTmdbTitles.some(nt => nPage.includes(nt) || nt.includes(nPage));
-            if (!matchesTmdb) {
-              badSlugs.add(candidate.slug);
-              return null;
-            }
-            return candidate;
-          } catch {
+    // Fast path: if top score is excellent (>=100), use directly without verification
+    if (topCandidates.length > 0 && topCandidates[0].score >= 100) {
+      bestMatch = topCandidates[0];
+      foundMatch = true;
+      console.log(`[AnimoFlix] Fast match (score ${bestMatch.score}): "${bestMatch.title}"`);
+    }
+    
+    // Verify only if fast path didn't work
+    if (!foundMatch) {
+      for (let i = 0; i < topCandidates.length && !foundMatch; i++) {
+        const candidate = topCandidates[i];
+        try {
+          const verifyHtml = await fetchWithRetry(() => fetchText(`${BASE_URL}/anime/${candidate.slug}/`, { timeout: 8000 }));
+          const $v = cheerio.load(verifyHtml);
+          const pageTitle = $v('h1.hero-title').first().text().trim();
+          if (!pageTitle) {
             badSlugs.add(candidate.slug);
-            return null;
+            continue;
           }
-        })
-      );
-      
-      for (const r of batchResults) {
-        if (r.status === 'fulfilled' && r.value) {
-          bestMatch = r.value;
+          const nPage = normalize(pageTitle);
+          const nTmdbTitles = titles.slice(0, 5).map(t => normalize(t));
+          const matchesTmdb = nTmdbTitles.some(nt => nPage.includes(nt) || nt.includes(nPage));
+          if (!matchesTmdb) {
+            badSlugs.add(candidate.slug);
+            continue;
+          }
+          bestMatch = candidate;
           foundMatch = true;
-          break;
+        } catch {
+          badSlugs.add(candidate.slug);
         }
-      }
-
-      // Small delay between batches to respect rate limits
-      if (!foundMatch && i + 2 < topCandidates.length) {
-        await sleep(800);
+        // Small delay between verifications
+        if (!foundMatch && i + 1 < topCandidates.length) {
+          await sleep(500);
+        }
       }
     }
 

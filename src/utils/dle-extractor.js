@@ -166,7 +166,13 @@ export async function resolveWithTimeout(stream) {
     const resolved = await resolveStream(stream)
     if (resolved && resolved.url) {
       if (resolved.isDirect) return resolved
-      return { ...resolved, isDirect: true }
+      // Only mark as direct if URL is a playable media file (.mp4, .m3u8, etc.)
+      const urlLower = (resolved.url || '').toLowerCase()
+      const isPlayable = urlLower.includes('.mp4') || urlLower.includes('.m3u8') || 
+                         urlLower.includes('/hls/') || urlLower.includes('master.m3u8')
+      if (isPlayable) return { ...resolved, isDirect: true }
+      // Otherwise return as embed (native player may handle it)
+      return { ...resolved, isDirect: false }
     }
     return null
   } catch {

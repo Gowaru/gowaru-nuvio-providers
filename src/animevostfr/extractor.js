@@ -299,13 +299,15 @@ async function extractPlayersFromEpisode(episodeUrl) {
 
         console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
 
-        // Resolve each trembed URL to get the real player iframe
-        const trembedPromises = trembedEntries.map(async (entry) => {
+        // Resolve each trembed URL to get the real player iframe (séquentiel + early-exit)
+        const DIRECT_HOSTS = ['vidmoly', 'sibnet', 'luluvid', 'uqload', 'myvi', 'mytv', 'dood', 'ds2play', 'hgcloud', 'stape', 'streamtape'];
+        let directCount = 0;
+        for (const entry of trembedEntries) {
             try {
                 let trembedUrl = entry.src;
                 if (trembedUrl.startsWith('/')) trembedUrl = BASE_URL + trembedUrl;
                 else if (trembedUrl.startsWith('?')) trembedUrl = BASE_URL + trembedUrl;
-                if (!trembedUrl.startsWith('http')) return null;
+                if (!trembedUrl.startsWith('http')) continue;
 
                 const embedHtml = await fetchText(trembedUrl, { timeout: SEARCH_TIMEOUT, headers: { 'Referer': episodeUrl } });
                 const $embed = cheerio.load(embedHtml);
@@ -329,17 +331,15 @@ async function extractPlayersFromEpisode(episodeUrl) {
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
-                    return stream;
+                    if (stream) {
+                        streams.push(stream);
+                        if (DIRECT_HOSTS.some(h => playerSrc.toLowerCase().includes(h))) directCount++;
+                        if (directCount >= 2) break;
+                    }
                 }
             } catch (err) {
                 console.error(`[AnimeVOSTFR] Failed to resolve player "${entry.serverName}": ${err.message}`);
             }
-            return null;
-        });
-
-        const playerStreams = await Promise.all(trembedPromises);
-        for (const stream of playerStreams) {
-            if (stream) streams.push(stream);
         }
     } catch (e) {
         console.error(`[AnimeVOSTFR] Error extracting players: ${e.message}`);
@@ -465,7 +465,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // Movie mode: only try the first match (1 hop) to avoid excessive chaining
     const matchesToProcess = mediaType === 'movie' ? uniqueMatches.slice(0, 1) : uniqueMatches;
 
-    const matchPromises = matchesToProcess.map(async (match) => {
+    // Résolution séquentielle avec early-exit (target 2 streams directs)
+    let directStreamCount = 0;
+    for (const match of matchesToProcess) {
+        if (directStreamCount >= 2) break;
+
         const langSuffix = detectLang(match.url, match.title);
         const matchLower = (match.title + ' ' + match.url).toLowerCase();
 
@@ -474,53 +478,40 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             && !mainWords.some(w => matchLower.includes(w));
         if (isSpinoff && uniqueMatches.length > 1) {
             console.log(`[AnimeVOSTFR] Skipping spinoff match: ${match.title}`);
-            return [];
+            continue;
         }
 
         const seasonMatchText = matchLower.match(/saison\s*(\d+)/);
         if (seasonMatchText && parseInt(seasonMatchText[1]) !== Number(searchSeason) && targetEpisodes.length === 1) {
-            return [];
+            continue;
         }
 
-        const epResults = await Promise.allSettled(
-            targetEpisodes.map(async (ep) => {
-                const isAbsolute = ep !== searchEpisode;
-                const episodeUrl = await findEpisodeUrl(match.url, searchSeason, ep, isAbsolute);
-                if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
-                    checkedEpisodeUrls.add(episodeUrl);
-                    const playerStreams = await extractPlayersFromEpisode(episodeUrl);
-                    return { ep, playerStreams };
-                }
-                return null;
-            })
-        );
-
-        const matchStreams = [];
-        for (const r of epResults) {
-            if (r.status === 'fulfilled' && r.value) {
-                const { ep, playerStreams } = r.value;
-                const epType = ep === searchEpisode ? "" : ` (Abs ${ep})`;
-                playerStreams.forEach(s => {
-                    if (!s.name.includes('(')) {
-                        s.name = `AnimeVOSTFR (${langSuffix})`;
-                    }
-                    if (!s.title.includes(langSuffix)) {
-                        s.title = `${s.title}${epType} - ${langSuffix}`;
-                    } else {
-                        s.title = `${s.title}${epType}`;
-                    }
-                    s.language = langSuffix;
-                });
-                matchStreams.push(...playerStreams);
+        const epResults = [];
+        for (const ep of targetEpisodes) {
+            const isAbsolute = ep !== searchEpisode;
+            const episodeUrl = await findEpisodeUrl(match.url, searchSeason, ep, isAbsolute);
+            if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
+                checkedEpisodeUrls.add(episodeUrl);
+                const playerStreams = await extractPlayersFromEpisode(episodeUrl);
+                epResults.push({ ep, playerStreams });
             }
         }
-        return matchStreams;
-    });
 
-    const results = await Promise.allSettled(matchPromises);
-    for (const r of results) {
-        if (r.status === 'fulfilled') {
-            streams.push(...r.value);
+        for (const { ep, playerStreams } of epResults) {
+            const epType = ep === searchEpisode ? "" : ` (Abs ${ep})`;
+            playerStreams.forEach(s => {
+                if (!s.name.includes('(')) {
+                    s.name = `AnimeVOSTFR (${langSuffix})`;
+                }
+                if (!s.title.includes(langSuffix)) {
+                    s.title = `${s.title}${epType} - ${langSuffix}`;
+                } else {
+                    s.title = `${s.title}${epType}`;
+                }
+                s.language = langSuffix;
+            });
+            streams.push(...playerStreams);
+            if (playerStreams.some(s => s.isDirect)) directStreamCount++;
         }
     }
 

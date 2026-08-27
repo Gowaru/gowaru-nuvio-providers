@@ -484,10 +484,11 @@ function getCachedFetch(key) {
 }
 
 function setCachedFetch(key, data) {
-    // Éviction LRU : si le cache dépasse 200 entrées, supprimer les 20% plus anciennes
+    // Éviction LRU : si le cache dépasse 300 entrées, supprimer les 20% plus anciennes
     // (au lieu de vider tout le cache, ce qui cassait le warm cache)
-    if (fetchCache.size >= 200) {
-        const toRemove = Math.ceil(200 * 0.2); // 40 entrées
+    // Augmenté de 200→300 pour supporter plus de providers concurrents
+    if (fetchCache.size >= 300) {
+        const toRemove = Math.ceil(300 * 0.2); // 60 entrées
         const sorted = [...fetchCache.entries()]
             .sort((a, b) => a[1].ts - b[1].ts)
             .slice(0, toRemove);
@@ -747,9 +748,10 @@ export async function expandStreamQualities(streams, options = {}) {
     for (const stream of expanded) {
         if (!stream?.url) continue;
         if (isKnownFakeDirectUrl(stream.url)) continue;
-        // Dedup by URL + normalized language: keep streams with same URL but different languages
-        const dedupLang = normalizeLanguageCode(stream.language || inferLanguage(stream)) || stream.language || '';
-        const dedupKey = `${stream.url}|${dedupLang}`;
+        // Dedup by URL + RAW language (not normalized): preserve VF vs VOSTFR distinction
+        // when same URL is used for both (e.g. FrenchManga S01 where VF=VOSTFR URLs)
+        const rawLang = stream.language || inferLanguage(stream) || '';
+        const dedupKey = `${stream.url}|${String(rawLang).toUpperCase()}`;
         if (seen.has(dedupKey)) continue;
         seen.add(dedupKey);
         deduped.push(stream);
@@ -1392,7 +1394,8 @@ export async function resolveSendvid(url) {
         // Detect service outage (502/503 = Technical Difficulties page)
         if (res.status === 502 || res.status === 503) {
             console.warn(`[Sendvid] Service temporarily unavailable (${res.status}): ${embedUrl.slice(0, 60)}`);
-            return { url, isDead: true };
+            // Return embed URL as fallback - native player may handle it
+            return { url: embedUrl, isDirect: false };
         }
 
         const html = await res.text();

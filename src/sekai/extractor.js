@@ -304,9 +304,12 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
                 if (mainHtml.length >= 5000) break;
             }
 
-            // Étape B: dernier recours — essayer TOUS les slugs connus
+            // Étape B: dernier recours — essayer les slugs connus (max 5 pour budget)
+            // OPTIMISATION: Limiter le nombre de slugs testés (fetch synchrone)
             if (mainHtml.length < 5000) {
-                for (const s of allSeries) {
+                const maxBrute = Math.min(allSeries.length, 5);
+                for (let i = 0; i < maxBrute; i++) {
+                    const s = allSeries[i];
                     if (isBudgetExhausted(startTime, BUDGET_MS)) break;
                     const sUrl = `${BASE_URL}/${s.slug}`;
                     if (sUrl === seriesUrl) continue;
@@ -348,17 +351,15 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
     let epMap = {};
 
     // Cas 1: Séries avec sagas (ex: One Piece) — fetch les pages saga
+    // OPTIMISATION: Fetch séquentiel avec early-exit (fetch synchrone en QuickJS)
     const sagasToFetch = sagaUrls.slice(0, 6);
     if (!isBudgetExhausted(startTime, BUDGET_MS) && sagasToFetch.length > 0) {
-        // Fetch en parallèle avec limite de concurrence (3 à la fois)
-        let idx = 0;
-        while (idx < sagasToFetch.length && !isBudgetExhausted(startTime, BUDGET_MS)) {
-            const batch = sagasToFetch.slice(idx, idx + 3);
-            const batchHtmls = await Promise.all(
-                batch.map(url => fetchSagaPage(url).catch(() => ''))
-            );
+        for (const sagaUrl of sagasToFetch) {
+            if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+            if (epMap[absEp] && Object.keys(epMap[absEp]).length > 0) break;
 
-            for (const html of batchHtmls) {
+            try {
+                const html = await fetchSagaPage(sagaUrl);
                 if (!html || html.length < 1000) continue;
                 const sagaMap = parseEpisodeMapFromHtml(html);
                 // Merge dans epMap
@@ -366,15 +367,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
                     if (!epMap[num]) epMap[num] = {};
                     Object.assign(epMap[num], sources);
                 }
-            }
-
-            // Early exit: si l'épisode est trouvé, arrêter de fetcher les sagas
-            if (epMap[absEp] && Object.keys(epMap[absEp]).length > 0) {
-                console.log(`[Sekai] Found episode ${absEp} (early exit after batch)`);
-                break;
-            }
-
-            idx += 3;
+            } catch (e) { /* skip failed saga */ }
         }
     }
 

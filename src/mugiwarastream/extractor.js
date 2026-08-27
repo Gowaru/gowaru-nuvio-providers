@@ -214,31 +214,29 @@ function buildStreamEntry(url, label, langLabel, title, quality) {
 }
 
 async function resolveStreams(streams) {
-    const results = await Promise.allSettled(
-        streams.map(stream =>
-            resolveStream(stream)
-                .then(r => {
-                    if (r && r.url && r.isDirect) {
-                        // Preserve original labels (title, name, quality) when resolution succeeds
-                        return { ...stream, url: r.url, isDirect: true, quality: r.quality || stream.quality };
-                    }
-                    // Resolution failed or returned non-direct — keep original stream as fallback
-                    return stream;
-                })
-                .catch(() => stream)
-        )
-    );
-    const resolved = results.map(r => r.status === 'fulfilled' ? r.value : null).filter(Boolean);
-    
-    // Prefer direct streams, but include embed fallbacks if none are direct
-    const direct = resolved.filter(s => s && s.isDirect);
-    const embed = resolved.filter(s => s && !s.isDirect && s.url);
+    // Sequential resolution with early-exit (QuickJS: fetch synchrone)
+    const direct = [];
+    const embed = [];
+    for (const stream of streams) {
+        try {
+            const r = await resolveStream(stream);
+            if (r && r.url && r.isDirect) {
+                direct.push({ ...stream, url: r.url, isDirect: true, quality: r.quality || stream.quality });
+            } else {
+                embed.push(stream);
+            }
+        } catch {
+            embed.push(stream);
+        }
+        // Early exit: 3 direct streams is enough
+        if (direct.length >= 3) break;
+    }
     if (direct.length > 0) return direct;
     if (embed.length > 0) {
         console.log(`[Mugiwara] No direct streams, using ${embed.length} embed URL(s) as fallback`);
         return embed;
     }
-    return resolved;
+    return [];
 }
 
 function collectSourceUrls(episodeSourceUrls) {
@@ -386,20 +384,12 @@ async function getAnimeData(slug, mediaType) {
             pageHtml = await fetchText(pageUrl);
         } catch (e) {
             if (mediaType !== 'movie') {
-                const probes = [];
+                // Sequential probing (QuickJS: fetch synchrone)
                 for (let s = 2; s <= 20; s++) {
-                    probes.push(
-                        fetchText(`${BASE}/catalogue/${slug}/episodes/saison${s}`)
-                            .then(html => ({ html }))
-                            .catch(() => null)
-                    );
-                }
-                const settled = await Promise.allSettled(probes);
-                for (const r of settled) {
-                    if (r.status === 'fulfilled' && r.value) {
-                        pageHtml = r.value.html;
-                        break;
-                    }
+                    try {
+                        const html = await fetchText(`${BASE}/catalogue/${slug}/episodes/saison${s}`);
+                        if (html) { pageHtml = html; break; }
+                    } catch (_) {}
                 }
             }
         }

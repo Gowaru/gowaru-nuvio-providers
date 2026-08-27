@@ -1,10 +1,6 @@
 /**
- * nakios - Built from src/nakios/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:11.787431667Z
-=======
- * Generated: 2026-08-26T16:18:53.921133884Z
->>>>>>> origin/main
+ * fullanime - Built from src/fullanime/
+ * Generated: 2026-08-27T16:17:11.468431387Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -164,6 +160,10 @@ var __provider = (() => {
         return null;
       }
     });
+  }
+  function isBudgetExhausted(startTime, budgetMs) {
+    const elapsed = Date.now() - (startTime || 0);
+    return elapsed > (budgetMs || TV_BUDGET_MS);
   }
   function createAbortController() {
     try {
@@ -611,7 +611,7 @@ var __provider = (() => {
       }
     });
   }
-  var PROVIDER_BUDGET_MS, HEADERS, USER_AGENT, BASE_HEADERS, CODEC_PREFERENCE, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, LANGUAGE_CODE_MAP;
+  var PROVIDER_BUDGET_MS, HEADERS, USER_AGENT, BASE_HEADERS, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, LANGUAGE_CODE_MAP;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
@@ -621,6 +621,7 @@ var __provider = (() => {
       USER_AGENT = HEADERS["User-Agent"];
       BASE_HEADERS = __spreadValues({}, HEADERS);
       CODEC_PREFERENCE = ["AV1", "H.265", "H.264", "VP9"];
+      TV_BUDGET_MS = 5e4;
       STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
       DEFAULT_QUALITY_TIER = 720;
       CODEC_PRIORITY = {
@@ -672,402 +673,670 @@ var __provider = (() => {
     }
   });
 
-  // src/nakios/http.js
+  // src/fullanime/http.js
   function setCurrentSignal(signal) {
     _currentSignal = signal;
   }
-  function fetchApi(_0) {
-    return __async(this, arguments, function* (path, options = {}) {
+  function fetchText(_0) {
+    return __async(this, arguments, function* (url, options = {}) {
       const signal = options.signal || _currentSignal;
-      if (isAborted(signal)) return null;
-      const url = `${API_BASE}${path}`;
+      if (isAborted(signal)) throw new Error("AbortError");
       yield rateLimit(DOMAIN);
-      console.log(`[Nakios] API: ${url}`);
-      const mergedHeaders = __spreadValues(__spreadValues({}, HEADERS2), options.headers || {});
-      const res = yield safeFetch(url, {
-        headers: mergedHeaders,
-        timeout: options.timeout || GLOBAL_TIMEOUT_MS,
-        signal
-      });
-      if (!res || !res.ok) {
-        const status = res && typeof res.status === "number" ? res.status : "no-response";
-        console.warn(`[Nakios] HTTP ${status} for ${url}`);
-        return null;
+      const _a = options, { headers: customHeaders, retries = 1 } = _a, rest = __objRest(_a, ["headers", "retries"]);
+      const mergedOpts = __spreadValues({
+        headers: __spreadValues(__spreadValues({}, HEADERS2), customHeaders || {}),
+        timeout: 15e3
+      }, rest);
+      let lastError = null;
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        if (isAborted(signal)) {
+          lastError = new Error("AbortError");
+          break;
+        }
+        if (attempt > 0) {
+          const delay = RETRY_DELAYS[attempt - 1] || 3e3;
+          yield sleep(delay);
+          if (isAborted(signal)) {
+            lastError = new Error("AbortError");
+            break;
+          }
+        }
+        try {
+          const res = yield safeFetch(url, __spreadProps(__spreadValues({}, mergedOpts), { signal }));
+          if (!res) {
+            lastError = new Error("No response");
+            continue;
+          }
+          if (!res.ok) {
+            lastError = new Error(`HTTP ${res.status}`);
+            continue;
+          }
+          return yield res.text();
+        } catch (e) {
+          if (e.name === "AbortError" || isAborted(signal)) throw e;
+          lastError = e;
+          if (attempt < retries) continue;
+        }
       }
-      try {
-        const data = yield res.json();
-        return data;
-      } catch (e) {
-        console.warn(`[Nakios] JSON parse error for ${url}: ${e == null ? void 0 : e.message}`);
-        return null;
-      }
+      throw lastError || new Error(`Failed: ${url}`);
     });
   }
-  var rateLimit, _currentSignal, DOMAIN, BASE_URL, API_BASE, GLOBAL_TIMEOUT_MS, HEADERS2;
+  var rateLimit, _currentSignal, DOMAIN, RETRY_DELAYS, HEADERS2;
   var init_http = __esm({
-    "src/nakios/http.js"() {
+    "src/fullanime/http.js"() {
       init_resolvers();
       rateLimit = createProviderRateLimiter();
       _currentSignal = null;
-      DOMAIN = "api.nakios.store";
-      BASE_URL = "https://nakios.store";
-      API_BASE = "https://api.nakios.store";
-      GLOBAL_TIMEOUT_MS = 15e3;
+      DOMAIN = "www.fullanime.fr";
+      RETRY_DELAYS = [1e3, 3e3];
       HEADERS2 = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": `${BASE_URL}/`,
-        "Origin": BASE_URL
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
       };
     }
   });
 
-  // src/utils/cache.js
-  function cleanCache(tag) {
-    const now = Date.now();
-    const expired = [];
-    for (const [key, entry] of cache) {
-      if (now - entry.ts >= entry.ttl) {
-        expired.push(key);
-      }
-    }
-    for (const key of expired) {
-      cache.delete(key);
-    }
-    if (cache.size > DEFAULT_MAX_SIZE) {
-      const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts);
-      const toRemove = sorted.slice(0, cache.size - DEFAULT_MAX_SIZE);
-      for (const [key] of toRemove) {
-        cache.delete(key);
-      }
-    }
-    if (expired.length > 0) {
-      console.log(`[${tag}] Cache: ${expired.length} expir\xE9es supprim\xE9es, ${cache.size} entr\xE9es restantes`);
-    }
-    lastCleanup = now;
+  // src/utils/metadata.js
+  function metadataCacheGet(key) {
+    const entry = METADATA_CACHE.get(key);
+    if (entry && Date.now() - entry.ts < METADATA_TTL) return entry.data;
+    if (entry) METADATA_CACHE.delete(key);
+    return null;
   }
-  function createCache(namespace, tag, opts = {}) {
-    const logTag = tag || namespace.toUpperCase();
-    const prefix = `${namespace}_`;
-    const successTtl = opts.successTtl || DEFAULT_SUCCESS_TTL;
-    const failureTtl = opts.failureTtl || DEFAULT_FAILURE_TTL;
-    const maxSize = opts.maxSize || DEFAULT_MAX_SIZE;
-    function cacheKey(raw) {
-      return `${prefix}${String(raw).replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "")}`;
+  function metadataCacheSet(key, data) {
+    if (METADATA_CACHE.size >= METADATA_MAX) {
+      const oldest = [...METADATA_CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, 100).map(([k]) => k);
+      for (const k of oldest) METADATA_CACHE.delete(k);
     }
-    function cacheGet(key) {
-      const entry = cache.get(key);
-      if (!entry) return void 0;
-      const now = Date.now();
-      if (now - entry.ts >= entry.ttl) {
-        cache.delete(key);
-        return void 0;
-      }
-      return entry.data;
-    }
-    function cacheSet(key, data, success = true) {
-      if (Date.now() - lastCleanup > CLEANUP_INTERVAL) {
-        cleanCache(logTag);
-      }
-      if (cache.size >= maxSize) {
-        const toRemove = Math.ceil(maxSize * 0.2);
-        const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, toRemove);
-        for (const [k] of sorted) cache.delete(k);
-      }
-      cache.set(key, {
-        data,
-        ts: Date.now(),
-        ttl: success ? successTtl : failureTtl,
-        success
-      });
-    }
-    return function withCache2(_0, _1) {
-      return __async(this, arguments, function* (rawKey, fn, opts2 = {}) {
-        const key = cacheKey(rawKey);
-        if (!opts2.bypass) {
-          const cached = cacheGet(key);
-          if (cached !== void 0) {
-            console.log(`[${logTag}] Cache HIT: ${rawKey.slice(0, 60)}`);
-            return cached;
-          }
-        }
-        console.log(`[${logTag}] Cache MISS: ${rawKey.slice(0, 60)}`);
-        try {
-          const result = yield fn();
-          const isSuccess = result != null;
-          cacheSet(key, result, isSuccess);
-          if (!isSuccess) {
-            console.log(`[${logTag}] Cache: negative result cached (30s TTL)`);
-          }
-          return result;
-        } catch (error) {
-          console.warn(`[${logTag}] Cache: error, not caching: ${error == null ? void 0 : error.message}`);
-          throw error;
-        }
-      });
-    };
+    METADATA_CACHE.set(key, { data, ts: Date.now() });
   }
-  var DEFAULT_SUCCESS_TTL, DEFAULT_FAILURE_TTL, DEFAULT_MAX_SIZE, CLEANUP_INTERVAL, cache, lastCleanup;
-  var init_cache = __esm({
-    "src/utils/cache.js"() {
-      DEFAULT_SUCCESS_TTL = 3e5;
-      DEFAULT_FAILURE_TTL = 3e4;
-      DEFAULT_MAX_SIZE = 150;
-      CLEANUP_INTERVAL = 6e4;
-      cache = /* @__PURE__ */ new Map();
-      lastCleanup = Date.now();
-    }
-  });
-
-  // src/utils/search-fallback.js
-  function getTmdbTitle(tmdbId, mediaType) {
+  function isLatinText(str) {
+    return /^[\x00-\x7F\u00C0-\u024F\s\-,:!.'?&()0-9]+$/.test(str);
+  }
+  function parseKitsuId(id) {
+    const strId = String(id);
+    return strId.match(/^kitsu:(\d+)(?::(\d+))?$/);
+  }
+  function searchTmdbByTitle(title, mediaType) {
     return __async(this, null, function* () {
-      const type = mediaType === "tv" ? "tv" : "movie";
-      const url = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=fr-FR`;
+      const type = mediaType === "movie" ? "movie" : "tv";
+      const encoded = encodeURIComponent(title);
+      const url = `${TMDB_API_BASE}/search/${type}?api_key=${TMDB_API_KEY}&query=${encoded}`;
+      const res = yield safeFetch(url);
+      if (!res) return null;
+      let data;
       try {
-        const res = yield safeFetch(url);
-        if (!res || !res.ok) return null;
-        const data = yield res.json();
-        if (!data || data.success === false) return null;
-        const title = data.title || data.name || null;
-        if (title) {
-          console.log(`[SearchFallback] TMDB title: ${title} (${tmdbId})`);
-        }
-        return title;
+        data = yield res.json();
       } catch (e) {
-        console.warn(`[SearchFallback] TMDB title error for ${tmdbId}: ${e == null ? void 0 : e.message}`);
         return null;
+      }
+      const results = data == null ? void 0 : data.results;
+      if (!results || !results.length) return null;
+      return results[0].id;
+    });
+  }
+  function getKitsuTitles(_0, _1) {
+    return __async(this, arguments, function* (kitsuId, mediaType, opts = {}) {
+      var _a, _b, _c, _d, _e, _f;
+      const url = `https://kitsu.io/api/edge/anime/${kitsuId}`;
+      const res = yield safeFetch(url);
+      if (!res) {
+        console.log(`[Metadata] Kitsu API error: failed to fetch ${kitsuId}`);
+        return [];
+      }
+      let data;
+      try {
+        data = yield res.json();
+      } catch (e) {
+        console.log(`[Metadata] Kitsu API error: invalid JSON for ${kitsuId}`);
+        return [];
+      }
+      const anime = (_a = data == null ? void 0 : data.data) == null ? void 0 : _a.attributes;
+      if (!anime) {
+        console.log(`[Metadata] Kitsu API error: no anime data for ${kitsuId}`);
+        return [];
+      }
+      const enTitle = (_c = (_b = anime.titles) == null ? void 0 : _b.en) == null ? void 0 : _c.trim();
+      if (enTitle) {
+        const foundTmdbId = yield searchTmdbByTitle(enTitle, mediaType);
+        if (foundTmdbId) {
+          console.log(`[Metadata] Kitsu ${kitsuId} -> TMDB ${foundTmdbId} via "${enTitle}"`);
+          return yield getTMDBTitlesById(String(foundTmdbId), mediaType, opts);
+        }
+      }
+      const titles = [];
+      const canonicalTitle = (_d = anime.canonicalTitle) == null ? void 0 : _d.trim();
+      if (enTitle) titles.push(enTitle);
+      if (canonicalTitle && !titles.some((t) => t.toLowerCase() === canonicalTitle.toLowerCase())) {
+        titles.push(canonicalTitle);
+      }
+      const jaTitle = (_f = (_e = anime.titles) == null ? void 0 : _e.ja_jp) == null ? void 0 : _f.trim();
+      if (jaTitle && !titles.some((t) => t.toLowerCase() === jaTitle.toLowerCase()) && isLatinText(jaTitle)) {
+        titles.push(jaTitle);
+      }
+      const abbrTitles = anime.abbreviatedTitles || [];
+      for (const t of abbrTitles) {
+        const trimmed = t == null ? void 0 : t.trim();
+        if (trimmed && !titles.some((existing) => existing.toLowerCase() === trimmed.toLowerCase()) && isLatinText(trimmed)) {
+          titles.push(trimmed);
+        }
+      }
+      const season = opts.season ? parseInt(opts.season, 10) : null;
+      if (season && season > 0) {
+        const baseTitles = [enTitle, canonicalTitle].filter(Boolean);
+        for (const baseTitle of baseTitles) {
+          for (const suffix of SEASON_SUFFIXES) {
+            const variant = `${baseTitle} ${suffix(season)}`;
+            if (!titles.some((t) => t.toLowerCase() === variant.toLowerCase())) {
+              titles.push(variant);
+            }
+          }
+        }
+      }
+      const dateStr = anime.startDate;
+      const year = dateStr && dateStr.length >= 4 && /^\d{4}/.test(dateStr) ? parseInt(dateStr.substring(0, 4), 10) : null;
+      titles._metadata = {
+        isAnime: (anime.originalLanguage || "") === "ja",
+        name: anime.canonicalTitle || "",
+        originalLanguage: anime.originalLanguage || "",
+        year
+      };
+      console.log(`[Metadata] Kitsu fallback titles for ${kitsuId}: ${titles.join(" | ")}`);
+      return titles;
+    });
+  }
+  function getTMDBTitlesById(_0, _1) {
+    return __async(this, arguments, function* (tmdbId, mediaType, opts = {}) {
+      var _a, _b, _c, _d, _e, _f;
+      const type = mediaType === "movie" ? "movie" : "tv";
+      const season = opts.season ? parseInt(opts.season, 10) : null;
+      const cacheKey = `tmdb:${tmdbId}:${type}:${season || ""}`;
+      const cached = metadataCacheGet(cacheKey);
+      if (cached) {
+        console.log(`[Metadata] Cache HIT for ${cacheKey}`);
+        return cached;
+      }
+      const titles = [];
+      let metadata = null;
+      try {
+        const mainUrl = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`;
+        const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
+        const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
+        const [mainRes, altRes, transRes] = yield Promise.all([
+          safeFetch(mainUrl),
+          safeFetch(altUrl),
+          safeFetch(transUrl)
+        ]);
+        if (mainRes) {
+          const mainJson = yield mainRes.json();
+          const data = mainJson != null ? mainJson : {};
+          const titleEn = (_a = type === "movie" ? data.title : data.name) == null ? void 0 : _a.trim();
+          const titleOriginal = (_b = type === "movie" ? data.original_title : data.original_name) == null ? void 0 : _b.trim();
+          if (data) {
+            const dateStr = type === "movie" ? data.release_date : data.first_air_date;
+            const year = dateStr && dateStr.length >= 4 && /^\d{4}/.test(dateStr) ? parseInt(dateStr.substring(0, 4), 10) : null;
+            metadata = {
+              isAnime: data.original_language === "ja" || (data.genres || []).some((g) => g.id === 16),
+              name: data.name || data.title || "",
+              originalLanguage: data.original_language || "",
+              year
+            };
+            if (type === "tv" && Array.isArray(data.seasons)) {
+              const counts = {};
+              for (const s of data.seasons) {
+                if (s && s.season_number > 0 && s.episode_count > 0) {
+                  counts[s.season_number] = s.episode_count;
+                }
+              }
+              if (Object.keys(counts).length > 0) {
+                metadata.seasonEpisodeCounts = counts;
+              }
+            }
+          }
+          if (titleEn) titles.push(titleEn);
+          if (titleOriginal && titleOriginal !== titleEn && isLatinText(titleOriginal)) {
+            titles.push(titleOriginal);
+          }
+          if (mediaType === "tv" && opts.season) {
+            const s = parseInt(opts.season, 10);
+            if (s > 0 && titleEn) {
+              for (const suffix of SEASON_SUFFIXES) {
+                const variant = `${titleEn} ${suffix(s)}`;
+                if (!titles.includes(variant)) titles.push(variant);
+              }
+            }
+            if (s > 0 && titleOriginal && titleOriginal !== titleEn && isLatinText(titleOriginal)) {
+              for (const suffix of SEASON_SUFFIXES) {
+                const variant = `${titleOriginal} ${suffix(s)}`;
+                if (!titles.includes(variant)) titles.push(variant);
+              }
+            }
+          }
+        }
+        if (altRes) {
+          const altJson = yield altRes.json();
+          const altData = altJson != null ? altJson : {};
+          const altList = type === "movie" ? altData.titles : altData.results;
+          if (altList && Array.isArray(altList)) {
+            altList.forEach((alt) => {
+              var _a2;
+              const t = (_a2 = alt.title) == null ? void 0 : _a2.trim();
+              if (t && !titles.some((existing) => existing.toLowerCase() === t.toLowerCase()) && isLatinText(t)) {
+                titles.push(t);
+              }
+            });
+          }
+        }
+        if (transRes) {
+          const transJson = yield transRes.json();
+          const transData = transJson != null ? transJson : {};
+          const frTrans = (transData.translations || []).find((t) => t.iso_639_1 === "fr");
+          const titleFr = ((_d = (_c = frTrans == null ? void 0 : frTrans.data) == null ? void 0 : _c.name) == null ? void 0 : _d.trim()) || ((_f = (_e = frTrans == null ? void 0 : frTrans.data) == null ? void 0 : _e.title) == null ? void 0 : _f.trim());
+          if (titleFr && !titles.some((existing) => existing.toLowerCase() === titleFr.toLowerCase())) {
+            titles.splice(1, 0, titleFr);
+          }
+          if (mediaType === "tv" && opts.season && titleFr) {
+            const s = parseInt(opts.season, 10);
+            if (s > 0) {
+              const frVar = `${titleFr} Saison ${s}`;
+              if (!titles.some((existing) => existing.toLowerCase() === frVar.toLowerCase())) {
+                const frIndex = titles.indexOf(titleFr);
+                if (frIndex !== -1) {
+                  titles.splice(frIndex + 1, 0, frVar);
+                } else {
+                  titles.splice(2, 0, frVar);
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`[Metadata] TMDB API error: ${e.message}`);
+      }
+      const seen = /* @__PURE__ */ new Set();
+      const uniqueTitles = titles.filter((t) => {
+        const key = t.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (metadata) {
+        uniqueTitles._metadata = metadata;
+      }
+      metadataCacheSet(cacheKey, uniqueTitles);
+      console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(" | ")}`);
+      return uniqueTitles;
+    });
+  }
+  function kitsuSearchFallback(tmdbName, mediaType, opts) {
+    return __async(this, null, function* () {
+      var _a, _b, _c, _d, _e, _f;
+      try {
+        if (!tmdbName || tmdbName.length < 3) return [];
+        const season = opts.season ? parseInt(opts.season, 10) : null;
+        const cacheKey = `kitsu-fb:${tmdbName.toLowerCase()}:${mediaType}:${season || ""}`;
+        const cached = metadataCacheGet(cacheKey);
+        if (cached) {
+          console.log(`[Metadata] Kitsu fallback cache HIT for "${tmdbName}"`);
+          return cached;
+        }
+        const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(tmdbName)}&page[limit]=5`;
+        const res = yield safeFetch(url);
+        if (!res) return [];
+        const data = yield res.json();
+        if (!((_a = data == null ? void 0 : data.data) == null ? void 0 : _a.length)) return [];
+        for (const anime of data.data) {
+          const attrs = anime.attributes || {};
+          const jaTitle = (_c = (_b = attrs.titles) == null ? void 0 : _b.ja_jp) == null ? void 0 : _c.trim();
+          const canonicalTitle = (_d = attrs.canonicalTitle) == null ? void 0 : _d.trim();
+          const enTitle = ((_f = (_e = attrs.titles) == null ? void 0 : _e.en) == null ? void 0 : _f.trim()) || canonicalTitle;
+          if (!jaTitle && attrs.originalLanguage !== "ja") continue;
+          if (!enTitle) continue;
+          console.log(`[Metadata] Kitsu search: "${tmdbName}" \u2192 "${enTitle}" (ja=${!!jaTitle})`);
+          const foundTmdbId = yield searchTmdbByTitle(enTitle, mediaType);
+          if (foundTmdbId) {
+            const altTitles = yield getTMDBTitlesById(String(foundTmdbId), mediaType, opts);
+            const meta = altTitles._metadata;
+            if (meta && meta.isAnime) {
+              console.log(`[Metadata] Fallback success: TMDB ID ${foundTmdbId} for "${enTitle}"`);
+              metadataCacheSet(cacheKey, altTitles);
+              return altTitles;
+            }
+          }
+          console.log(`[Metadata] Fallback: using Kitsu titles directly for ${anime.id}`);
+          const kitsuTitles = yield getKitsuTitles(anime.id, mediaType, opts);
+          metadataCacheSet(cacheKey, kitsuTitles);
+          return kitsuTitles;
+        }
+        console.log(`[Metadata] Kitsu search: no valid results for "${tmdbName}"`);
+        return [];
+      } catch (e) {
+        console.warn(`[Metadata] Kitsu fallback error: ${e.message}`);
+        return [];
       }
     });
   }
-  var TMDB_API_KEY, TMDB_API_BASE;
-  var init_search_fallback = __esm({
-    "src/utils/search-fallback.js"() {
+  function getTmdbTitles(_0, _1) {
+    return __async(this, arguments, function* (id, mediaType, opts = {}) {
+      const kitsuMatch = parseKitsuId(id);
+      let effectiveSeason = opts.season != null ? opts.season : null;
+      console.log(`[Metadata] getTmdbTitles: id="${id}" type="${mediaType}" season=${opts.season}`);
+      if (kitsuMatch) {
+        const kitsuId = kitsuMatch[1];
+        const seasonFromId = kitsuMatch[2] ? parseInt(kitsuMatch[2], 10) : null;
+        effectiveSeason = opts.season != null ? opts.season : seasonFromId;
+        console.log(`[Metadata] Kitsu ID detected: ${kitsuId}, season=${effectiveSeason}`);
+        const titles2 = yield getKitsuTitles(kitsuId, mediaType, __spreadProps(__spreadValues({}, opts), { season: effectiveSeason }));
+        titles2.effectiveSeason = effectiveSeason;
+        return titles2;
+      }
+      if (!id) {
+        console.error(`[Metadata] Invalid/null TMDB ID received: "${id}"`);
+        const emptyTitles = [];
+        emptyTitles.effectiveSeason = effectiveSeason;
+        return emptyTitles;
+      }
+      const titles = yield getTMDBTitlesById(id, mediaType, opts);
+      if (mediaType === "tv" && titles.length > 0 && titles._metadata) {
+        const meta = titles._metadata;
+        if (!meta.isAnime) {
+          console.warn(`[Metadata] \u26A0 ID ${id} = "${meta.name}" (${meta.originalLanguage}) - not anime!`);
+          const hasJapaneseName = /[\u3000-\u9FFF\uF900-\uFAFF]/.test(meta.name || "");
+          const hasJapaneseLang = meta.originalLanguage === "ja";
+          if (hasJapaneseLang || hasJapaneseName) {
+            const altTitles = yield kitsuSearchFallback(titles[0], mediaType, opts);
+            if (altTitles.length > 0) {
+              console.log(`[Metadata] Fallback success: ${altTitles.length} alternative titles`);
+              altTitles.effectiveSeason = effectiveSeason;
+              return altTitles;
+            }
+            console.warn(`[Metadata] Kitsu fallback failed for "${meta.name}", using original titles`);
+          } else {
+            console.log(`[Metadata] No anime indicators, skipping Kitsu fallback for "${meta.name}"`);
+          }
+        } else {
+          console.log(`[Metadata] \u2713 ID ${id}: "${meta.name}" confirmed anime (${meta.originalLanguage})`);
+        }
+      }
+      titles.effectiveSeason = effectiveSeason;
+      return titles;
+    });
+  }
+  var TMDB_API_KEY, TMDB_API_BASE, METADATA_CACHE, METADATA_TTL, METADATA_MAX, SEASON_SUFFIXES;
+  var init_metadata = __esm({
+    "src/utils/metadata.js"() {
       init_resolvers();
       TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
       TMDB_API_BASE = "https://api.themoviedb.org/3";
-    }
-  });
-
-  // src/nakios/extractor.js
-  function isValidStreamUrl(url) {
-    if (!url || typeof url !== "string") return false;
-    const u = url.toLowerCase().trim();
-    if (!u.startsWith("https://")) return false;
-    for (const pattern of BLOCKED_URL_PATTERNS) {
-      if (u.includes(pattern)) {
-        console.log(`[Nakios] Filtered out blocked URL (${pattern}): ${u.slice(0, 80)}`);
-        return false;
-      }
-    }
-    return true;
-  }
-  function fetchSource(path) {
-    return __async(this, null, function* () {
-      return withCache(`source_${path}`, () => __async(null, null, function* () {
-        const result = yield fetchApi(path);
-        if (!result) return null;
-        if (result.sources && Array.isArray(result.sources) && result.sources.length > 0) {
-          for (const source of result.sources) {
-            if (source.url && isValidStreamUrl(source.url) && source.isPremium !== true) {
-              return source;
-            }
-          }
-          if (EXCLUDE_PREMIUM) {
-            console.log(`[Nakios] Premium sources excluded (NUVIO_NAKIOS_EXCLUDE_PREMIUM=1)`);
-            return null;
-          }
-          for (const source of result.sources) {
-            if (source.url && isValidStreamUrl(source.url)) {
-              console.log(`[Nakios] Using premium source (${source.name || "?"}) - no free source available`);
-              return source;
-            }
-          }
-          console.warn(`[Nakios] All ${result.sources.length} source(s) filtered out (invalid URLs)`);
-          return null;
-        }
-        if (result.url) {
-          if (isValidStreamUrl(result.url)) {
-            return result;
-          }
-          console.warn(`[Nakios] Source filtered out (invalid URL): ${(result.url || "").slice(0, 80)}`);
-          return null;
-        }
-        return null;
-      }));
-    });
-  }
-  function searchContent(query) {
-    return __async(this, null, function* () {
-      const path = `/api/search/multi?query=${encodeURIComponent(query)}`;
-      return withCache(`search_${query.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`, () => __async(null, null, function* () {
-        try {
-          const result = yield fetchApi(path);
-          if (!result || !result.results || !Array.isArray(result.results)) {
-            return [];
-          }
-          return result.results.filter((r) => r.media_type === "movie" || r.media_type === "tv").map((r) => ({
-            id: r.id,
-            media_type: r.media_type,
-            title: r.title || r.name || "",
-            year: (r.release_date || r.first_air_date || "").slice(0, 4)
-          }));
-        } catch (e) {
-          console.warn(`[Nakios] Search error: ${e == null ? void 0 : e.message}`);
-          return [];
-        }
-      }));
-    });
-  }
-  function fallbackSearch(tmdbId, mediaType, season, episode) {
-    return __async(this, null, function* () {
-      console.log(`[Nakios] Fallback search for ${mediaType} ${tmdbId}...`);
-      const title = yield getTmdbTitle(tmdbId, mediaType);
-      if (!title) {
-        console.warn(`[Nakios] Fallback: cannot get TMDB title for ${tmdbId}`);
-        return null;
-      }
-      const results = yield searchContent(title);
-      if (results.length === 0) {
-        const shortTitle = title.split(":")[0].trim();
-        if (shortTitle !== title) {
-          const results2 = yield searchContent(shortTitle);
-          if (results2.length > 0) {
-            return trySearchResults(results2, tmdbId, mediaType, season, episode);
-          }
-        }
-        console.warn(`[Nakios] Fallback: no results for "${title}"`);
-        return null;
-      }
-      return trySearchResults(results, tmdbId, mediaType, season, episode);
-    });
-  }
-  function trySearchResults(results, originalTmdbId, mediaType, season, episode) {
-    return __async(this, null, function* () {
-      console.log(`[Nakios] Fallback: ${results.length} result(s) from search`);
-      for (const r of results) {
-        console.log(`[Nakios]   \u2192 ${r.media_type} ${r.id}: "${r.title}" (${r.year})`);
-      }
-      const sorted = [...results].sort((a, b) => {
-        if (a.id === Number(originalTmdbId)) return -1;
-        if (b.id === Number(originalTmdbId)) return 1;
-        return 0;
-      });
-      const attempts = sorted.slice(0, 3);
-      for (const r of attempts) {
-        if (r.id === Number(originalTmdbId)) {
-          console.log(`[Nakios] Fallback: TMDB ${r.id} matches original, already tried`);
-          continue;
-        }
-        console.log(`[Nakios] Fallback: trying TMDB ${r.id} (${r.title})`);
-        let altPath;
-        if (r.media_type === "movie") {
-          altPath = `/api/sources/movie/${r.id}`;
-        } else if (r.media_type === "tv") {
-          altPath = `/api/sources/tv/${r.id}/${Number(season) || 1}/${Number(episode) || 1}`;
-        } else {
-          console.log(`[Nakios] Fallback: skipping ${r.id} (unknown type: ${r.media_type})`);
-          continue;
-        }
-        const source = yield fetchSource(altPath);
-        if (source && source.url) {
-          console.log(`[Nakios] Fallback SUCCESS: TMDB ${r.id} \u2192 source found!`);
-          return source;
-        }
-      }
-      console.warn(`[Nakios] Fallback: no alternate ID yielded a source`);
-      return null;
-    });
-  }
-  function createStream(source) {
-    const quality = source.quality || "HD";
-    const language = source.lang || source.language || "VF";
-    const providerName = source.name || source.provider || "Nakios";
-    const isHls = source.isM3U8 === true;
-    const format = isHls ? "hls" : "mp4";
-    const stream = {
-      name: providerName,
-      title: `[${language}] ${providerName} - ${quality}`,
-      url: source.url,
-      quality,
-      language,
-      type: format,
-      headers: {
-        "Referer": `${BASE_URL}/`,
-        "Origin": BASE_URL
-      }
-    };
-    if (source.id) {
-      stream.id = source.id;
-    }
-    if (source.isPremium === true) {
-      stream.isPremium = true;
-    }
-    if (source.isEmbed === true) {
-      stream.isEmbed = true;
-    }
-    if (source.size) {
-      stream.size = source.size;
-    }
-    return stream;
-  }
-  function extractStreams(_0, _1, _2, _3) {
-    return __async(this, arguments, function* (tmdbId, mediaType, season, episode, options = {}) {
-      const signal = (options == null ? void 0 : options.signal) || null;
-      if (isAborted(signal)) return [];
-      setCurrentSignal(signal);
-      console.log(`[Nakios] Looking up ${mediaType} ${tmdbId}`);
-      let apiPath;
-      if (mediaType === "movie") {
-        apiPath = `/api/sources/movie/${tmdbId}`;
-      } else {
-        const targetSeason = Number(season) || 1;
-        const targetEpisode = Number(episode) || 1;
-        apiPath = `/api/sources/tv/${tmdbId}/${targetSeason}/${targetEpisode}`;
-        console.log(`[Nakios] Looking for S${targetSeason}E${targetEpisode} (TMDB: ${tmdbId})`);
-      }
-      let source = yield fetchSource(apiPath);
-      if (!source || !source.url) {
-        console.warn(`[Nakios] No source for ${apiPath}, trying search fallback...`);
-        source = yield fallbackSearch(tmdbId, mediaType, season, episode);
-      }
-      if (!source || !source.url) {
-        console.warn(`[Nakios] No source found for ${mediaType} ${tmdbId}`);
-        return [];
-      }
-      const stream = createStream(source);
-      console.log(`[Nakios] Stream: ${stream.quality} ${stream.type} | ${stream.name} | ${stream.language}`);
-      return [stream];
-    });
-  }
-  var withCache, EXCLUDE_PREMIUM, BLOCKED_URL_PATTERNS;
-  var init_extractor = __esm({
-    "src/nakios/extractor.js"() {
-      init_http();
-      init_cache();
-      init_search_fallback();
-      init_resolvers();
-      withCache = createCache("nk", "Nakios", { failureTtl: 12e4 });
-      EXCLUDE_PREMIUM = safeConfig("NUVIO_NAKIOS_EXCLUDE_PREMIUM", 0) === 1;
-      BLOCKED_URL_PATTERNS = [
-        "t.me",
-        "telegram.me",
-        "telegram.org",
-        "cheksum.lol",
-        "doubleclick.net",
-        "googleadservices.com",
-        "googlesyndication.com"
+      METADATA_CACHE = /* @__PURE__ */ new Map();
+      METADATA_TTL = 5 * 60 * 1e3;
+      METADATA_MAX = 500;
+      SEASON_SUFFIXES = [
+        (s) => `Season ${s}`,
+        (s) => `Saison ${s}`,
+        (s) => `S${s}`
       ];
     }
   });
 
-  // src/nakios/index.js
+  // src/fullanime/extractor.js
+  function normalize(s) {
+    if (!s) return "";
+    return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?]/g, "").replace(/-/g, " ").replace(/\b(the|season|part|cour|saison)\b/ig, "").replace(/\s+/g, " ").trim();
+  }
+  function toSlug(title) {
+    if (!title) return "";
+    return title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?']/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").replace(/-+/g, "-");
+  }
+  function checkEmbed(url) {
+    return __async(this, null, function* () {
+      try {
+        const res = yield safeFetch(url, {
+          method: "HEAD",
+          timeout: 3e3,
+          headers: { "User-Agent": "Mozilla/5.0" }
+        });
+        return res && (res.ok || res.status === 302 || res.status === 301);
+      } catch (e) {
+        return false;
+      }
+    });
+  }
+  function searchAnime(query) {
+    return __async(this, null, function* () {
+      try {
+        const searchUrl = `${BASE_URL}/search?s=${encodeURIComponent(query)}&_t=${Date.now()}`;
+        const html = yield fetchText(searchUrl);
+        if (!html || html.length < 500) return [];
+        const results = [];
+        const linkRegex = /href="(\/voir-anime\/[^"]+)"/gi;
+        let match;
+        const seen = /* @__PURE__ */ new Set();
+        while ((match = linkRegex.exec(html)) !== null) {
+          const path = match[1];
+          if (seen.has(path)) continue;
+          seen.add(path);
+          const slug = path.replace("/voir-anime/", "");
+          const title = slug.replace(/-vostfr$/, "").replace(/-saison-\d+$/, "").replace(/-/g, " ");
+          results.push({ slug, url: `${BASE_URL}${path}`, title });
+        }
+        return results;
+      } catch (e) {
+        return [];
+      }
+    });
+  }
+  function extractEpisodes(html) {
+    const episodes = [];
+    const epRegex = /href="(\/voir-anime\/[^"]*\/episode\/(\d+))"[^>]*title="([^"]*)"/gi;
+    let match;
+    const seen = /* @__PURE__ */ new Set();
+    while ((match = epRegex.exec(html)) !== null) {
+      const num = parseInt(match[2]);
+      if (seen.has(num)) continue;
+      seen.add(num);
+      episodes.push({
+        num,
+        url: `${BASE_URL}${match[1]}`,
+        title: match[3]
+      });
+    }
+    return episodes;
+  }
+  function extractEmbedUrls(html) {
+    const urls = [];
+    const linksMatch = html.match(new RegExp("var\\s+links\\s*=\\s*\\[(.*?)\\]", "s"));
+    if (linksMatch) {
+      const raw = linksMatch[1];
+      const urlRegex = /"(https?:[^"]+)"/g;
+      let m;
+      while ((m = urlRegex.exec(raw)) !== null) {
+        let url = m[1].replace(/\\\//g, "/").replace(/\\/g, "");
+        if (!urls.includes(url)) urls.push(url);
+      }
+    }
+    if (urls.length === 0) {
+      const iframeMatch = html.match(/<iframe[^>]*src="(https?:\/\/[^"]+)"/i);
+      if (iframeMatch && !urls.includes(iframeMatch[1])) {
+        urls.push(iframeMatch[1]);
+      }
+    }
+    return urls;
+  }
+  function inferLanguage2(slug, title) {
+    const combined = `${slug} ${title}`.toLowerCase();
+    if (combined.includes("-vf") || combined.includes(" vf") || combined.includes("french")) return "VF";
+    return "VOSTFR";
+  }
+  function extractStreams(_0, _1, _2, _3) {
+    return __async(this, arguments, function* (tmdbId, mediaType, season, episodeNum, options = {}) {
+      const signal = (options == null ? void 0 : options.signal) || null;
+      if (isAborted(signal)) return [];
+      setCurrentSignal(signal);
+      const startTime = Date.now();
+      const titles = yield getTmdbTitles(tmdbId, mediaType, { season });
+      if (!titles || titles.length === 0) return [];
+      console.log(`[FullAnime] Titles: ${titles.slice(0, 3).join(", ")}`);
+      let animeUrl = null;
+      let episodes = [];
+      for (const title of titles) {
+        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+        const slug = toSlug(title);
+        if (!slug) continue;
+        if (season && season > 1) {
+          const seasonSlug = `${slug}-saison-${season}-vostfr`;
+          const url1 = `${BASE_URL}/voir-anime/${seasonSlug}`;
+          try {
+            const html = yield fetchText(url1);
+            if (html && html.length > 1e3) {
+              episodes = extractEpisodes(html);
+              if (episodes.length > 0) {
+                animeUrl = url1;
+                console.log(`[FullAnime] \u2713 Direct: ${url1} (${episodes.length} eps)`);
+                break;
+              }
+            }
+          } catch (e) {
+          }
+        }
+        const url2 = `${BASE_URL}/voir-anime/${slug}-vostfr`;
+        try {
+          const html = yield fetchText(url2);
+          if (html && html.length > 1e3) {
+            episodes = extractEpisodes(html);
+            if (episodes.length > 0) {
+              animeUrl = url2;
+              console.log(`[FullAnime] \u2713 Direct: ${url2} (${episodes.length} eps)`);
+              break;
+            }
+          }
+        } catch (e) {
+        }
+      }
+      if (episodes.length === 0) {
+        console.log(`[FullAnime] Direct URL failed, trying search...`);
+        for (const title of titles) {
+          if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+          const results = yield searchAnime(title);
+          if (results.length === 0) continue;
+          console.log(`[FullAnime] Search found ${results.length} results`);
+          const queryNorm = normalize(title);
+          const seasonStr = season ? `saison ${season}` : "";
+          const scored = results.map((r) => {
+            const slugNorm = normalize(r.slug);
+            let score = 0;
+            if (slugNorm === queryNorm) score += 100;
+            else if (slugNorm.includes(queryNorm)) score += 80;
+            else if (queryNorm.includes(slugNorm)) score += 60;
+            if (seasonStr && r.slug.includes(seasonStr.replace(" ", "-"))) score += 50;
+            if (season && season > 1 && !r.slug.includes("saison")) score -= 30;
+            return __spreadProps(__spreadValues({}, r), { score });
+          }).sort((a, b) => b.score - a.score);
+          for (const r of scored.slice(0, 3)) {
+            if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+            try {
+              const html = yield fetchText(r.url);
+              if (html && html.length > 1e3) {
+                episodes = extractEpisodes(html);
+                if (episodes.length > 0) {
+                  animeUrl = r.url;
+                  console.log(`[FullAnime] \u2713 Search: ${r.url} (score: ${r.score}, ${episodes.length} eps)`);
+                  break;
+                }
+              }
+            } catch (e) {
+            }
+          }
+          if (episodes.length > 0) break;
+        }
+      }
+      if (episodes.length === 0) {
+        console.log(`[FullAnime] No episodes found for tmdbId ${tmdbId} season ${season}`);
+        return [];
+      }
+      const targetEp = episodes.find((e) => e.num === episodeNum);
+      if (!targetEp) {
+        console.log(`[FullAnime] Episode ${episodeNum} not found (available: ${episodes.map((e) => e.num).join(", ")})`);
+        return [];
+      }
+      console.log(`[FullAnime] Episode ${episodeNum}: ${targetEp.url}`);
+      let embedUrls = [];
+      try {
+        const html = yield fetchText(targetEp.url);
+        if (html && html.length > 500) {
+          embedUrls = extractEmbedUrls(html);
+          console.log(`[FullAnime] Found ${embedUrls.length} embed URLs`);
+        }
+      } catch (e) {
+        console.log(`[FullAnime] Failed to fetch episode page: ${e.message}`);
+        return [];
+      }
+      if (embedUrls.length === 0) {
+        console.log(`[FullAnime] No embed URLs found`);
+        return [];
+      }
+      const lang = inferLanguage2(animeUrl || "", targetEp.title);
+      const PRIORITY = ["vidmoly", "oneupload", "sendvid"];
+      const sorted = [...embedUrls].sort((a, b) => {
+        const pa = PRIORITY.findIndex((p) => a.toLowerCase().includes(p));
+        const pb = PRIORITY.findIndex((p) => b.toLowerCase().includes(p));
+        return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+      });
+      console.log(`[FullAnime] Priority order: ${sorted.map((u) => u.replace("https://", "").split("/")[0]).join(" > ")}`);
+      const streams = [];
+      for (const embedUrl of sorted.slice(0, 2)) {
+        if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+        const hostname = embedUrl.replace("https://", "").split("/")[0];
+        console.log(`[FullAnime] Checking ${hostname}...`);
+        const ok = yield checkEmbed(embedUrl);
+        if (ok) {
+          streams.push({
+            url: embedUrl,
+            title: `FullAnime [${lang}]`,
+            name: `FullAnime (${lang})`,
+            language: lang,
+            provider: "FullAnime",
+            headers: { "Referer": BASE_URL + "/" }
+          });
+          console.log(`[FullAnime] \u2713 ${hostname} is alive`);
+          break;
+        } else {
+          console.log(`[FullAnime] \u2717 ${hostname} is down`);
+        }
+      }
+      if (streams.length === 0 && sorted.length > 0) {
+        streams.push({
+          url: sorted[0],
+          title: `FullAnime [${lang}]`,
+          name: `FullAnime (${lang})`,
+          language: lang,
+          provider: "FullAnime",
+          headers: { "Referer": BASE_URL + "/" }
+        });
+        console.log(`[FullAnime] Fallback: ${sorted[0].replace("https://", "").split("/")[0]} (HEAD check failed)`);
+      }
+      console.log(`[FullAnime] Total streams: ${streams.length}`);
+      return streams;
+    });
+  }
+  var BASE_URL, BUDGET_MS;
+  var init_extractor = __esm({
+    "src/fullanime/extractor.js"() {
+      init_http();
+      init_resolvers();
+      init_metadata();
+      BASE_URL = "https://www.fullanime.fr";
+      BUDGET_MS = 4e4;
+    }
+  });
+
+  // src/fullanime/index.js
   var require_index = __commonJS({
-    "src/nakios/index.js"(exports, module) {
+    "src/fullanime/index.js"(exports, module) {
       init_extractor();
       init_resolvers();
-      module.exports = { getStreams: createProvider("Nakios", extractStreams) };
+      module.exports = { getStreams: createProvider("FullAnime", extractStreams) };
     }
   });
   return require_index();
