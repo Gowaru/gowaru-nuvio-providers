@@ -11,12 +11,13 @@ const rateLimit = createProviderRateLimiter();
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-// Domaines Papadustream actifs (ordonnés par fiabilité)
-const DOMAINS = ['papadustream.club', 'papadustream.fr', 'papadustream.net'];
+// Domaines Papadustream actifs — .fr et .net n'ont PAS de contenu HLS
+// Seul .club fonctionne réellement. Fallback rapide si .club timeout.
+const DOMAINS = ['papadustream.club'];
 
 export const BASE_URL = 'https://papadustream.club';
 export const BASE_URL_WWW = 'https://www.papadustream.club';
-export const GLOBAL_TIMEOUT_MS = 15000;
+export const GLOBAL_TIMEOUT_MS = 10000;
 
 export const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',

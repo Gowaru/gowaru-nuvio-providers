@@ -1,4 +1,4 @@
 import { extractStreams } from './extractor.js';
 import { createProvider } from '../utils/resolvers.js';
 
-module.exports = { getStreams: createProvider('FrenchAnime', extractStreams) };
+module.exports = { getStreams: createProvider('FullAnime', extractStreams) };

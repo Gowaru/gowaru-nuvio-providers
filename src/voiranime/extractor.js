@@ -397,11 +397,11 @@ async function searchAnime(title, season = 1, year) {
         }
         
         // Ajouter les variantes uniques et différentes du slug normal
-        for (const v of [...new Set(compactVariants)]) {
-          if (v !== baseSlug && v.length > 5) {
-            altSlugs.push(v)
-            altSlugs.push(v + '-vf')
-          }
+        // Limiter à 2 variantes max (fetch synchrone en QuickJS = pas de parallélisme)
+        const uniqueCompact = [...new Set(compactVariants)].filter(v => v !== baseSlug && v.length > 5)
+        for (const v of uniqueCompact.slice(0, 2)) {
+          altSlugs.push(v)
+          altSlugs.push(v + '-vf')
         }
       }
     }
@@ -772,8 +772,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         `${BASE_URL}/anime/${slug}-vf/`,
       ]);
 
-      console.log(`[VoirAnime] Parallel probe: ${uniqueSlugs.length} unique slugs`);
-      const validUrls = await batchProbe(allUrls, 5, 0);
+      console.log(`[VoirAnime] Parallel probe: ${uniqueSlugs.length} unique slugs (${allUrls.length} URLs)`);
+      // Limiter à 30 URLs max (fetch synchrone en QuickJS = pas de parallélisme)
+      const limitedUrls = allUrls.slice(0, 30);
+      const validUrls = await batchProbe(limitedUrls, 5, 0);
 
       if (validUrls.length > 0) {
         // Associer les URLs valides aux titres correspondants

@@ -345,16 +345,25 @@ function resolveSingle(stream) {
 }
 
 async function resolveCandidates(candidates) {
+    // OPTIMISATION: Résolution séquentielle avec early-exit
+    // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
     const limited = candidates.slice(0, MAX_CANDIDATES);
-    const resolved = await Promise.allSettled(limited.map(resolveSingle));
+    const TARGET_DIRECT = 2;
     const direct = [];
     const embeds = [];
-    for (const r of resolved) {
-        if (r.status !== 'fulfilled') continue;
-        const s = r.value;
-        if (s && s.url && s.isDirect) direct.push(s);
-        else if (s && s.url) embeds.push(s);
+    const startTime = Date.now();
+
+    for (const candidate of limited) {
+        if (direct.length >= TARGET_DIRECT) break;
+        if (Date.now() - startTime > RESOLVE_TIMEOUT_MS) break;
+
+        try {
+            const s = await resolveSingle(candidate);
+            if (s && s.url && s.isDirect) direct.push(s);
+            else if (s && s.url) embeds.push(s);
+        } catch (e) { /* skip failed candidate */ }
     }
+
     // If direct streams found, return them; otherwise fallback to embed URLs
     if (direct.length > 0) return dedupeByUrl(direct);
     if (embeds.length > 0) console.log('[Frenchstream] No direct streams, returning embed fallback (' + embeds.length + ')');
@@ -497,20 +506,34 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
         return found;
     }
 
-    // Fetch categories in batches: priority first, then remaining
-    const BATCH_SIZE = 5;
-    const priorityBatch = priorityCats.length > 0 ? priorityCats : catsToCheck.slice(0, BATCH_SIZE);
-    let catResults = await Promise.allSettled(priorityBatch.map(cat => fetchCategoryMovies(cat)));
+    // OPTIMISATION: Fetch catégories séquentiellement avec early-exit
+    // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
+    const priorityBatch = priorityCats.length > 0 ? priorityCats : catsToCheck.slice(0, 5);
+    for (const cat of priorityBatch) {
+        if (bestScore >= MOVIE_MATCH_SCORE) break;
+        if (Date.now() - startTime > BUDGET_MS) break;
 
-    if (processCatResults(catResults) && bestMatch) {
+        try {
+            const catMovies = await fetchCategoryMovies(cat);
+            for (const movie of catMovies) {
+                if (seenNewsIds.has(movie.newsId)) continue;
+                seenNewsIds.add(movie.newsId);
+                const score = scoreMovieCategory(movie.title, titles);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = movie;
+                }
+            }
+        } catch (e) { /* skip failed category */ }
+    }
+
+    if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
         const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
         if (streams && streams.length > 0) {
             const resolved = await resolveCandidates(streams);
             console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
             return resolved;
         }
-        bestMatch = null;
-        bestScore = 0;
     }
 
     // If best score from priority cats is too low (< 40), bail early — film likely not on site
@@ -518,21 +541,24 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
         return [];
     }
 
-    // Try remaining categories in batches
+    // Try remaining categories séquentiellement
     const remainingCats = catsToCheck.filter(c => !priorityBatch.includes(c));
-    for (let i = 0; i < remainingCats.length; i += BATCH_SIZE) {
-        const batch = remainingCats.slice(i, i + BATCH_SIZE);
-        catResults = await Promise.allSettled(batch.map(cat => fetchCategoryMovies(cat)));
-        if (processCatResults(catResults) && bestMatch) {
-            const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
-            if (streams && streams.length > 0) {
-                const resolved = await resolveCandidates(streams);
-                console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
-                return resolved;
+    for (const cat of remainingCats) {
+        if (bestScore >= MOVIE_MATCH_SCORE) break;
+        if (Date.now() - startTime > BUDGET_MS) break;
+
+        try {
+            const catMovies = await fetchCategoryMovies(cat);
+            for (const movie of catMovies) {
+                if (seenNewsIds.has(movie.newsId)) continue;
+                seenNewsIds.add(movie.newsId);
+                const score = scoreMovieCategory(movie.title, titles);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = movie;
+                }
             }
-            bestMatch = null;
-            bestScore = 0;
-        }
+        } catch (e) { /* skip failed category */ }
     }
 
     if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {

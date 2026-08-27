@@ -470,7 +470,8 @@ async function extractMoviePageStreams(match, subType) {
     }
 
     console.log(`[VoiranimeRip] Movie: ${streams.length} streams (${streams.filter(s => s && s.isDirect).length} direct)`)
-    return streams.filter(s => s && s.isDirect)
+    // Return all streams (including embeds) — the player can handle embed URLs
+    return streams
   } catch (e) {
     console.warn(`[VoiranimeRip] Movie extraction failed: ${e.message}`)
   }
@@ -529,16 +530,16 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
       if (attempts.length === 0) continue
 
-      // Try all attempts in parallel
-      const results = await Promise.allSettled(
-        attempts.map(a => extractEpisodeStreams(a.match, a.season, a.episode, subType))
-      )
-
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].status === 'fulfilled' && results[i].value.length > 0) {
-          const { season: s, episode: e } = attempts[i]
-          console.log(`[VoiranimeRip] Fallback succeeded with S${s}E${e}`)
-          return results[i].value
+      // Sequential resolution — prioritize matching season first, then others
+      for (const a of attempts) {
+        try {
+          const result = await extractEpisodeStreams(a.match, a.season, a.episode, subType)
+          if (result.length > 0) {
+            console.log(`[VoiranimeRip] Fallback succeeded with S${a.season}E${a.episode}`)
+            return result
+          }
+        } catch (e) {
+          // skip failed attempt
         }
       }
     } catch (e) {
@@ -603,7 +604,8 @@ async function extractEpisodeStreams(match, season, episode, subType) {
     }
 
     console.log(`[VoiranimeRip] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter(s => s && s.isDirect).length} direct)`)
-    return streams.filter(s => s && s.isDirect)
+    // Return all streams (including embeds) — the player can handle embed URLs
+    return streams
   } catch (e) {
     console.warn(`[VoiranimeRip] Episode extraction failed: ${e.message}`)
   }

@@ -162,23 +162,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       searchables.push(title);
   }
   
-  for (let i = 0; i < searchables.length && !isBudgetExhausted(startTime, BUDGET_MS) && !isAborted(signal); i += 3) {
-      const batch = searchables.slice(i, i + 3);
-      const batchResults = await Promise.allSettled(
-          batch.map(title => searchAnime(title, { signal }).then(r => r || []))
-      );
-      for (const r of batchResults) {
-          if (r.status !== 'fulfilled' || r.value.length === 0) continue;
-          for (const m of r.value) {
-              if (!seenUrls.has(m.url)) {
-                  seenUrls.add(m.url);
-                  allMatches.push(m);
+  // OPTIMISATION: Recherche séquentielle avec early-exit
+  // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
+  for (let i = 0; i < searchables.length && !isBudgetExhausted(startTime, BUDGET_MS) && !isAborted(signal); i++) {
+      const title = searchables[i];
+      try {
+          const results = await searchAnime(title, { signal });
+          if (results && results.length > 0) {
+              for (const m of results) {
+                  if (!seenUrls.has(m.url)) {
+                      seenUrls.add(m.url);
+                      allMatches.push(m);
+                  }
               }
           }
-      }
+      } catch (e) { /* skip failed search */ }
       // Early exit: si on a déjà des résultats, arrêter les recherches
       if (allMatches.length > 0) {
-          console.log(`[Vostfree] Found ${allMatches.length} matches after ${i + batch.length}/${searchables.length} searches, stopping early`);
+          console.log(`[Vostfree] Found ${allMatches.length} matches after ${i + 1}/${searchables.length} searches, stopping early`);
           break;
       }
   }
@@ -314,7 +315,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 return KNOWN_HOSTS.some(h => combined.includes(h.toLowerCase()));
             });
 
-            const playerPromises = filteredPlayers.map(async (el) => {
+            // OPTIMISATION: Résolution séquentielle avec early-exit
+            // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
+            const TARGET_DIRECT = 2;
+            for (const el of filteredPlayers) {
+                if (streams.filter(s => s && s.isDirect).length >= TARGET_DIRECT) break;
+                if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+
                 const playerId = $(el).attr('id').replace('player_', '');
                 const playerName = $(el).text().trim() || "Player";
                 const elClass = ($(el).attr('class') || '').toLowerCase();
@@ -322,70 +329,63 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 const contentDivId = `content_player_${playerId}`;
                 const content = $(`#${contentDivId}`).text().trim();
 
-                if (content) {
-                    let url = content;
-                    if (!url.startsWith('http')) {
-                        if (elClass.includes('sibnet') || playerName.toLowerCase().includes('sibnet')) {
-                            url = `https://video.sibnet.ru/shell.php?videoid=${content}`;
-                        } else if (elClass.includes('vidmoly') || playerName.toLowerCase().includes('vidmoly')) {
-                            url = `https://vidmoly.to/embed-${content}.html`;
-                        } else if (elClass.includes('uqload') || elClass.includes('oneupload') || playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) {
-                            url = `https://uqload.com/embed-${content}.html`;
-                        } else if (elClass.includes('sendvid') || playerName.toLowerCase().includes('sendvid')) {
-                            url = `https://sendvid.com/embed/${content}`;
-                        } else if (elClass.includes('voe') || playerName.toLowerCase().includes('voe')) {
-                            url = `https://voe.sx/e/${content}`;
-                        } else if (elClass.includes('dood') || playerName.toLowerCase().includes('dood')) {
-                            url = `https://dood.to/e/${content}`;
-                        } else if (elClass.includes('stape') || elClass.includes('streamtape') || playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) {
-                            url = `https://streamtape.com/e/${content}`;
-                        } else if (elClass.includes('myvi') || elClass.includes('mytv') || playerName.toLowerCase().includes('myvi') || playerName.toLowerCase().includes('mytv')) {
-                            url = `https://www.myvi.ru/embed/${content}`;
-                        } else if (elClass.includes('vip')) {
-                            if (content.includes('voe.sx') || content.includes('vudeo')) {
-                                url = content;
-                            }
-                        } else if (elClass.includes('mail') || elClass.includes('ok')) {
-                        }
-                    }
+                if (!content) continue;
 
-                    if (url.startsWith('http')) {
-                        const urlLower = url.toLowerCase();
-                        const isUnresolvable = UNRESOLVABLE_HOSTS.some(h => urlLower.includes(h));
-                        if (isUnresolvable) {
-                            // Voe/Streamtape/Dood use React SPA or AES-GCM fingerprinting.
-                            // Return the embed URL directly — the native player may handle it.
-                            return {
-                                name: `Vostfree (${lang})`,
-                                title: `${playerName} - ${lang}`,
-                                url: url,
-                                quality: "HD",
-                                headers: { "Referer": BASE_URL },
-                                isDirect: false,
-                            };
+                let url = content;
+                if (!url.startsWith('http')) {
+                    if (elClass.includes('sibnet') || playerName.toLowerCase().includes('sibnet')) {
+                        url = `https://video.sibnet.ru/shell.php?videoid=${content}`;
+                    } else if (elClass.includes('vidmoly') || playerName.toLowerCase().includes('vidmoly')) {
+                        url = `https://vidmoly.to/embed-${content}.html`;
+                    } else if (elClass.includes('uqload') || elClass.includes('oneupload') || playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) {
+                        url = `https://uqload.com/embed-${content}.html`;
+                    } else if (elClass.includes('sendvid') || playerName.toLowerCase().includes('sendvid')) {
+                        url = `https://sendvid.com/embed/${content}`;
+                    } else if (elClass.includes('voe') || playerName.toLowerCase().includes('voe')) {
+                        url = `https://voe.sx/e/${content}`;
+                    } else if (elClass.includes('dood') || playerName.toLowerCase().includes('dood')) {
+                        url = `https://dood.to/e/${content}`;
+                    } else if (elClass.includes('stape') || elClass.includes('streamtape') || playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) {
+                        url = `https://streamtape.com/e/${content}`;
+                    } else if (elClass.includes('myvi') || elClass.includes('mytv') || playerName.toLowerCase().includes('myvi') || playerName.toLowerCase().includes('mytv')) {
+                        url = `https://www.myvi.ru/embed/${content}`;
+                    } else if (elClass.includes('vip')) {
+                        if (content.includes('voe.sx') || content.includes('vudeo')) {
+                            url = content;
                         }
-                        try {
-                            const stream = await withTimeout(
-                                resolveStream({
-                                    name: `Vostfree (${lang})`,
-                                    title: `${playerName} - ${lang}`,
-                                    url: url,
-                                    quality: "HD",
-                                    headers: { "Referer": BASE_URL }
-                                }),
-                                PLAYER_TIMEOUT_MS,
-                                `Vostfree player ${playerName}`
-                            );
-                            return stream;
-                        } catch(e) { return null; }
+                    } else if (elClass.includes('mail') || elClass.includes('ok')) {
                     }
                 }
-                return null;
-            });
 
-            const results = await Promise.allSettled(playerPromises);
-            for (const r of results) {
-                if (r.status === 'fulfilled' && r.value) streams.push(r.value);
+                if (!url.startsWith('http')) continue;
+
+                const urlLower = url.toLowerCase();
+                const isUnresolvable = UNRESOLVABLE_HOSTS.some(h => urlLower.includes(h));
+                if (isUnresolvable) {
+                    streams.push({
+                        name: `Vostfree (${lang})`,
+                        title: `${playerName} - ${lang}`,
+                        url: url,
+                        quality: "HD",
+                        headers: { "Referer": BASE_URL },
+                        isDirect: false,
+                    });
+                    continue;
+                }
+                try {
+                    const stream = await withTimeout(
+                        resolveStream({
+                            name: `Vostfree (${lang})`,
+                            title: `${playerName} - ${lang}`,
+                            url: url,
+                            quality: "HD",
+                            headers: { "Referer": BASE_URL }
+                        }),
+                        PLAYER_TIMEOUT_MS,
+                        `Vostfree player ${playerName}`
+                    );
+                    if (stream) streams.push(stream);
+                } catch(e) { /* skip failed player */ }
             }
             const directStreams = streams.filter(s => s && s.isDirect);
             if (directStreams.length > 0) {

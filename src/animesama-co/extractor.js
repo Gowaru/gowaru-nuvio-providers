@@ -453,7 +453,19 @@ async function extractEpisodeStreams(match, season, episode, subType) {
     }
 
     console.log(`[AnimeSamaCo] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter(s => s.isDirect).length} direct)`)
-    return streams.filter(s => s && s.isDirect)
+    
+    // Prefer direct streams, but keep embed URLs as fallback when sendvid.com is down
+    const directStreams = streams.filter(s => s && s.isDirect)
+    if (directStreams.length > 0) return directStreams
+    
+    // Fallback: return embed URLs so native player can attempt playback
+    const embedStreams = streams.filter(s => s && s.url)
+    if (embedStreams.length > 0) {
+      console.log(`[AnimeSamaCo] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`)
+      return embedStreams
+    }
+    
+    return []
   } catch (e) {
     console.warn(`[AnimeSamaCo] Episode extraction failed: ${e.message}`)
   }

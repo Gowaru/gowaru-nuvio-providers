@@ -294,6 +294,9 @@ async function fetchFallbackStreams(tmdbId, isMovie, season, episodeNum, signal)
 /**
  * Déduplique, trie (priorité langue/host) puis résout les streams en playable.
  * Réutilisé pour la passe primaire et pour la passe fallback multi-sources.
+ * 
+ * OPTIMISATION: fetch synchrone en QuickJS = pas de parallélisme.
+ * On résout séquentiellement avec early-exit dès qu'on a assez de streams.
  */
 async function resolveStreamsToPlayable(streams) {
     if (streams.length === 0) return [];
@@ -306,35 +309,31 @@ async function resolveStreamsToPlayable(streams) {
     unique.sort((a, b) => streamPriority(a.url, a.language) - streamPriority(b.url, b.language));
 
     const MAX_RESOLVE = 5;
-    const BATCH_SIZE = 3;
+    const TARGET_PLAYABLE = 2; // Assez pour un VF + VOSTFR
     const playable = [];
     const seenPlayable = new Set();
+    const startTime = Date.now();
+    const BUDGET_MS = 15000; // Budget max pour la résolution
 
+    // Résolution séquentielle avec early-exit
+    // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
     const toResolve = unique.slice(0, MAX_RESOLVE);
+    for (const stream of toResolve) {
+        if (playable.length >= TARGET_PLAYABLE) break;
+        if (Date.now() - startTime > BUDGET_MS) break;
 
-    // Batch 1 : hosts les plus rapides
-    const batch1 = toResolve.slice(0, BATCH_SIZE);
-    const batch1Results = await Promise.allSettled(batch1.map(s => resolveForExo(s)));
-    for (const r of batch1Results) {
-        if (r.status !== 'fulfilled' || !r.value) continue;
-        if (seenPlayable.has(r.value.url)) continue;
-        seenPlayable.add(r.value.url);
-        playable.push(r.value);
-    }
-
-    // Batch 2 : si pas assez de streams, tenter le reste
-    if (playable.length < 2 && toResolve.length > BATCH_SIZE) {
-        const batch2 = toResolve.slice(BATCH_SIZE, MAX_RESOLVE);
-        const batch2Results = await Promise.allSettled(batch2.map(s => resolveForExo(s)));
-        for (const r of batch2Results) {
-            if (r.status !== 'fulfilled' || !r.value) continue;
-            if (seenPlayable.has(r.value.url)) continue;
-            seenPlayable.add(r.value.url);
-            playable.push(r.value);
+        try {
+            const result = await resolveForExo(stream);
+            if (result && !seenPlayable.has(result.url)) {
+                seenPlayable.add(result.url);
+                playable.push(result);
+            }
+        } catch (e) {
+            console.warn(`[Movix] resolveStream failed: ${e?.message}`);
         }
     }
 
-    console.log(`[Movix] Total: ${unique.length} streams, ${playable.length} playable (resolved ${toResolve.length})`);
+    console.log(`[Movix] Total: ${unique.length} streams, ${playable.length} playable (resolved ${Math.min(toResolve.length, MAX_RESOLVE)} in ${Date.now() - startTime}ms)`);
     return playable;
 }
 

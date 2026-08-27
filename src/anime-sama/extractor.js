@@ -100,13 +100,24 @@ async function fetchJs(slug, seasonPath, lang) {
     } catch (e) { return null; }
 }
 
-function buildStreams(parsed, lang, episode, idx) {
-    const promises = [];
+async function buildStreams(parsed, lang, episode, idx) {
+    // OPTIMISATION: Résolution séquentielle avec early-exit
+    // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
+    const TARGET_DIRECT = 2;
+    const playable = [];
+    const startTime = Date.now();
+    const BUDGET_MS = 12000;
+
     for (const { varName, urls } of parsed) {
+        if (playable.length >= TARGET_DIRECT) break;
+        if (Date.now() - startTime > BUDGET_MS) break;
+
         const playerUrl = urls[idx];
-        if (playerUrl && playerUrl.startsWith('http')) {
-            const epLabel = episode ? `Ep ${episode} - ` : '';
-            const promise = withTimeout(
+        if (!playerUrl || !playerUrl.startsWith('http')) continue;
+
+        const epLabel = episode ? `Ep ${episode} - ` : '';
+        try {
+            const stream = await withTimeout(
                 resolveStream({
                     name: `Anime-Sama (${lang.toUpperCase()})`,
                     title: `${getPlayerName(varName, playerUrl)} - ${epLabel}${lang.toUpperCase()}`,
@@ -114,13 +125,13 @@ function buildStreams(parsed, lang, episode, idx) {
                     quality: "HD",
                     headers: { "Referer": BASE_URL }
                 }),
-                12000,
+                8000,
                 `AnimeSama player ${getPlayerName(varName, playerUrl)}`
             );
-            promises.push(promise);
-        }
+            if (stream) playable.push(stream);
+        } catch (e) { /* skip failed player */ }
     }
-    return Promise.allSettled(promises).then(r => r.filter(s => s.status === 'fulfilled' && s.value != null).map(s => s.value));
+    return playable;
 }
 
 async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes = []) {
@@ -146,11 +157,9 @@ async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisode
  * Optimisé : fetch d'abord main+root, puis sub-seasons seulement si nécessaire.
  */
 async function tryFetchEpisode(slug, lang, season, episode) {
-    // Étape 1 : fetch main season + root en parallèle (les plus probables)
-    const [mainJs, rootJs] = await Promise.all([
-        fetchJs(slug, `saison${season}`, lang),
-        fetchJs(slug, '', lang),
-    ]);
+    // OPTIMISATION: Fetch séquentiel (fetch synchrone en QuickJS)
+    // Essayer main season d'abord (le plus probable), root en fallback
+    const mainJs = await fetchJs(slug, `saison${season}`, lang);
 
     // Traiter le main season d'abord
     if (mainJs) {
@@ -179,7 +188,8 @@ async function tryFetchEpisode(slug, lang, season, episode) {
         }
     }
 
-    // Essayer le root path (sans préfixe de saison)
+    // Essayer le root path (sans préfixe de saison) - fetch en fallback
+    const rootJs = await fetchJs(slug, '', lang);
     if (rootJs) {
         const parsed = parseUrls(rootJs);
         if (parsed.length > 0) {
@@ -213,14 +223,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const languages = ['vostfr', 'vf'];
     const streams = [];
 
+    // OPTIMISATION: Traitement séquentiel des langues avec early-exit
+    // (fetch synchrone en QuickJS = Promise.all ne parallélise pas)
+    const TARGET_STREAMS = 3;
+
     // Primary: try the generated slug for each language
     if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const primaryPromises = [];
         for (const lang of languages) {
-            primaryPromises.push(fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes));
-        }
-        const primaryResults = await Promise.all(primaryPromises);
-        for (const result of primaryResults) {
+            if (streams.length >= TARGET_STREAMS) break;
+            const result = await fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes);
             streams.push(...result);
         }
     }
@@ -228,12 +239,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // If primary failed, try slug with season suffix (e.g., "overlord-saison-3")
     if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const seasonSlug = `${slug}-saison-${effectiveSeason}`;
-        const seasonPromises = [];
         for (const lang of languages) {
-            seasonPromises.push(fetchAndGetUrl(seasonSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
-        }
-        const seasonResults = await Promise.all(seasonPromises);
-        for (const result of seasonResults) {
+            if (streams.length >= TARGET_STREAMS) break;
+            const result = await fetchAndGetUrl(seasonSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
             streams.push(...result);
         }
     }
@@ -241,12 +249,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // If still empty, try season numeric slug (e.g., "overlord-3")
     if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const numSlug = `${slug}-${effectiveSeason}`;
-        const numPromises = [];
         for (const lang of languages) {
-            numPromises.push(fetchAndGetUrl(numSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
-        }
-        const numResults = await Promise.all(numPromises);
-        for (const result of numResults) {
+            if (streams.length >= TARGET_STREAMS) break;
+            const result = await fetchAndGetUrl(numSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
             streams.push(...result);
         }
     }
@@ -264,20 +269,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
 
         const checkedSlugs = new Set([slug]);
-        const searchPromises = [];
-
         for (const fSlug of foundSlugs) {
             if (checkedSlugs.has(fSlug)) continue;
             checkedSlugs.add(fSlug);
+            if (streams.length >= TARGET_STREAMS) break;
 
             for (const lang of languages) {
-                searchPromises.push(fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes));
-            }
-        }
-
-        if (searchPromises.length > 0) {
-            const searchResults = await Promise.all(searchPromises);
-            for (const result of searchResults) {
+                if (streams.length >= TARGET_STREAMS) break;
+                const result = await fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
                 streams.push(...result);
             }
         }

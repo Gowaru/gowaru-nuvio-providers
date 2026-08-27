@@ -186,12 +186,22 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     // Étape 3: Fetch la page série sur Papadustream (avec cache intelligent)
     const seriesUrl = `${BASE_URL}/series/${imdbId}`;
-    const html = await withCache(`page_${imdbId}`, async () => {
+    let html = await withCache(`page_${imdbId}`, async () => {
         return await fetchText(seriesUrl);
     });
     if (!html) {
         console.warn(`[Papadustream] Series page not accessible: ${seriesUrl}`);
         return [];
+    }
+    // Vérification: la page doit contenir des URLs HLS
+    if (!html.includes('/hls/') || !html.includes('playlist.m3u8')) {
+        console.warn(`[Papadustream] Page has no HLS content (${html.length} bytes), retrying...`);
+        const retryHtml = await fetchText(seriesUrl);
+        if (retryHtml && retryHtml.includes('playlist.m3u8')) {
+            html = retryHtml;
+        } else {
+            return [];
+        }
     }
 
     // Étape 4: Extraire les URLs HLS pour chaque épisode cible
