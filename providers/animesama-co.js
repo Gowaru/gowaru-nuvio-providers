@@ -1,6 +1,10 @@
 /**
  * animesama-co - Built from src/animesama-co/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:10.441430296Z
+=======
+ * Generated: 2026-08-26T16:18:53.520133488Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

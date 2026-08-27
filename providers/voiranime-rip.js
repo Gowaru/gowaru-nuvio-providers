@@ -1,6 +1,10 @@
 /**
  * voiranime-rip - Built from src/voiranime-rip/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:12.300432224Z
+=======
+ * Generated: 2026-08-26T16:18:54.096134069Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

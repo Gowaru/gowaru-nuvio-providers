@@ -1,6 +1,10 @@
 /**
  * voiranime-homes - Built from src/voiranime-homes/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:12.224432115Z
+=======
+ * Generated: 2026-08-26T16:18:54.069134027Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

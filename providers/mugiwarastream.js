@@ -1,6 +1,10 @@
 /**
  * mugiwarastream - Built from src/mugiwarastream/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:11.667431549Z
+=======
+ * Generated: 2026-08-26T16:18:53.884133853Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

@@ -1,6 +1,10 @@
 /**
  * movix - Built from src/movix/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:11.549431468Z
+=======
+ * Generated: 2026-08-26T16:18:53.853133829Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

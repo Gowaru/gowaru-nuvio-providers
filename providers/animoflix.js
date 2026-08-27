@@ -1,6 +1,10 @@
 /**
  * animoflix - Built from src/animoflix/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:10.754430642Z
+=======
+ * Generated: 2026-08-26T16:18:53.626133585Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

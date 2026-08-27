@@ -1,6 +1,10 @@
 /**
  * flemmix - Built from src/flemmix/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:11.184431035Z
+=======
+ * Generated: 2026-08-26T16:18:53.736133697Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

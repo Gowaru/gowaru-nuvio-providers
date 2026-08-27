@@ -1,6 +1,10 @@
 /**
  * anime-ultime - Built from src/anime-ultime/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:10.296428327Z
+=======
+ * Generated: 2026-08-26T16:18:53.488133441Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

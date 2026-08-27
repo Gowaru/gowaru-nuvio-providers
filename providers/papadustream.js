@@ -1,6 +1,10 @@
 /**
  * papadustream - Built from src/papadustream/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:11.856431816Z
+=======
+ * Generated: 2026-08-26T16:18:53.943133921Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;

@@ -1,6 +1,10 @@
 /**
  * animesultra - Built from src/animesultra/
+<<<<<<< HEAD
  * Generated: 2026-08-27T16:17:10.513430441Z
+=======
+ * Generated: 2026-08-26T16:18:53.55213352Z
+>>>>>>> origin/main
  */
 var __provider = (() => {
   var __create = Object.create;
