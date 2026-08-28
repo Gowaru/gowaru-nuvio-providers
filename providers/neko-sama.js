@@ -1,6 +1,6 @@
 /**
  * neko-sama - Built from src/neko-sama/
- * Generated: 2026-08-27T16:17:11.816431787Z
+ * Generated: 2026-08-28T14:42:08.361128305Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;

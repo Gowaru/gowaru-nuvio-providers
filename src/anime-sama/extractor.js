@@ -7,10 +7,10 @@ import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { toSlug, resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { toSlug, stripSeasonSuffix, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://anime-sama.to";
-const MAX_FALLBACK_TITLES = 2;
+const MAX_FALLBACK_TITLES = 5;
 const MAX_FALLBACK_SLUGS = 2;
 const BUDGET_MS = 40000;
 
@@ -41,7 +41,8 @@ async function searchSlugsScored(query) {
             results.push({ slug, title, subtitle, score });
         });
         results.sort((a, b) => b.score - a.score);
-        return results.map(r => r.slug);
+        // Only return slugs with a meaningful score (avoid false positives)
+        return results.filter(r => r.score >= 15).map(r => r.slug);
     } catch (e) { return []; }
 }
 
@@ -53,7 +54,18 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
     let score = 0;
     if (t === q) return 100;
     if (t.includes(q)) score += 60;
-    else if (q.includes(t)) score += 50;
+    else if (q.includes(t)) {
+        // Penalize short results that are substrings of the query
+        // e.g. "Another" in "No Longer Allowed in Another World" → low score
+        const qWordCount = q.split(/[^a-z0-9]+/).filter(w => w.length > 2).length;
+        const tWordCount = t.split(/[^a-z0-9]+/).filter(w => w.length > 2).length;
+        if (qWordCount > 1 && tWordCount <= 1) {
+            // Single-word result in a multi-word query: heavy penalty
+            score += 10;
+        } else {
+            score += 50;
+        }
+    }
 
     const qWords = q.split(/[^a-z0-9]+/).filter(w => w.length > 2);
     const tWords = t.split(/[^a-z0-9]+/).filter(w => w.length > 2);
@@ -63,6 +75,14 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
     }
     for (const w of qWords) {
         if (s.includes(w) && !t.includes(w)) score += 3;
+    }
+
+    // Anti-false-positive: penalize if result has very few words compared to query
+    // e.g. "Another" (1 word) matching "No Longer Allowed in Another World" (5 words)
+    if (qWords.length >= 3 && tWords.length <= 1) {
+        score = Math.min(score, 5);
+    } else if (qWords.length >= 2 && tWords.length <= 1) {
+        score = Math.min(score, 10);
     }
 
     return score;
@@ -259,7 +279,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // If primary failed, try search API to find correct slug (much faster than alt slug probing)
     if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const foundSlugs = [];
-        for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
+        // Strip season suffixes before searching ("No Longer Allowed in Another World Season 1"
+        // returns wrong results; "No Longer Allowed in Another World" returns correct slug)
+        const searchTitles = titles.slice(0, MAX_FALLBACK_TITLES).map(t => stripSeasonSuffix(t));
+        for (const t of searchTitles) {
             const slugs = await searchSlugsScored(t);
             for (const s of slugs) {
                 if (!foundSlugs.includes(s)) foundSlugs.push(s);

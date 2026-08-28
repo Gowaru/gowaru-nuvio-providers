@@ -1,10 +1,6 @@
 /**
  * streamzo - Built from src/streamzo/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:12.072431949Z
-=======
- * Generated: 2026-08-26T16:18:54.000133972Z
->>>>>>> origin/main
+ * Generated: 2026-08-28T14:42:08.631128515Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -763,13 +759,38 @@ var __provider = (() => {
         const res = yield safeFetch(url, { headers: { "Referer": "https://video.sibnet.ru/" } });
         if (!res) return { url };
         const html = yield res.text();
-        const match = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
-        if (match) {
-          let videoUrl = match[1];
-          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-          else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
-          return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
+        let videoUrl = null;
+        const fileMatch = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+        if (fileMatch) {
+          videoUrl = fileMatch[1];
         }
+        if (!videoUrl) {
+          const srcMatch = html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+          if (srcMatch) videoUrl = srcMatch[1];
+        }
+        if (!videoUrl) {
+          const playerSrcMatch = html.match(/player\.src\(\s*\[\s*\{\s*src\s*:\s*["']([^"']+\.mp4[^"']*)['"]/i);
+          if (playerSrcMatch) videoUrl = playerSrcMatch[1];
+        }
+        if (!videoUrl) {
+          const genericMatch = html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
+          if (genericMatch) videoUrl = genericMatch[1];
+        }
+        if (!videoUrl) return { url };
+        if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+        else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
+        try {
+          const headRes = yield safeFetch(videoUrl, {
+            method: "HEAD",
+            headers: { "Referer": "https://video.sibnet.ru/" },
+            timeout: 5e3
+          });
+          if (headRes && headRes.url && headRes.url !== videoUrl && headRes.url.includes(".mp4")) {
+            videoUrl = headRes.url;
+          }
+        } catch (_) {
+        }
+        return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
       } catch (e) {
       }
       return { url };

@@ -1,10 +1,6 @@
 /**
  * french-manga - Built from src/french-manga/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:11.296431184Z
-=======
- * Generated: 2026-08-26T16:18:53.789133764Z
->>>>>>> origin/main
+ * Generated: 2026-08-28T14:42:07.663127532Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12569,13 +12565,38 @@ var __provider = (() => {
         const res = yield safeFetch(url, { headers: { "Referer": "https://video.sibnet.ru/" } });
         if (!res) return { url };
         const html = yield res.text();
-        const match = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
-        if (match) {
-          let videoUrl = match[1];
-          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-          else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
-          return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
+        let videoUrl = null;
+        const fileMatch = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+        if (fileMatch) {
+          videoUrl = fileMatch[1];
         }
+        if (!videoUrl) {
+          const srcMatch = html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+          if (srcMatch) videoUrl = srcMatch[1];
+        }
+        if (!videoUrl) {
+          const playerSrcMatch = html.match(/player\.src\(\s*\[\s*\{\s*src\s*:\s*["']([^"']+\.mp4[^"']*)['"]/i);
+          if (playerSrcMatch) videoUrl = playerSrcMatch[1];
+        }
+        if (!videoUrl) {
+          const genericMatch = html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
+          if (genericMatch) videoUrl = genericMatch[1];
+        }
+        if (!videoUrl) return { url };
+        if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+        else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
+        try {
+          const headRes = yield safeFetch(videoUrl, {
+            method: "HEAD",
+            headers: { "Referer": "https://video.sibnet.ru/" },
+            timeout: 5e3
+          });
+          if (headRes && headRes.url && headRes.url !== videoUrl && headRes.url.includes(".mp4")) {
+            videoUrl = headRes.url;
+          }
+        } catch (_) {
+        }
+        return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
       } catch (e) {
       }
       return { url };
@@ -13499,7 +13520,7 @@ var __provider = (() => {
         multi: "MULTI"
       };
       CACHE_TTL = 5 * 60 * 1e3;
-      MAX_SEARCH_TITLES = 3;
+      MAX_SEARCH_TITLES = 5;
     }
   });
 
@@ -14321,12 +14342,17 @@ var __provider = (() => {
             const postMatch = bestMatch(postResults, title, targetSeason);
             if (postMatch) return postMatch;
           }
-          console.log(`[FrenchManga] POST search missed, trying GET for "${title}"...`);
+          console.log(`[FrenchManga] Trying GET fallback for "${title}"...`);
           const getMatch = yield trySearchGet(title, targetSeason);
           if (getMatch) return getMatch;
         } catch (e) {
           console.warn(`[FrenchManga] Search failed for "${title}": ${e.message}`);
         }
+      }
+      if (allPostResults.length > 0) {
+        const firstTitle = cleanTitles[0];
+        const bestPostMatch = bestMatch(allPostResults, firstTitle, targetSeason);
+        if (bestPostMatch) return bestPostMatch;
       }
       if (allPostResults.length > 0) {
         console.log(`[FrenchManga] Trying deep fallback on ${allPostResults.length} POST results...`);
@@ -14369,6 +14395,11 @@ var __provider = (() => {
         const resolved = yield resolveStream(stream);
         const elapsed = Date.now() - start;
         if (resolved && resolved.url && resolved.isDirect) {
+          const urlLower = (resolved.url || "").toLowerCase();
+          if (urlLower.includes("tnmr.org") && !urlLower.includes("cdn-tnmr.org")) {
+            console.log(`[FrenchManga] \u2717 Blocked CDN tnmr.org (${elapsed}ms): ${resolved.url.slice(0, 60)}... - skipping`);
+            return null;
+          }
           if (resolved.url !== stream.url) {
             console.log(`[FrenchManga] Resolved OK (${elapsed}ms): ${stream.url.slice(0, 60)}... \u2192 ${resolved.url.slice(0, 60)}...`);
           } else {
@@ -14514,7 +14545,9 @@ var __provider = (() => {
           return [];
         }
         const streams = [];
+        const seenUrls = /* @__PURE__ */ new Set();
         const targetEp = targetEpisodeNums[0];
+        const MAX_SERVERS_PER_LANG = 2;
         for (const [lang, episodes] of Object.entries(apiData.versions)) {
           let ep = episodes.find((e) => e.num === targetEp);
           if (!ep) {
@@ -14527,16 +14560,25 @@ var __provider = (() => {
             console.log(`[FrenchManga] Episode ${ep.num}: "${epInfo.title}" (${lang})`);
           }
           console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`);
+          let resolvedCount = 0;
           for (const server of ep.servers) {
+            if (resolvedCount >= MAX_SERVERS_PER_LANG) break;
+            if (seenUrls.has(server.url)) {
+              console.log(`[FrenchManga] Dedup: skipping ${lang} server ${server.name} (same URL as other lang)`);
+              continue;
+            }
+            seenUrls.add(server.url);
             const stream = toStream(server.url, lang, "FrenchManga", SITE.BASE_URL, { quality: "HD" });
             if (subType) stream.subType = subType;
             const resolved = yield resolveWithTimeout(stream);
             if (resolved && resolved.url && resolved.isDirect) {
               streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "french-manga" }));
+              resolvedCount++;
             } else if (resolved && resolved.url && !resolved.isDirect) {
               stream.provider = "french-manga";
               stream.isDirect = false;
               streams.push(stream);
+              resolvedCount++;
             }
           }
         }
@@ -14551,20 +14593,31 @@ var __provider = (() => {
   function extractStreamsFromApi(apiData, name, subType) {
     return __async(this, null, function* () {
       const streams = [];
+      const seenUrls = /* @__PURE__ */ new Set();
+      const MAX_SERVERS_PER_LANG = 2;
       for (const [lang, episodes] of Object.entries(apiData.versions)) {
         const firstEp = episodes[0];
         if (!firstEp) continue;
         console.log(`[FrenchManga] Found movie (${lang}) with ${firstEp.servers.length} server(s)`);
+        let resolvedCount = 0;
         for (const server of firstEp.servers) {
+          if (resolvedCount >= MAX_SERVERS_PER_LANG) break;
+          if (seenUrls.has(server.url)) {
+            console.log(`[FrenchManga] Dedup: skipping ${lang} server ${server.name} (same URL as other lang)`);
+            continue;
+          }
+          seenUrls.add(server.url);
           const stream = toStream(server.url, lang, name, SITE.BASE_URL, { quality: "HD" });
           if (subType) stream.subType = subType;
           const resolved = yield resolveWithTimeout(stream);
           if (resolved && resolved.url && resolved.isDirect) {
             streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "french-manga" }));
+            resolvedCount++;
           } else if (resolved && resolved.url && !resolved.isDirect) {
             stream.provider = "french-manga";
             stream.isDirect = false;
             streams.push(stream);
+            resolvedCount++;
           }
         }
       }

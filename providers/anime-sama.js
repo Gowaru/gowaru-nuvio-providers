@@ -1,10 +1,6 @@
 /**
  * anime-sama - Built from src/anime-sama/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:08.327427971Z
-=======
- * Generated: 2026-08-26T16:18:53.44113342Z
->>>>>>> origin/main
+ * Generated: 2026-08-28T14:42:05.994125762Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -776,13 +772,38 @@ var __provider = (() => {
         const res = yield safeFetch(url, { headers: { "Referer": "https://video.sibnet.ru/" } });
         if (!res) return { url };
         const html = yield res.text();
-        const match = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
-        if (match) {
-          let videoUrl = match[1];
-          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-          else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
-          return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
+        let videoUrl = null;
+        const fileMatch = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+        if (fileMatch) {
+          videoUrl = fileMatch[1];
         }
+        if (!videoUrl) {
+          const srcMatch = html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+          if (srcMatch) videoUrl = srcMatch[1];
+        }
+        if (!videoUrl) {
+          const playerSrcMatch = html.match(/player\.src\(\s*\[\s*\{\s*src\s*:\s*["']([^"']+\.mp4[^"']*)['"]/i);
+          if (playerSrcMatch) videoUrl = playerSrcMatch[1];
+        }
+        if (!videoUrl) {
+          const genericMatch = html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
+          if (genericMatch) videoUrl = genericMatch[1];
+        }
+        if (!videoUrl) return { url };
+        if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+        else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
+        try {
+          const headRes = yield safeFetch(videoUrl, {
+            method: "HEAD",
+            headers: { "Referer": "https://video.sibnet.ru/" },
+            timeout: 5e3
+          });
+          if (headRes && headRes.url && headRes.url !== videoUrl && headRes.url.includes(".mp4")) {
+            videoUrl = headRes.url;
+          }
+        } catch (_) {
+        }
+        return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
       } catch (e) {
       }
       return { url };
@@ -13894,6 +13915,11 @@ var __provider = (() => {
       return null;
     });
   }
+  function stripSeasonSuffix(title) {
+    if (!title) return title;
+    let cleaned = title.replace(/\s+(?:Season|Saison|Stagione|Temporada)\s+\d+\s*$/i, "").replace(/\s+S\d+\s*$/i, "");
+    return cleaned.trim() || title;
+  }
   function toSlug(title) {
     return (title || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?()\[\]\/–—"]/g, " ").replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   }
@@ -13954,7 +13980,7 @@ var __provider = (() => {
           results.push({ slug, title, subtitle, score });
         });
         results.sort((a, b) => b.score - a.score);
-        return results.map((r) => r.slug);
+        return results.filter((r) => r.score >= 15).map((r) => r.slug);
       } catch (e) {
         return [];
       }
@@ -13967,7 +13993,15 @@ var __provider = (() => {
     let score = 0;
     if (t === q) return 100;
     if (t.includes(q)) score += 60;
-    else if (q.includes(t)) score += 50;
+    else if (q.includes(t)) {
+      const qWordCount = q.split(/[^a-z0-9]+/).filter((w) => w.length > 2).length;
+      const tWordCount = t.split(/[^a-z0-9]+/).filter((w) => w.length > 2).length;
+      if (qWordCount > 1 && tWordCount <= 1) {
+        score += 10;
+      } else {
+        score += 50;
+      }
+    }
     const qWords = q.split(/[^a-z0-9]+/).filter((w) => w.length > 2);
     const tWords = t.split(/[^a-z0-9]+/).filter((w) => w.length > 2);
     for (const w of qWords) {
@@ -13975,6 +14009,11 @@ var __provider = (() => {
     }
     for (const w of qWords) {
       if (s.includes(w) && !t.includes(w)) score += 3;
+    }
+    if (qWords.length >= 3 && tWords.length <= 1) {
+      score = Math.min(score, 5);
+    } else if (qWords.length >= 2 && tWords.length <= 1) {
+      score = Math.min(score, 10);
     }
     return score;
   }
@@ -14138,7 +14177,8 @@ var __provider = (() => {
       }
       if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const foundSlugs = [];
-        for (const t of titles.slice(0, MAX_FALLBACK_TITLES)) {
+        const searchTitles = titles.slice(0, MAX_FALLBACK_TITLES).map((t) => stripSeasonSuffix(t));
+        for (const t of searchTitles) {
           const slugs = yield searchSlugsScored(t);
           for (const s of slugs) {
             if (!foundSlugs.includes(s)) foundSlugs.push(s);
@@ -14172,7 +14212,7 @@ var __provider = (() => {
       init_metadata();
       init_dle_extractor();
       BASE_URL = "https://anime-sama.to";
-      MAX_FALLBACK_TITLES = 2;
+      MAX_FALLBACK_TITLES = 5;
       MAX_FALLBACK_SLUGS = 2;
       BUDGET_MS = 4e4;
     }

@@ -1,10 +1,6 @@
 /**
  * mugiwarastream - Built from src/mugiwarastream/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:11.667431549Z
-=======
- * Generated: 2026-08-26T16:18:53.884133853Z
->>>>>>> origin/main
+ * Generated: 2026-08-28T15:07:27.392647113Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -762,13 +758,38 @@ var __provider = (() => {
         const res = yield safeFetch(url, { headers: { "Referer": "https://video.sibnet.ru/" } });
         if (!res) return { url };
         const html = yield res.text();
-        const match = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
-        if (match) {
-          let videoUrl = match[1];
-          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-          else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
-          return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
+        let videoUrl = null;
+        const fileMatch = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+        if (fileMatch) {
+          videoUrl = fileMatch[1];
         }
+        if (!videoUrl) {
+          const srcMatch = html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+          if (srcMatch) videoUrl = srcMatch[1];
+        }
+        if (!videoUrl) {
+          const playerSrcMatch = html.match(/player\.src\(\s*\[\s*\{\s*src\s*:\s*["']([^"']+\.mp4[^"']*)['"]/i);
+          if (playerSrcMatch) videoUrl = playerSrcMatch[1];
+        }
+        if (!videoUrl) {
+          const genericMatch = html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
+          if (genericMatch) videoUrl = genericMatch[1];
+        }
+        if (!videoUrl) return { url };
+        if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+        else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
+        try {
+          const headRes = yield safeFetch(videoUrl, {
+            method: "HEAD",
+            headers: { "Referer": "https://video.sibnet.ru/" },
+            timeout: 5e3
+          });
+          if (headRes && headRes.url && headRes.url !== videoUrl && headRes.url.includes(".mp4")) {
+            videoUrl = headRes.url;
+          }
+        } catch (_) {
+        }
+        return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
       } catch (e) {
       }
       return { url };
@@ -14173,12 +14194,30 @@ var __provider = (() => {
     }
     return urls;
   }
+  function isDeadHost(url) {
+    if (!url) return false;
+    return DEAD_HOSTS.some((h) => url.includes(h));
+  }
+  function detectHostLabel(url) {
+    if (!url) return "Other";
+    const lower = url.toLowerCase();
+    if (lower.includes("sibnet")) return "Sibnet";
+    if (lower.includes("vidmoly") || lower.includes("voembed")) return "Vidmoly";
+    if (lower.includes("sendvid")) return "Sendvid";
+    if (lower.includes("vk.com") || lower.includes("vkvideo")) return "VK";
+    if (lower.includes("youtube")) return "YouTube";
+    if (lower.includes("dood")) return "Dood";
+    if (lower.includes("voe") || lower.includes("veev")) return "Voe";
+    if (lower.includes("filemoon")) return "Filemoon";
+    return "Other";
+  }
   function buildStreamEntry(url, label, langLabel, title, quality) {
     let resolvedUrl = url;
     if (typeof resolvedUrl === "string" && resolvedUrl.startsWith("//")) resolvedUrl = "https:" + resolvedUrl;
+    const hostLabel = detectHostLabel(resolvedUrl);
     return {
       name: `Mugiwara (${langLabel})`,
-      title: `${title} - ${label}`,
+      title: `${title} - ${hostLabel}`,
       url: resolvedUrl,
       quality: quality || "HD",
       headers: { "Referer": BASE + "/" }
@@ -14212,12 +14251,18 @@ var __provider = (() => {
   function collectSourceUrls(episodeSourceUrls) {
     if (!episodeSourceUrls || episodeSourceUrls.length === 0) return [];
     const streams = [];
+    let skipped = 0;
     for (let i = 0; i < episodeSourceUrls.length; i++) {
       let url = episodeSourceUrls[i];
       if (!url || typeof url !== "string") continue;
       if (url.startsWith("//")) url = "https:" + url;
+      if (isDeadHost(url)) {
+        skipped++;
+        continue;
+      }
       streams.push({ url, sourceIndex: i });
     }
+    if (skipped > 0) console.log(`[Mugiwara] Skipped ${skipped} dead host(s) before resolution`);
     return streams;
   }
   function extractFilmStreams(filmOptions) {
@@ -14254,9 +14299,11 @@ var __provider = (() => {
         tryQueries.push({ title: t, priority: isFrench ? 0 : t === titles[0] ? 1 : 2 });
       }
       tryQueries.sort((a, b) => a.priority - b.priority);
+      const limitedQueries = tryQueries.slice(0, MAX_SLUG_SEARCH);
       const allCandidates = [];
       const seenSlugs = /* @__PURE__ */ new Set();
-      for (const { title: t } of tryQueries) {
+      for (let qi = 0; qi < limitedQueries.length; qi++) {
+        const { title: t } = limitedQueries[qi];
         const nt = normalize(t);
         if (nt.length < 4) continue;
         const query = encodeURIComponent(t);
@@ -14283,6 +14330,11 @@ var __provider = (() => {
             seenSlugs.add(r.slug);
             allCandidates.push({ slug: r.slug, score });
           }
+        }
+        if (allCandidates.some((c) => c.score === 100)) {
+          console.log(`[Mugiwara] Early exit: exact match found after ${qi + 1} title(s)`);
+          break;
+          break;
         }
       }
       if (allCandidates.length === 0) return null;
@@ -14430,9 +14482,9 @@ var __provider = (() => {
           }
           const streams = collectStreamsForLang(matchedSaison, lang, epIndex, seasonName);
           for (const s of streams) {
-            const key = s.url + "|" + s.name;
-            if (!seenUrls.has(key)) {
-              seenUrls.add(key);
+            const urlKey = s.url.replace(/\?.*$/, "");
+            if (!seenUrls.has(urlKey)) {
+              seenUrls.add(urlKey);
               allStreams.push(s);
             }
           }
@@ -14446,7 +14498,7 @@ var __provider = (() => {
       return [];
     });
   }
-  var SOURCE_LABELS, slugCache, animeDataCache;
+  var SOURCE_LABELS, DEAD_HOSTS, MAX_SLUG_SEARCH, slugCache, animeDataCache;
   var init_extractor = __esm({
     "src/mugiwarastream/extractor.js"() {
       init_http();
@@ -14455,6 +14507,8 @@ var __provider = (() => {
       init_dle_extractor();
       init_cache();
       SOURCE_LABELS = ["Sibnet", "Vidmoly", "Sendvid", "VK", "Youtube", "Other"];
+      DEAD_HOSTS = ["sendvid.com", "uqload.co", "uqload.bz", "uqload.to", "oneupload.to"];
+      MAX_SLUG_SEARCH = 5;
       slugCache = createCache("mg_slug", "MugiwaraSlug", { successTtl: 10 * 6e4, maxSize: 200 });
       animeDataCache = createCache("mg_data", "MugiwaraData", { successTtl: 15 * 6e4, maxSize: 100 });
     }

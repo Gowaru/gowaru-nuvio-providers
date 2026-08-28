@@ -1,10 +1,6 @@
 /**
  * animesultra - Built from src/animesultra/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:10.513430441Z
-=======
- * Generated: 2026-08-26T16:18:53.55213352Z
->>>>>>> origin/main
+ * Generated: 2026-08-28T14:42:06.714126578Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12560,13 +12556,38 @@ var __provider = (() => {
         const res = yield safeFetch(url, { headers: { "Referer": "https://video.sibnet.ru/" } });
         if (!res) return { url };
         const html = yield res.text();
-        const match = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) || html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
-        if (match) {
-          let videoUrl = match[1];
-          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
-          else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
-          return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
+        let videoUrl = null;
+        const fileMatch = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+        if (fileMatch) {
+          videoUrl = fileMatch[1];
         }
+        if (!videoUrl) {
+          const srcMatch = html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+          if (srcMatch) videoUrl = srcMatch[1];
+        }
+        if (!videoUrl) {
+          const playerSrcMatch = html.match(/player\.src\(\s*\[\s*\{\s*src\s*:\s*["']([^"']+\.mp4[^"']*)['"]/i);
+          if (playerSrcMatch) videoUrl = playerSrcMatch[1];
+        }
+        if (!videoUrl) {
+          const genericMatch = html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
+          if (genericMatch) videoUrl = genericMatch[1];
+        }
+        if (!videoUrl) return { url };
+        if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+        else if (videoUrl.startsWith("/")) videoUrl = "https://video.sibnet.ru" + videoUrl;
+        try {
+          const headRes = yield safeFetch(videoUrl, {
+            method: "HEAD",
+            headers: { "Referer": "https://video.sibnet.ru/" },
+            timeout: 5e3
+          });
+          if (headRes && headRes.url && headRes.url !== videoUrl && headRes.url.includes(".mp4")) {
+            videoUrl = headRes.url;
+          }
+        } catch (_) {
+        }
+        return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
       } catch (e) {
       }
       return { url };
@@ -14237,19 +14258,27 @@ var __provider = (() => {
         const epHtml = yield epRes.text();
         const $ep = import_cheerio_without_node_native2.default.load(epHtml);
         const servers = [];
+        const isDeadHost = (url) => url.includes("vidstream.pro") || url.includes("sendvid.com");
         $ep(".server-item").each((i, el) => {
           const embed = $ep(el).attr("data-embed");
           const sname = $ep(el).text().trim() || `Server_${i + 1}`;
-          if (embed && embed.startsWith("http")) {
+          if (embed && embed.startsWith("http") && !isDeadHost(embed)) {
             servers.push({ url: embed, lang, sname });
           }
         });
         if (servers.length > 0) return servers;
         $ep('[id^="content_player_"]').each((i, el) => {
           const id = $ep(el).attr("id") || "";
-          const url = $ep(el).text().trim();
-          if (url && url.startsWith("http")) {
-            servers.push({ url, lang, sname: `UltraCDN ${id.replace("content_player_", "")}` });
+          let url = $ep(el).text().trim();
+          if (!url) return;
+          if (/^[0-9]+$/.test(url)) {
+            url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
+          }
+          if (isDeadHost(url)) return;
+          if (url.startsWith("http")) {
+            const suffix = id.replace("content_player_", "").replace(/\d+/, "");
+            const serverName = suffix ? suffix.toUpperCase() : "Sibnet";
+            servers.push({ url, lang, sname: serverName });
           }
         });
         if (servers.length === 0) {
@@ -14299,37 +14328,24 @@ var __provider = (() => {
               dataId: $(el).attr("data-id") || ""
             });
           });
+          const cpRegex = /<div id="content_player_(\d+)([a-z]*)"[^>]*>([^<]+)<\/div>/gi;
+          let cpMatch;
+          const sibnetPlayers = [];
+          while ((cpMatch = cpRegex.exec(html)) !== null) {
+            const url = cpMatch[3].trim();
+            if (!cpMatch[2] && /^[0-9]+$/.test(url)) {
+              sibnetPlayers.push({ id: cpMatch[1], url });
+            }
+          }
           for (const targetEp of targetNums) {
             if (foundServers) break;
             const targetIdx = allEpItems.findIndex((e) => e.num === targetEp);
             if (targetIdx < 0) continue;
-            const cpRegex = /<div id="content_player_(\d+)(v\d+)?"[^>]*>([^<]+)<\/div>/gi;
-            let cpMatch;
-            const contentPlayers = [];
-            while ((cpMatch = cpRegex.exec(html)) !== null) {
-              contentPlayers.push({
-                id: cpMatch[1],
-                suffix: cpMatch[2] || "",
-                url: cpMatch[3].trim()
-              });
-            }
-            const serversPerEp = 3;
-            const startIdx = targetIdx * serversPerEp;
-            for (let i = startIdx; i < Math.min(startIdx + serversPerEp, contentPlayers.length); i++) {
-              const cp = contentPlayers[i];
-              if (!cp) continue;
-              let url = cp.url;
-              if (url.includes("vidstream.pro")) continue;
-              if (/^[0-9]+$/.test(url)) {
-                url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
-              }
-              if (url.startsWith("http://") || url.startsWith("https://")) {
-                const domainMatch = url.match(/^https?:\/\/([^/]+)/);
-                if (domainMatch && domainMatch[1].includes(".")) {
-                  pushStream(url, lang, `Server_${cp.id}${cp.suffix}`);
-                  foundServers = true;
-                }
-              }
+            if (targetIdx < sibnetPlayers.length) {
+              const cp = sibnetPlayers[targetIdx];
+              const url = `https://video.sibnet.ru/shell.php?videoid=${cp.url}`;
+              pushStream(url, lang, "Sibnet");
+              foundServers = true;
             }
           }
           if (!foundServers) {
@@ -14344,9 +14360,13 @@ var __provider = (() => {
             for (const { epNum: epNum2, href } of epHrefs) {
               if (foundServers) break;
               const servers = yield fetchEpisodeServers(href, $, lang);
-              if (servers.length > 0) {
+              const liveServers = servers.filter((s) => {
+                const u = (s.url || "").toLowerCase();
+                return !u.includes("vidstream.pro") && !u.includes("sendvid.com");
+              });
+              if (liveServers.length > 0) {
                 foundServers = true;
-                for (const { url, sname } of servers) {
+                for (const { url, sname } of liveServers) {
                   pushStream(url, lang, sname);
                 }
               }
@@ -14459,9 +14479,13 @@ var __provider = (() => {
       }
       const validStreams = [];
       for (const s of streams) {
+        const sUrl = (s.url || "").toLowerCase();
+        if (sUrl.includes("sendvid.com") || sUrl.includes("vidstream.pro")) continue;
         try {
           const resolved = yield resolveStream(s);
           if (resolved && resolved.isDirect) {
+            const rUrl = (resolved.url || "").toLowerCase();
+            if (rUrl.includes("sendvid.com") || rUrl.includes("vidstream.pro")) continue;
             validStreams.push(resolved);
             if (validStreams.length >= 2) break;
           }
@@ -14471,7 +14495,7 @@ var __provider = (() => {
       if (validStreams.length === 0 && streams.length > 0) {
         const resolvable = streams.filter((s) => {
           const u = (s.url || "").toLowerCase();
-          return u.includes("sibnet") || u.includes("sendvid") || u.includes("voe") || u.includes("vidmoly") || u.includes("daisukianime") || u.includes("m3u8") || u.includes(".mp4");
+          return u.includes("sibnet") || u.includes("voe") || u.includes("vidmoly") || u.includes("daisukianime") || u.includes("m3u8") || u.includes(".mp4");
         });
         if (resolvable.length > 0) {
           console.log(`[AnimesUltra] resolveStream filtered all, returning ${resolvable.length} streams from known hosts`);

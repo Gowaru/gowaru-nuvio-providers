@@ -1,6 +1,6 @@
 /**
  * fullanime - Built from src/fullanime/
- * Generated: 2026-08-27T16:17:11.468431387Z
+ * Generated: 2026-08-28T14:42:07.927127752Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;

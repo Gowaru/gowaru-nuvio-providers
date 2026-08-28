@@ -1,10 +1,6 @@
 /**
  * sekai - Built from src/sekai/
-<<<<<<< HEAD
- * Generated: 2026-08-27T16:17:11.949431856Z
-=======
- * Generated: 2026-08-26T16:18:53.972133943Z
->>>>>>> origin/main
+ * Generated: 2026-08-28T14:42:08.515128417Z
  */
 var __provider = (() => {
   var __create = Object.create;

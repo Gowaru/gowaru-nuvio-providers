@@ -201,12 +201,35 @@ function extractEpisodeUrls(saison, lang) {
 
 const SOURCE_LABELS = ['Sibnet', 'Vidmoly', 'Sendvid', 'VK', 'Youtube', 'Other'];
 
+// Hosts connus morts — skip avant résolution (gain ~15-20s)
+const DEAD_HOSTS = ['sendvid.com', 'uqload.co', 'uqload.bz', 'uqload.to', 'oneupload.to'];
+function isDeadHost(url) {
+    if (!url) return false;
+    return DEAD_HOSTS.some(h => url.includes(h));
+}
+
+function detectHostLabel(url) {
+    if (!url) return 'Other';
+    const lower = url.toLowerCase();
+    if (lower.includes('sibnet')) return 'Sibnet';
+    if (lower.includes('vidmoly') || lower.includes('voembed')) return 'Vidmoly';
+    if (lower.includes('sendvid')) return 'Sendvid';
+    if (lower.includes('vk.com') || lower.includes('vkvideo')) return 'VK';
+    if (lower.includes('youtube')) return 'YouTube';
+    if (lower.includes('dood')) return 'Dood';
+    if (lower.includes('voe') || lower.includes('veev')) return 'Voe';
+    if (lower.includes('filemoon')) return 'Filemoon';
+    return 'Other';
+}
+
 function buildStreamEntry(url, label, langLabel, title, quality) {
     let resolvedUrl = url;
     if (typeof resolvedUrl === 'string' && resolvedUrl.startsWith('//')) resolvedUrl = 'https:' + resolvedUrl;
+    // Détecter le vrai hébergeur depuis l'URL
+    const hostLabel = detectHostLabel(resolvedUrl);
     return {
         name: `Mugiwara (${langLabel})`,
-        title: `${title} - ${label}`,
+        title: `${title} - ${hostLabel}`,
         url: resolvedUrl,
         quality: quality || 'HD',
         headers: { 'Referer': BASE + '/' }
@@ -242,12 +265,19 @@ async function resolveStreams(streams) {
 function collectSourceUrls(episodeSourceUrls) {
     if (!episodeSourceUrls || episodeSourceUrls.length === 0) return [];
     const streams = [];
+    let skipped = 0;
     for (let i = 0; i < episodeSourceUrls.length; i++) {
         let url = episodeSourceUrls[i];
         if (!url || typeof url !== 'string') continue;
         if (url.startsWith('//')) url = 'https:' + url;
+        // Skip dead hosts avant résolution (gain ~5-10s par stream mort)
+        if (isDeadHost(url)) {
+            skipped++;
+            continue;
+        }
         streams.push({ url, sourceIndex: i });
     }
+    if (skipped > 0) console.log(`[Mugiwara] Skipped ${skipped} dead host(s) before resolution`);
     return streams;
 }
 
@@ -277,6 +307,8 @@ function extractFilmStreams(filmOptions) {
     return allFilmStreams;
 }
 
+const MAX_SLUG_SEARCH = 5; // Max titres à chercher (gain ~15-20s)
+
 async function findSlugs(titles) {
     const seenQueries = new Set();
     const tryQueries = [];
@@ -288,10 +320,14 @@ async function findSlugs(titles) {
     }
     tryQueries.sort((a, b) => a.priority - b.priority);
 
+    // Limiter le nombre de titres recherchés (gain ~15-20s)
+    const limitedQueries = tryQueries.slice(0, MAX_SLUG_SEARCH);
+
     const allCandidates = [];
     const seenSlugs = new Set();
 
-    for (const { title: t } of tryQueries) {
+    for (let qi = 0; qi < limitedQueries.length; qi++) {
+        const { title: t } = limitedQueries[qi];
         const nt = normalize(t);
         if (nt.length < 4) continue;
 
@@ -322,6 +358,13 @@ async function findSlugs(titles) {
                 seenSlugs.add(r.slug);
                 allCandidates.push({ slug: r.slug, score });
             }
+        }
+
+        // Early exit: si on a un match exact (score 100), on arrête
+        if (allCandidates.some(c => c.score === 100)) {
+            console.log(`[Mugiwara] Early exit: exact match found after ${qi + 1} title(s)`);
+            break;
+            break;
         }
     }
 
@@ -502,9 +545,10 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
 
             const streams = collectStreamsForLang(matchedSaison, lang, epIndex, seasonName);
             for (const s of streams) {
-                const key = s.url + '|' + s.name;
-                if (!seenUrls.has(key)) {
-                    seenUrls.add(key);
+                // Dédup par URL (VF/VOSTFR souvent les mêmes vidmoly URLs)
+                const urlKey = s.url.replace(/\?.*$/, ''); // strip query params
+                if (!seenUrls.has(urlKey)) {
+                    seenUrls.add(urlKey);
                     allStreams.push(s);
                 }
             }
