@@ -38,4 +38,4 @@ export const LANGUAGE_MAP = {
 }
 
 export const CACHE_TTL = 5 * 60 * 1000
-export const MAX_SEARCH_TITLES = 3
+export const MAX_SEARCH_TITLES = 5

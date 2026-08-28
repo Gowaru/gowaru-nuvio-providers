@@ -284,23 +284,32 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         const $ep = cheerio.load(epHtml);
         const servers = [];
 
+        const isDeadHost = (url) => url.includes('vidstream.pro') || url.includes('sendvid.com');
+
         // Format 1 (current site): .server-item with data-embed attribute
-        // <div class="item server-item" data-server-id="2" data-embed="https://vidstream.pro/e/XXX">
         $ep('.server-item').each((i, el) => {
             const embed = $ep(el).attr('data-embed');
             const sname = $ep(el).text().trim() || `Server_${i+1}`;
-            if (embed && embed.startsWith('http')) {
+            if (embed && embed.startsWith('http') && !isDeadHost(embed)) {
                 servers.push({ url: embed, lang, sname });
             }
         });
         if (servers.length > 0) return servers;
 
-        // Format 2: #content_player_Xvidc divs
+        // Format 2: #content_player divs (including numeric Sibnet IDs)
         $ep('[id^="content_player_"]').each((i, el) => {
             const id = $ep(el).attr('id') || '';
-            const url = $ep(el).text().trim();
-            if (url && url.startsWith('http')) {
-                servers.push({ url, lang, sname: `UltraCDN ${id.replace('content_player_', '')}` });
+            let url = $ep(el).text().trim();
+            if (!url) return;
+            // Convert numeric IDs to Sibnet URLs
+            if (/^[0-9]+$/.test(url)) {
+                url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
+            }
+            if (isDeadHost(url)) return;
+            if (url.startsWith('http')) {
+                const suffix = id.replace('content_player_', '').replace(/\d+/, '');
+                const serverName = suffix ? suffix.toUpperCase() : 'Sibnet';
+                servers.push({ url, lang, sname: serverName });
             }
         });
 
@@ -364,9 +373,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             const targetNums = targetEpisodes.map(e => parseInt(e, 10));
             let foundServers = false;
 
-            // Strategy 1: Extract directly from content_player divs in full-story
-            // These contain the REAL embed URLs (vidmoly, daisukianime, etc.)
-            // Pattern: content_player_{N}v1 = UltraCDN, content_player_{N+1} = Vidmoly, content_player_{N+2} = Sibnet
+            // Strategy 1: Extract Sibnet content_player divs from full-story
+            // Site structure: multiple servers per episode (vidc, vo, se, numeric)
+            // but only numeric IDs are Sibnet (the working server).
+            // Exactly 1 Sibnet per episode, in episode order → direct index mapping.
             const allEpItems = [];
             $('.ep-item').each((i, el) => {
                 allEpItems.push({
@@ -375,49 +385,34 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 });
             });
 
+            // Extract Sibnet-only content_players (numeric IDs, no suffix)
+            const cpRegex = /<div id="content_player_(\d+)([a-z]*)"[^>]*>([^<]+)<\/div>/gi;
+            let cpMatch;
+            const sibnetPlayers = [];
+            while ((cpMatch = cpRegex.exec(html)) !== null) {
+                const url = cpMatch[3].trim();
+                // Only keep numeric IDs (Sibnet) — skip vidc/vo/se (dead or unresolvable)
+                if (!cpMatch[2] && /^[0-9]+$/.test(url)) {
+                    sibnetPlayers.push({ id: cpMatch[1], url });
+                }
+            }
+
             for (const targetEp of targetNums) {
                 if (foundServers) break;
                 const targetIdx = allEpItems.findIndex(e => e.num === targetEp);
                 if (targetIdx < 0) continue;
 
-                // Extract content_player divs
-                const cpRegex = /<div id="content_player_(\d+)(v\d+)?"[^>]*>([^<]+)<\/div>/gi;
-                let cpMatch;
-                const contentPlayers = [];
-                while ((cpMatch = cpRegex.exec(html)) !== null) {
-                    contentPlayers.push({
-                        id: cpMatch[1],
-                        suffix: cpMatch[2] || '',
-                        url: cpMatch[3].trim()
-                    });
-                }
-
-                // Match content_player to episodes: 3 servers per episode
-                const serversPerEp = 3;
-                const startIdx = targetIdx * serversPerEp;
-                for (let i = startIdx; i < Math.min(startIdx + serversPerEp, contentPlayers.length); i++) {
-                    const cp = contentPlayers[i];
-                    if (!cp) continue;
-                    let url = cp.url;
-                    // Skip dead vidstream.pro (parked domain)
-                    if (url.includes('vidstream.pro')) continue;
-                    // Handle plain numeric IDs → convert to Sibnet
-                    if (/^[0-9]+$/.test(url)) {
-                        url = `https://video.sibnet.ru/shell.php?videoid=${url}`;
-                    }
-                    // Only accept valid HTTP URLs (skip encoded/chiffré URLs like "https:oecmkr...")
-                    if (url.startsWith('http://') || url.startsWith('https://')) {
-                        // Validate URL has a real domain (not encoded garbage)
-                        const domainMatch = url.match(/^https?:\/\/([^/]+)/);
-                        if (domainMatch && domainMatch[1].includes('.')) {
-                            pushStream(url, lang, `Server_${cp.id}${cp.suffix}`);
-                            foundServers = true;
-                        }
-                    }
+                // Map episode index to Sibnet player (1 Sibnet per episode, in order)
+                if (targetIdx < sibnetPlayers.length) {
+                    const cp = sibnetPlayers[targetIdx];
+                    const url = `https://video.sibnet.ru/shell.php?videoid=${cp.url}`;
+                    pushStream(url, lang, 'Sibnet');
+                    foundServers = true;
                 }
             }
 
             // Strategy 2: If no content_player found, try fetching episode pages
+            // (episode pages typically have server-item with data-embed)
             if (!foundServers) {
                 const epHrefs = [];
                 $('.ep-item').each((i, el) => {
@@ -431,9 +426,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 for (const { epNum, href } of epHrefs) {
                     if (foundServers) break;
                     const servers = await fetchEpisodeServers(href, $, lang);
-                    if (servers.length > 0) {
+                    // Filter out dead hosts (vidstream.pro, sendvid)
+                    const liveServers = servers.filter(s => {
+                        const u = (s.url || '').toLowerCase();
+                        return !u.includes('vidstream.pro') && !u.includes('sendvid.com');
+                    });
+                    if (liveServers.length > 0) {
                         foundServers = true;
-                        for (const { url, sname } of servers) {
+                        for (const { url, sname } of liveServers) {
                             pushStream(url, lang, sname);
                         }
                     }
@@ -562,9 +562,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // Résolution séquentielle avec early-exit (target 2 streams directs)
     const validStreams = [];
     for (const s of streams) {
+        const sUrl = (s.url || '').toLowerCase();
+        // Skip dead hosts before resolution
+        if (sUrl.includes('sendvid.com') || sUrl.includes('vidstream.pro')) continue;
         try {
             const resolved = await resolveStream(s);
             if (resolved && resolved.isDirect) {
+                // Double-check: skip if resolver returned a dead host URL
+                const rUrl = (resolved.url || '').toLowerCase();
+                if (rUrl.includes('sendvid.com') || rUrl.includes('vidstream.pro')) continue;
                 validStreams.push(resolved);
                 if (validStreams.length >= 2) break;
             }
@@ -575,7 +581,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     if (validStreams.length === 0 && streams.length > 0) {
         const resolvable = streams.filter(s => {
             const u = (s.url || '').toLowerCase();
-            return u.includes('sibnet') || u.includes('sendvid') || u.includes('voe') ||
+            // Skip dead hosts: sendvid (502), vidstream.pro (parked)
+            return u.includes('sibnet') || u.includes('voe') ||
                    u.includes('vidmoly') || u.includes('daisukianime') ||
                    u.includes('m3u8') || u.includes('.mp4');
         });

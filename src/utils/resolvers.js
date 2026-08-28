@@ -1053,17 +1053,47 @@ export async function resolveSibnet(url) {
         const res = await safeFetch(url, { headers: { 'Referer': 'https://video.sibnet.ru/' } });
         if (!res) return { url };
         const html = await res.text();
-        // JWPlayer uses `file:` key; URL may have query params like ?mt=...&sig=...
-        const match =
-            html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) ||
-            html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i) ||
-            html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
-        if (match) {
-            let videoUrl = match[1];
-            if (videoUrl.startsWith('//')) videoUrl = "https:" + videoUrl;
-            else if (videoUrl.startsWith('/')) videoUrl = "https://video.sibnet.ru" + videoUrl;
-            return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
+        // Extract MP4 URL from multiple patterns:
+        // 1. file: "...mp4" (JWPlayer)
+        // 2. src: "...mp4" (VideoJS)
+        // 3. player.src([{src: "...mp4", type: "video/mp4"}]) (VideoJS player.src)
+        // 4. Generic MP4 URL in quotes
+        let videoUrl = null;
+        const fileMatch = html.match(/file\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+        if (fileMatch) { videoUrl = fileMatch[1]; }
+        if (!videoUrl) {
+            const srcMatch = html.match(/src\s*:\s*["']([^"']*\.mp4[^"']*)['"]/i);
+            if (srcMatch) videoUrl = srcMatch[1];
         }
+        if (!videoUrl) {
+            // Match player.src([{src: "...", type: "video/mp4"}])
+            const playerSrcMatch = html.match(/player\.src\(\s*\[\s*\{\s*src\s*:\s*["']([^"']+\.mp4[^"']*)['"]/i);
+            if (playerSrcMatch) videoUrl = playerSrcMatch[1];
+        }
+        if (!videoUrl) {
+            const genericMatch = html.match(/["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/i);
+            if (genericMatch) videoUrl = genericMatch[1];
+        }
+        if (!videoUrl) return { url };
+
+        // Normalize URL
+        if (videoUrl.startsWith('//')) videoUrl = "https:" + videoUrl;
+        else if (videoUrl.startsWith('/')) videoUrl = "https://video.sibnet.ru" + videoUrl;
+
+        // Follow 302 redirect to get the final signed CDN URL
+        // (avoids redirect hop in the player for faster playback)
+        try {
+            const headRes = await safeFetch(videoUrl, {
+                method: 'HEAD',
+                headers: { 'Referer': 'https://video.sibnet.ru/' },
+                timeout: 5000
+            });
+            if (headRes && headRes.url && headRes.url !== videoUrl && headRes.url.includes('.mp4')) {
+                videoUrl = headRes.url;
+            }
+        } catch (_) { /* keep original URL */ }
+
+        return { url: videoUrl, headers: { "Referer": "https://video.sibnet.ru/" } };
     } catch (e) {}
     return { url };
 }

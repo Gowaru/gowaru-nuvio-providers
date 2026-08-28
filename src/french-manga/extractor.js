@@ -295,15 +295,25 @@ async function trySearch(titles, targetSeason) {
         }
         const postMatch = bestMatch(postResults, title, targetSeason)
         if (postMatch) return postMatch
+        // Don't return early — continue trying other titles
+        // (e.g. AJAX search for "Attack on Titan" returns French titles with 0 score,
+        //  but "L'Attaque des Titans" will match)
       }
 
       // Fallback to GET (main page listing — works for recently updated)
-      console.log(`[FrenchManga] POST search missed, trying GET for "${title}"...`)
+      console.log(`[FrenchManga] Trying GET fallback for "${title}"...`)
       const getMatch = await trySearchGet(title, targetSeason)
       if (getMatch) return getMatch
     } catch (e) {
       console.warn(`[FrenchManga] Search failed for "${title}": ${e.message}`)
     }
+  }
+
+  // After trying all titles, attempt bestMatch on accumulated POST results
+  if (allPostResults.length > 0) {
+    const firstTitle = cleanTitles[0]
+    const bestPostMatch = bestMatch(allPostResults, firstTitle, targetSeason)
+    if (bestPostMatch) return bestPostMatch
   }
   
   // Deep fallback: check low-scoring POST results via page content (parallel, short timeout)
@@ -342,32 +352,37 @@ async function fetchEpisodeApi(newsid) {
     const json = await fetchJson(url, { timeout: TIMEOUTS.API })
     return parseEpisodeApiData(json)
   })
-}
+}async function resolveWithTimeout(stream) {
+    try {
+        const start = Date.now();
+        const resolved = await resolveStream(stream)
+        const elapsed = Date.now() - start;
 
-async function resolveWithTimeout(stream) {
-  try {
-    const start = Date.now();
-    const resolved = await resolveStream(stream)
-    const elapsed = Date.now() - start;
+        if (resolved && resolved.url && resolved.isDirect) {
+            // Skip known-blocked CDN domains (tnmr.org returns 403 on HLS)
+            const urlLower = (resolved.url || '').toLowerCase();
+            if (urlLower.includes('tnmr.org') && !urlLower.includes('cdn-tnmr.org')) {
+                console.log(`[FrenchManga] ✗ Blocked CDN tnmr.org (${elapsed}ms): ${resolved.url.slice(0, 60)}... - skipping`);
+                return null;
+            }
 
-    if (resolved && resolved.url && resolved.isDirect) {
-      if (resolved.url !== stream.url) {
-        console.log(`[FrenchManga] Resolved OK (${elapsed}ms): ${stream.url.slice(0, 60)}... → ${resolved.url.slice(0, 60)}...`);
-      } else {
-        console.log(`[FrenchManga] Direct OK (${elapsed}ms): ${stream.url.slice(0, 70)}...`);
-      }
-      return resolved
-    }
+            if (resolved.url !== stream.url) {
+                console.log(`[FrenchManga] Resolved OK (${elapsed}ms): ${stream.url.slice(0, 60)}... → ${resolved.url.slice(0, 60)}...`);
+            } else {
+                console.log(`[FrenchManga] Direct OK (${elapsed}ms): ${stream.url.slice(0, 70)}...`);
+            }
+            return resolved
+        }
 
-    if (resolved && resolved.url && !resolved.isDirect) {
-      console.log(`[FrenchManga] ⚠ Resolve embed (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, keeping as fallback`)
-      return resolved
-    }
+        if (resolved && resolved.url && !resolved.isDirect) {
+            console.log(`[FrenchManga] ⚠ Resolve embed (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, keeping as fallback`)
+            return resolved
+        }
 
-    if (resolved && resolved.url) {
-      console.log(`[FrenchManga] ⚠ Resolve uncertain (${elapsed}ms): ${stream.url.slice(0, 80)} - keeping as fallback`)
-      return resolved
-    }
+        if (resolved && resolved.url) {
+            console.log(`[FrenchManga] ⚠ Resolve uncertain (${elapsed}ms): ${stream.url.slice(0, 80)} - keeping as fallback`)
+            return resolved
+        }
 
     console.log(`[FrenchManga] ✗ Resolve null: ${(stream.url || '').slice(0, 80)} - returning embed fallback`)
     return stream
@@ -529,7 +544,9 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
     // For series, find the right episode across all languages
     const streams = []
+    const seenUrls = new Set()
     const targetEp = targetEpisodeNums[0]
+    const MAX_SERVERS_PER_LANG = 2  // Early-exit: resolve max 2 servers per language
 
     for (const [lang, episodes] of Object.entries(apiData.versions)) {
       let ep = episodes.find(e => e.num === targetEp)
@@ -545,18 +562,31 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
         console.log(`[FrenchManga] Episode ${ep.num}: "${epInfo.title}" (${lang})`)
       }
       console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`)      
+      let resolvedCount = 0
       for (const server of ep.servers) {
+        // Early-exit: stop resolving servers for this language once we have enough
+        if (resolvedCount >= MAX_SERVERS_PER_LANG) break
+
+        // Deduplicate: skip if same URL already added (VF/VOSTFR often share embeds)
+        if (seenUrls.has(server.url)) {
+          console.log(`[FrenchManga] Dedup: skipping ${lang} server ${server.name} (same URL as other lang)`)
+          continue
+        }
+        seenUrls.add(server.url)
+
         const stream = toStream(server.url, lang, 'FrenchManga', SITE.BASE_URL, { quality: 'HD' })
         if (subType) stream.subType = subType
 
         const resolved = await resolveWithTimeout(stream)
         if (resolved && resolved.url && resolved.isDirect) {
           streams.push({ ...resolved, provider: 'french-manga' })
+          resolvedCount++
         } else if (resolved && resolved.url && !resolved.isDirect) {
           // Embed fallback: include unresolved embeds when no direct stream available
           stream.provider = 'french-manga'
           stream.isDirect = false
           streams.push(stream)
+          resolvedCount++
         }
       }
     }
@@ -572,6 +602,8 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
 async function extractStreamsFromApi(apiData, name, subType) {
   const streams = []
+  const seenUrls = new Set()
+  const MAX_SERVERS_PER_LANG = 2
 
   for (const [lang, episodes] of Object.entries(apiData.versions)) {
     // For movies, take the first episode
@@ -580,18 +612,30 @@ async function extractStreamsFromApi(apiData, name, subType) {
 
     console.log(`[FrenchManga] Found movie (${lang}) with ${firstEp.servers.length} server(s)`)
 
+    let resolvedCount = 0
     for (const server of firstEp.servers) {
+      if (resolvedCount >= MAX_SERVERS_PER_LANG) break
+
+      // Deduplicate: skip if same URL already added (VF/VOSTFR often share embeds)
+      if (seenUrls.has(server.url)) {
+        console.log(`[FrenchManga] Dedup: skipping ${lang} server ${server.name} (same URL as other lang)`)
+        continue
+      }
+      seenUrls.add(server.url)
+
       const stream = toStream(server.url, lang, name, SITE.BASE_URL, { quality: 'HD' })
       if (subType) stream.subType = subType
 
       const resolved = await resolveWithTimeout(stream)
       if (resolved && resolved.url && resolved.isDirect) {
         streams.push({ ...resolved, provider: 'french-manga' })
+        resolvedCount++
       } else if (resolved && resolved.url && !resolved.isDirect) {
         // Embed fallback: include unresolved embeds when no direct stream available
         stream.provider = 'french-manga'
         stream.isDirect = false
         streams.push(stream)
+        resolvedCount++
       }
     }
   }
