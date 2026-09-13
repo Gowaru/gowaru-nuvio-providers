@@ -57,8 +57,10 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
     else if (q.includes(t)) {
         // Penalize short results that are substrings of the query
         // e.g. "Another" in "No Longer Allowed in Another World" → low score
-        const qWordCount = q.split(/[^a-z0-9]+/).filter(w => w.length > 2).length;
-        const tWordCount = t.split(/[^a-z0-9]+/).filter(w => w.length > 2).length;
+        // Mots > 3 lettres : "the"/"les"/"des" ne comptent pas (ils faisaient
+        // passer des slugs sans rapport au-dessus du seuil de recherche).
+        const qWordCount = q.split(/[^a-z0-9]+/).filter(w => w.length > 3).length;
+        const tWordCount = t.split(/[^a-z0-9]+/).filter(w => w.length > 3).length;
         if (qWordCount > 1 && tWordCount <= 1) {
             // Single-word result in a multi-word query: heavy penalty
             score += 10;
@@ -67,8 +69,8 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
         }
     }
 
-    const qWords = q.split(/[^a-z0-9]+/).filter(w => w.length > 2);
-    const tWords = t.split(/[^a-z0-9]+/).filter(w => w.length > 2);
+    const qWords = q.split(/[^a-z0-9]+/).filter(w => w.length > 3);
+    const tWords = t.split(/[^a-z0-9]+/).filter(w => w.length > 3);
 
     for (const w of qWords) {
         if (tWords.includes(w)) score += 15;
@@ -98,6 +100,8 @@ function getPlayerName(varName, url) {
     if (url.includes('stape') || url.includes('streamtape')) return 'Streamtape';
     if (url.includes('dood')) return 'Doodstream';
     if (url.includes('uqload') || url.includes('oneupload')) return 'Uqload';
+    if (url.includes('ansembed')) return 'AnsEmbed';
+    if (url.includes('embed4me')) return 'Embed4Me';
     return 'Player';
 }
 
@@ -158,11 +162,18 @@ async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisode
     const episodesToTry = [episode, ...altEpisodes.filter(e => e !== episode)];
 
     if (mediaType === 'movie') {
-        const jsContent = await fetchJs(slug, 'film', lang);
-        if (!jsContent) return [];
-        const parsed = parseUrls(jsContent);
-        if (parsed.length === 0) return [];
-        return buildStreams(parsed, lang, null, 0);
+        // Les films vivent sous le catalogue de la série, en /film/ OU /film2/
+        // (constaté en live 09/2026 : demon-slayer/film2/, tensei-slime/film2/…
+        // — /film/ renvoie une soft-404 HTML sans `var` → parseUrls vide).
+        for (const seasonPath of ['film', 'film2']) {
+            const jsContent = await fetchJs(slug, seasonPath, lang);
+            if (!jsContent) continue;
+            const parsed = parseUrls(jsContent);
+            if (parsed.length === 0) continue;
+            const streams = await buildStreams(parsed, lang, null, 0);
+            if (streams.length > 0) return streams;
+        }
+        return [];
     }
 
     for (const ep of episodesToTry) {
@@ -282,6 +293,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         // Strip season suffixes before searching ("No Longer Allowed in Another World Season 1"
         // returns wrong results; "No Longer Allowed in Another World" returns correct slug)
         const searchTitles = titles.slice(0, MAX_FALLBACK_TITLES).map(t => stripSeasonSuffix(t));
+        // Films : le titre TMDB est le titre du FILM ("Demon Slayer … The Movie: Mugen
+        // Train") alors que le site classe le film sous le catalogue de la SÉRIE
+        // (demon-slayer/film2/). Couper aux marqueurs de film pour chercher la série.
+        if (mediaType === 'movie') {
+            for (const t of [...searchTitles]) {
+                const seriesTitle = t
+                    .replace(/\s*[-–:]?\s*(?:the\s+)?movie\b.*$/i, '')
+                    .replace(/\s*[-–:]?\s*(?:le\s+)?film\b.*$/i, '')
+                    .replace(/\s*[-–:]?\s*oav\b.*$/i, '')
+                    .trim();
+                if (seriesTitle.length >= 3 && !searchTitles.includes(seriesTitle)) searchTitles.unshift(seriesTitle);
+            }
+        }
         for (const t of searchTitles) {
             const slugs = await searchSlugsScored(t);
             for (const s of slugs) {
