@@ -2,7 +2,7 @@
  * HTTP Utilities for Nakios
  */
 
-import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted, safeConfig } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
 
@@ -11,8 +11,13 @@ export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const DOMAIN = 'api.nakios.store';
 
-export const BASE_URL = 'https://nakios.store';
-export const API_BASE = 'https://api.nakios.store';
+// Domaines : le site a migré nakios.store → nakios.cyou (09/2026) et le
+// backend sources de .store est mort (404 sur tout, seul le proxy TMDB
+// /api/movies|/api/series répond). La surcharge d'env permet de pointer vers
+// la future API du nouveau domaine sans rebuild — les rotations de domaine
+// sont la norme sur ce site (5ᵉ mouvement en 2 ans).
+export const BASE_URL = safeConfig('NUVIO_NAKIOS_SITE_URL', 'https://nakios.cyou');
+export const API_BASE = safeConfig('NUVIO_NAKIOS_API_URL', 'https://api.nakios.store');
 export const GLOBAL_TIMEOUT_MS = 15000;
 
 export const HEADERS = {

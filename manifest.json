@@ -345,7 +345,7 @@
       "id": "sekai",
       "name": "Sekai",
       "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.23",
+      "version": "1.0.24",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -446,7 +446,7 @@
       "id": "nakios",
       "name": "Nakios",
       "description": "Films et séries en streaming MP4 via Nakios (API REST, TMDB natif, CDN direct).",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -564,7 +564,7 @@
       "id": "neko-sama",
       "name": "Neko-Sama",
       "description": "Anime VF et VOSTFR en streaming sur animes-sama.su (via neko-sama.lol).",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

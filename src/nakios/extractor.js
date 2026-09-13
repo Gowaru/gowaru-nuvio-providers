@@ -19,8 +19,8 @@
 
 import { fetchApi, BASE_URL, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
-import { getTmdbTitle } from '../utils/search-fallback.js';
-import { safeConfig, isAborted } from '../utils/resolvers.js';
+import { getTmdbTitleYear } from '../utils/search-fallback.js';
+import { safeConfig, isAborted, normalizeLanguageCode } from '../utils/resolvers.js';
 
 const withCache = createCache('nk', 'Nakios', { failureTtl: 120_000 }); // 2min failure
 
@@ -164,8 +164,14 @@ async function searchContent(query) {
 async function fallbackSearch(tmdbId, mediaType, season, episode) {
     console.log(`[Nakios] Fallback search for ${mediaType} ${tmdbId}...`);
 
-    // 1. Récupérer le titre depuis TMDB
-    const title = await getTmdbTitle(tmdbId, mediaType);
+    // Normalisation dispatch : l'app peut envoyer 'series' (convention repo)
+    // alors que TMDB attend 'tv' — sans normalisation, getTmdbTitle requête
+    // /movie/{id} → 404 → fallback mort (5e occurrence du bug dans le repo).
+    const normType = mediaType === 'tv' || mediaType === 'series' ? 'tv' : 'movie';
+
+    // 1. Récupérer le titre + année depuis TMDB (même URL que getTmdbTitle →
+    // cache safeFetch partagé, pas de requête supplémentaire).
+    const { title, year } = await getTmdbTitleYear(tmdbId, normType);
     if (!title) {
         console.warn(`[Nakios] Fallback: cannot get TMDB title for ${tmdbId}`);
         return null;
@@ -179,43 +185,60 @@ async function fallbackSearch(tmdbId, mediaType, season, episode) {
         if (shortTitle !== title) {
             const results2 = await searchContent(shortTitle);
             if (results2.length > 0) {
-                return trySearchResults(results2, tmdbId, mediaType, season, episode);
+                return trySearchResults(results2, tmdbId, normType, season, episode, title, year);
             }
         }
         console.warn(`[Nakios] Fallback: no results for \"${title}\"`);
         return null;
     }
 
-    return trySearchResults(results, tmdbId, mediaType, season, episode);
+    return trySearchResults(results, tmdbId, normType, season, episode, title, year);
 }
 
 /**
  * Parcourt les résultats de recherche et tente de récupérer une source
  * avec les TMDB IDs alternatifs trouvés.
  */
-async function trySearchResults(results, originalTmdbId, mediaType, season, episode) {
+async function trySearchResults(results, originalTmdbId, mediaType, season, episode, wantTitle, wantYear) {
     console.log(`[Nakios] Fallback: ${results.length} result(s) from search`);
 
-    // Logger tous les résultats pour debugging
-    for (const r of results) {
-        console.log(`[Nakios]   → ${r.media_type} ${r.id}: \"${r.title}\" (${r.year})`);
+    // Garde anti faux-positif : l'API nakios renvoie TOUTES les œuvres du même
+    // nom — sans filtre, l'anime One Piece (1999) se faisait servir le live
+    // action Netflix (2023) → « l'épisode ne correspond pas au titre ».
+    // On n'accepte qu'un contenu : même type, même titre normalisé, année à ±1.
+    const normType = mediaType === 'tv' || mediaType === 'series' ? 'tv' : 'movie';
+    const normTitle = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const target = normTitle(wantTitle);
+    const strict = results.filter(r => {
+        if ((r.media_type === 'tv') !== (normType === 'tv')) {
+            console.log(`[Nakios] Fallback: skip ${r.id} (${r.media_type} ≠ ${normType})`);
+            return false;
+        }
+        if (normTitle(r.title) !== target) {
+            console.log(`[Nakios] Fallback: skip ${r.id} (titre "${r.title}" ≠ "${wantTitle}")`);
+            return false;
+        }
+        if (wantYear && r.year && Math.abs(parseInt(r.year, 10) - wantYear) > 1) {
+            console.log(`[Nakios] Fallback: skip ${r.id} (année ${r.year} ≠ ${wantYear}±1)`);
+            return false;
+        }
+        return true;
+    });
+    if (strict.length === 0) {
+        console.log(`[Nakios] Fallback: aucun résultat de même type/titre/année — abandon (évite le faux-positif)`);
+        return null;
     }
 
     // Trier : mettre l'ID original en premier (si trouvé), puis les autres
-    const sorted = [...results].sort((a, b) => {
+    const sorted = [...strict].sort((a, b) => {
         if (a.id === Number(originalTmdbId)) return -1;
         if (b.id === Number(originalTmdbId)) return 1;
         return 0;
     });
 
     // Essayer chaque ID (limité à 3 tentatives pour éviter le spam)
-    const attempts = sorted.slice(0, 3);
+    const attempts = sorted.filter(r => r.id !== Number(originalTmdbId)).slice(0, 3);
     for (const r of attempts) {
-        if (r.id === Number(originalTmdbId)) {
-            console.log(`[Nakios] Fallback: TMDB ${r.id} matches original, already tried`);
-            continue;
-        }
-
         console.log(`[Nakios] Fallback: trying TMDB ${r.id} (${r.title})`);
 
         // Utiliser le media_type du résultat de recherche (pas l'original)
@@ -247,14 +270,17 @@ async function trySearchResults(results, originalTmdbId, mediaType, season, epis
  */
 function createStream(source) {
     const quality = source.quality || 'HD';
-    const language = source.lang || source.language || 'VF';
+    // Normalisation : 'VF'/'VOSTFR' bruts sont classés "Unknown" par les filtres
+    // app — on garde le libellé dans le title et on expose le code normalisé.
+    const rawLang = source.lang || source.language || 'VF';
+    const language = normalizeLanguageCode(rawLang) || 'fr';
     const providerName = source.name || source.provider || 'Nakios';
     const isHls = source.isM3U8 === true;
     const format = isHls ? 'hls' : 'mp4';
 
     const stream = {
         name: providerName,
-        title: `[${language}] ${providerName} - ${quality}`,
+        title: `[${rawLang}] ${providerName} - ${quality}`,
         url: source.url,
         quality: quality,
         language: language,
