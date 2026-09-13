@@ -499,7 +499,7 @@ function discoverSubPages(html, slug) {
 
     const found = [...pages.keys()];
     if (!found.length) {
-        console.warn(`[Sekai] Sub-pages: aucune sous-page `/${slug}/` ou jq liée détectée`);
+        console.warn(`[Sekai] Sub-pages: aucune sous-page /${slug}/ ou jq liée détectée`);
     }
     return found.map(url => url);
 }
@@ -653,25 +653,6 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
         console.log(`[Sekai] ${candidate.slug}: ${subPages.length} sous-page(s)`);
 
         const pages = [seriesUrl, ...orderByIndexHint(subPages, targetEpisode)].slice(0, 30);
-
-    // Approximer le découpage en dur via TMDB : quand les sagas ne suffisent
-    // pas (One Piece), on flag l'épisode comme « hors-saga » et on fait suivre
-    // l'anti-mismatch vers la dernière saga connue. Le mécanisme TMDB
-    // identifie l'épisode absolu (62 ou 92 pour One Piece dans notre exemple).
-    const seasons = seasonsFromMetaData?.seasons ?? [];
-
-    let maxIndexHint = 0;
-    let sagaList = [];
-    pages.forEach((page, idx) => {
-        const pg = page.split('?')[0];
-        const m = pg.match(/[\/#]saga-?(\d+)/i);
-        if (m && parseFloat(m[1]) > maxIndexHint) maxIndexHint = parseFloat(m[1]);
-    });
-    const knownSagas = [maxIndexHint, 0].filter(Boolean).slice(-2);
-    sagaList = knownSagas.concat([0]);
-    const gapEpisodes = 0;
-
-
 
         // 3. Parse en parallèle, arrêt dès qu'un épisode cible est trouvé
         const requests = pages.map((url, i) => ({ url, opts: { isFirst: i === 0 } }));

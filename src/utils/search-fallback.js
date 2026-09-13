@@ -51,6 +51,36 @@ export async function getTmdbTitle(tmdbId, mediaType) {
 }
 
 /**
+ * Variante de getTmdbTitle qui renvoie aussi l'année de sortie.
+ * Même URL que getTmdbTitle → cache safeFetch (30s) → requête partagée.
+ *
+ * @param {string|number} tmdbId
+ * @param {'movie'|'tv'} mediaType
+ * @returns {Promise<{title: string|null, year: number|null}>}
+ */
+export async function getTmdbTitleYear(tmdbId, mediaType) {
+    const type = mediaType === 'tv' ? 'tv' : 'movie';
+    const url = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=fr-FR`;
+
+    try {
+        const res = await safeFetch(url);
+        if (!res || !res.ok) return { title: null, year: null };
+        const data = await res.json();
+        if (!data || data.success === false) return { title: null, year: null };
+
+        const title = data.title || data.name || null;
+        const year = parseInt((data.release_date || data.first_air_date || '').slice(0, 4), 10) || null;
+        if (title) {
+            console.log(`[SearchFallback] TMDB title: ${title} (${year || '?'}) (${tmdbId})`);
+        }
+        return { title, year };
+    } catch (e) {
+        console.warn(`[SearchFallback] TMDB title error for ${tmdbId}: ${e?.message}`);
+        return { title: null, year: null };
+    }
+}
+
+/**
  * Cherche un contenu sur TMDB par titre pour trouver des IDs alternatifs.
  * Utile : certains contenus ont plusieurs TMDB IDs (ex: série avec spin-off).
  *

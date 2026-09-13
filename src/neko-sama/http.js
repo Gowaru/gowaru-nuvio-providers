@@ -14,6 +14,12 @@ const HEADERS = {
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
 };
 
+/**
+ * GET texte. Convention repo : retourne null en cas d'échec (404, réseau,
+ * timeout) au lieu de throw — les sondes (hub, candidats de recherche) sont
+ * exploratoires et ne doivent jamais tuer le provider. AbortError reste
+ * propagé. Tous les appelants sont null-guardés.
+ */
 export async function fetchText(url, options = {}) {
     const signal = options.signal || _currentSignal;
     if (isAborted(signal)) throw new Error('AbortError');
@@ -47,5 +53,8 @@ export async function fetchText(url, options = {}) {
             if (attempt < retries) continue;
         }
     }
-    throw lastError || new Error(`Failed: ${url}`);
+    if (lastError && lastError.message !== 'AbortError') {
+        console.log(`[NekoSama] fetchText null: ${url.slice(0, 70)} (${lastError.message})`);
+    }
+    return null;
 }
