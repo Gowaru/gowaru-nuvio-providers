@@ -87,6 +87,13 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
         score = Math.min(score, 10);
     }
 
+    // Anti-false-positive inverse : requête à 1 mot incluse dans un titre plus long
+    // ex. TMDB "Gate" (2015) → "Steins Gate" / "The New Gate" (score 75) → contenu
+    // d'une AUTRE série servi. Seule l'égalité exacte (t === q → 100) doit passer.
+    if (qWords.length === 1 && tWords.length > 1 && t !== q) {
+        score = Math.min(score, 10);
+    }
+
     return score;
 }
 

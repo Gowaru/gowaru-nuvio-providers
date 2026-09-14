@@ -368,13 +368,17 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
     const streams = [];
 
     // Collect ALL season parts matching the target season number (e.g. saison-4-partie-1,2,3,4)
-    const targetSeasons = seasons.filter(s => s.seasonNum === effectiveSeason);
+    // PAS de fallback "saison la plus proche" : servir la S1 quand l'utilisateur demande
+    // la S4 = mauvais épisodes (bug Gate S2 : 1 stream servi = en fait l'épisode de la
+    // S1). S'il n'y a pas de correspondance, on teste une seule candidature probable :
+    // la partie "saisonN-partieX" n'expose pas toujours son numéro correctement.
+    // ⚠ L'app passe season en STRING ("1") : comparaison stricte === échoue
+    // ("1" === 1 → false) → le fallback "nearest" servait S1 par coïncidence.
+    // Coercion en number AVANT le filtre.
+    const targetSeasonNum = parseInt(effectiveSeason, 10);
+    const targetSeasons = seasons.filter(s => s.seasonNum === targetSeasonNum);
     const fallbackSeasons = targetSeasons.length === 0
-        ? seasons.sort((a, b) => {
-            const diffA = a.seasonNum ? Math.abs(a.seasonNum - effectiveSeason) : Infinity;
-            const diffB = b.seasonNum ? Math.abs(b.seasonNum - effectiveSeason) : Infinity;
-            return diffA - diffB;
-        }).slice(0, 1)
+        ? seasons.filter(s => s.seasonNum == null).slice(0, 1)
         : targetSeasons;
 
     const langs = ['vostfr', 'vf'];
