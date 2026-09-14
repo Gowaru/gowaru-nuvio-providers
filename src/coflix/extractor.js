@@ -1,354 +1,271 @@
 /**
- * Extractor for Coflix
- * WordPress DLE-based site with:
- * - /film/{slug}/ for movies
- * - /episode/{slug}-{season}x{episode}/ for TV episodes
- * Uses iframe embed from lecteurvideo.com for streaming
- * Supports: films, séries, anime
+ * Extractor for Coflix — domaine actif : coflix.wiki (vérifié live 2026-09).
+ *
+ * Pourquoi l'ancien provider renvoyait 0 stream :
+ *  - les domaines codés en dur (coflix.boston/.cymru/.esq/.group) sont derrière
+ *    BotBlocker (fingerprinting + CAPTCHA + cookie signé) → tout échouait ;
+ *  - coflix.fr est une vitrine white-label vers gupy.fr (offres SVOD légales,
+ *    aucun lecteur) — l'API WP REST codée en dur n'a jamais existé.
+ *
+ * Nouvelle chaîne (API AJAX du thème, SANS challenge) :
+ *   1. GET  /ajax/search/suggest?keyword={titre}     → {html} avec hrefs
+ *      /film/{slug}-vf|vostfr|truefrench/ep-{epId}
+ *   2. GET  /ajax/episode/list-episode?movieId={id}  → {html} data-num/data-id
+ *      (les épisodes = epId directs, PAS des numéros)
+ *   3. POST /ajax/episode/player?episode_id={epId}   → {message:[{version,
+ *      server_link, server_type}]} — TOUS les embeds en une requête.
+ *
+ * Garde-fous (conventions repo) :
+ *  - 'series' normalisé en 'tv' ;
+ *  - embeds non résolus (isDirect:false) JAMAIS retournés ;
+ *  - wrappers kakaflix (dood/voe sur ce site) = morts → écartés avant résolution.
  */
 
-import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords } from '../utils/dle-extractor.js'
-import { fetchText, fetchJson, setCurrentSignal } from './http.js'
-import { resolveStream, isAborted } from '../utils/resolvers.js'
-import { getTmdbTitles } from '../utils/metadata.js'
-import { createCache } from '../utils/cache.js'
+import { fetchText, fetchTextSafe, ajaxGet, ajaxPost, setCurrentSignal, SITE } from './http.js';
+import { resolveStream, isAborted } from '../utils/resolvers.js';
+import { getTmdbTitles } from '../utils/metadata.js';
+import { toStream } from '../utils/dle-extractor.js';
+import { createCache } from '../utils/cache.js';
 
-// ─── Cache intelligent partagé ──────────────────────────────────────────────
-const withCache = createCache('cf', 'Coflix');
+const withCache = createCache('cfw', 'Coflix');
 
-const PAGE_TIMEOUT = 5000;
+const SEARCH_TIMEOUT = 12000;
+const PAGE_TIMEOUT = 12000;
+const RESOLVE_TIMEOUT = 9000;
+const MAX_LANGS = 2;             // VF + VOSTFR
+const MAX_EMBEDS_PER_LANG = 2;   // lecteurs résolus par langue
+const MAX_SUGGEST_QUERIES = 3;
 
-// Limiter le nombre de titres/slugs à tester pour éviter le timeout budget
-const MAX_MOVIE_TITLES = 2;
-const MAX_SERIES_TITLES = 2;
-const MAX_SLUG_CANDIDATES = 4;
+// Hosts morts sur ce site (vérifié live 2026-09 : timeout 18 s) → écartés
+const DEAD_HOSTS = ['kakaflix'];
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function toSlug(title) {
-  const clean = stripSeasonSuffix(title)
-  return clean
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[':!.,?()\[\]"]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
+function isDeadUrl(url) {
+    const u = (url || '').toLowerCase();
+    return DEAD_HOSTS.some(d => u.includes(d));
 }
 
+function normalizeMediaType(mediaType) {
+    const t = String(mediaType || '').toLowerCase();
+    if (t === 'movie' || t === 'film') return 'movie';
+    return 'tv';
+}
+
+function cleanTitleForSlug(title) {
+    return String(title || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/&/g, 'and')
+        .replace(/[’'`]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+/** Score mots communs (mots ≥ 3 lettres, demi-poids sur 3). */
+function titleScore(candidate, query) {
+    const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const qw = norm(query).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+    if (!qw.length) return 0;
+    const cw = new Set(norm(candidate).split(/[^a-z0-9]+/));
+    let hits = 0;
+    for (const w of qw) if (cw.has(w)) hits += (w.length === 3 ? 0.5 : 1);
+    return hits / qw.length;
+}
+
+// ─── 1. Recherche ───────────────────────────────────────────────────────────
 /**
- * Génère des candidats de slug pour un titre.
- * Inclut variantes avec année, "the-" préfixe, saison.
+ * Recherche suggest. Retourne des candidats dédupliqués par slug de série :
+ *   { slug, epId, label, lang }
+ * La langue est déduite du suffixe du slug (convention du site).
  */
-function generateSlugCandidates(title, season, year) {
-  const base = toSlug(title)
-  const candidates = []
-
-  // Slug de base
-  candidates.push(base)
-
-  // Slug sans "the-" préfixe
-  if (base.startsWith('the-')) candidates.push(base.slice(4))
-
-  // Slug avec année (ex: fight-club-1999)
-  if (year) {
-    candidates.push(`${base}-${year}`)
-    if (base.startsWith('the-')) candidates.push(`${base.slice(4)}-${year}`)
-  }
-
-  // Slug avec saison
-  if (season) {
-    candidates.push(`${base}-s${season}`)
-    candidates.push(`${base}-saison-${season}`)
-    if (year) {
-      candidates.push(`${base}-${year}-s${season}`)
+export async function searchCandidates(query, opts = {}) {
+    const json = await ajaxGet(`/ajax/search/suggest?keyword=${encodeURIComponent(query)}`, opts);
+    if (!json || !json.html || typeof json.html !== 'string') return [];
+    const out = [];
+    const seen = new Set();
+    const re = /href="https?:\/\/coflix\.wiki\/film\/([^"/]+)\/ep-(\d+)"/g;
+    let m;
+    while ((m = re.exec(json.html)) !== null) {
+        const slug = m[1];
+        if (seen.has(slug)) continue;
+        seen.add(slug);
+        const lang = /-vostfr$/i.test(slug) ? 'ja'
+            : /(-vf|-truefrench|-french)$/i.test(slug) ? 'fr' : null;
+        out.push({ slug, epId: m[2], lang });
     }
-  }
-
-  return [...new Set(candidates.filter(Boolean))]
+    return out.slice(0, 8);
 }
 
-function extractIframeUrl(html) {
-  if (!html) return null
-
-  const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i)
-  if (iframeMatch) {
-    let src = iframeMatch[1]
-    if (src.startsWith('//')) src = 'https:' + src
-    if (src.includes('lecteurvideo.com') || (src.startsWith('http') && !src.includes('youtube') && !src.includes('googlevideo') && !src.includes('googleads'))) {
-      return src
-    }
-  }
-
-  const lvMatch = html.match(/https:\/\/lecteurvideo\.com\/\?get=[^"'\s]+/)
-  if (lvMatch) return lvMatch[0]
-
-  const dataSrcMatch = html.match(/data-src=["']([^"']*lecteurvideo[^"']*)["']/i)
-  if (dataSrcMatch) return dataSrcMatch[1]
-
-  return null
-}
-
-function extractLanguage(html, url) {
-  if (!html) return 'VF'
-  const lower = html.toLowerCase()
-  const urlLower = url.toLowerCase()
-
-  if (urlLower.includes('vostfr')) return 'VOSTFR'
-  if (urlLower.includes('-vf') || urlLower.includes('/vf/')) return 'VF'
-
-  const titleMatch = html.match(/<title>([^<]+)<\/title>/i)
-  if (titleMatch) {
-    const t = titleMatch[1].toLowerCase()
-    if (t.includes('vostfr')) return 'VOSTFR'
-    if (t.includes(' vf ') || / vf[^a-z]/.test(t)) return 'VF'
-  }
-
-  const jsonLdMatch = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([^<]+)<\/script>/)
-  if (jsonLdMatch) {
-    try {
-      const ld = JSON.parse(jsonLdMatch[1])
-      const name = (ld.name || ld.title || '').toLowerCase()
-      if (name.includes('vostfr')) return 'VOSTFR'
-      if (name.includes(' vf ')) return 'VF'
-    } catch {}
-  }
-
-  if (/vostfr/i.test(lower)) return 'VOSTFR'
-  return 'VF'
-}
-
-function extractEpisodeNumber(html) {
-  const titleMatch = html.match(/<title>([^<]+)<\/title>/i)
-  if (titleMatch) {
-    const t = titleMatch[1]
-    const epMatch = t.match(/(\d+)x(\d+)/i) || t.match(/[Ss](\d+)[Ee](\d+)/)
-    if (epMatch) return { season: parseInt(epMatch[1]), episode: parseInt(epMatch[2]) }
-  }
-  const jsonLdMatch = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([^<]+)<\/script>/)
-  if (jsonLdMatch) {
-    try {
-      const ld = JSON.parse(jsonLdMatch[1])
-      const name = ld.name || ''
-      const epMatch = name.match(/(\d+)x(\d+)/i) || name.match(/[Ss](\d+)[Ee](\d+)/)
-      if (epMatch) return { season: parseInt(epMatch[1]), episode: parseInt(epMatch[2]) }
-    } catch {}
-  }
-  return null
-}
-
+// ─── 2. Épisodes d'une série ────────────────────────────────────────────────
 /**
- * Cherche via l'API REST WordPress (/wp-json/v2/posts?search=...)
- * pour trouver l'URL exacte d'une page film/épisode
+ * Liste des épisodes du record série (movieId = data-id de la page).
+ * Retourne [{ num, epId }] triés par numéro.
  */
-async function searchViaWpApi(query, mediaType, season, episode) {
-  const searchQuery = encodeURIComponent(query);
-  const path = `/wp-json/v2/posts?search=${searchQuery}&per_page=10`;
-
-  console.log(`[Coflix] WP API search: \"${query}\"`);
-  const posts = await fetchJson(path);
-
-  if (!posts || !Array.isArray(posts) || posts.length === 0) {
-    console.log(`[Coflix] No WP API results for \"${query}\"`);
-    return null;
-  }
-
-  console.log(`[Coflix] WP API: ${posts.length} post(s) found`);
-
-  for (const post of posts) {
-    const link = post.link || '';
-    const slug = post.slug || '';
-    const title = (post.title?.rendered || '').toLowerCase();
-
-    // Vérifier la pertinence du résultat
-    const queryLower = query.toLowerCase();
-    const isRelevant = title.includes(queryLower) || slug.includes(toSlug(query));
-
-    // Garde anti-fan-edit : un résultat avec ≥2 mots significatifs en trop
-    // (ex: requête "Naruto" → post "Naruto Shippuden Kai") est un dérivé/recut → écarter
-    if (isRelevant && countExtraWords(title, queryLower) >= 2) {
-      console.log(`[Coflix] WP result is a fan-edit/derivative, skipped: "${title}"`);
-      continue;
-    }
-
-    if (!isRelevant) {
-      console.log(`[Coflix] WP result not relevant: \"${title}\" for \"${query}\"`);
-      continue;
-    }
-
-    // Pour les séries, on construit l'URL d'épisode
-    if (mediaType === 'tv' && season && episode) {
-      // Essayer de construire l'URL d'épisode basée sur le lien du post
-      const seriesSlug = slug || toSlug(query);
-      const patterns = [
-        `/episode/${seriesSlug}-${season}x${episode}/`,
-        `/episode/${seriesSlug}-s${season}e${episode}/`,
-      ];
-
-      for (const epPath of patterns) {
-        const html = await fetchText(epPath, { timeout: PAGE_TIMEOUT });
-        if (html && html.length > 100) {
-          const iframeUrl = extractIframeUrl(html);
-          if (iframeUrl) {
-            console.log(`[Coflix] WP search found episode: ${epPath}`);
-            return { url: iframeUrl, lang: extractLanguage(html, epPath) };
-          }
+async function listEpisodes(movieId, opts = {}) {
+    return withCache(`eps_${movieId}`, async () => {
+        const json = await ajaxGet(`/ajax/episode/list-episode?movieId=${encodeURIComponent(movieId)}`, opts);
+        if (!json || !json.html || typeof json.html !== 'string') return [];
+        const eps = [];
+        const re = /data-num="(\d+)"[^>]*data-id="(\d+)"|data-id="(\d+)"[^>]*data-num="(\d+)"/g;
+        let m;
+        while ((m = re.exec(json.html)) !== null) {
+            const num = parseInt(m[1] || m[4], 10);
+            const epId = m[2] || m[3];
+            if (num && epId) eps.push({ num, epId });
         }
-      }
-    }
-
-    // Pour les films ou si l'épisode n'a pas matché, essayer la page directement
-    const slugToTry = slug || toSlug(query);
-    const moviePath = `/film/${slugToTry}/`;
-    const html = await fetchText(moviePath, { timeout: PAGE_TIMEOUT });
-    if (html && html.length > 200) {
-      const iframeUrl = extractIframeUrl(html);
-      if (iframeUrl) {
-        console.log(`[Coflix] WP search found: ${moviePath}`);
-        return { url: iframeUrl, lang: extractLanguage(html, moviePath) };
-      }
-    }
-  }
-
-  return null;
+        const byNum = new Map();
+        for (const e of eps) if (!byNum.has(e.num)) byNum.set(e.num, e);
+        return [...byNum.values()].sort((a, b) => a.num - b.num);
+    }, { successTtl: 120000, failureTtl: 30000 });
 }
 
-// ─── Probing functions ──────────────────────────────────────────────────────
-
-async function probeMovie(slug) {
-  return withCache(`movie_${slug}`, async () => {
-    const patterns = [`/film/${slug}/`, `/movie/${slug}/`]
-    for (const path of patterns) {
-      const html = await fetchText(path, { timeout: PAGE_TIMEOUT })
-      if (html && html.length > 200) {
-        const iframeUrl = extractIframeUrl(html)
-        if (iframeUrl) {
-          console.log(`[Coflix] Found movie at: ${path}`)
-          return { url: iframeUrl, lang: extractLanguage(html, path) }
-        }
-      }
-    }
-    return null
-  }, { successTtl: 300000, failureTtl: 30000 })
+/** data-id du record depuis une page /film/{slug}/ ou /film/{slug}/ep-{id}/. */
+async function getMovieId(slug, opts = {}) {
+    return withCache(`mid_${slug}`, async () => {
+        const html = await fetchTextSafe(`${SITE}/film/${slug}/`, { ...opts, timeout: PAGE_TIMEOUT });
+        if (!html) return null;
+        const m = html.match(/id="watch-page"[^>]*data-id="(\d+)"/) || html.match(/data-id="(\d+)"/);
+        return m ? m[1] : null;
+    }, { successTtl: 300000, failureTtl: 60000 });
 }
 
-async function probeEpisode(slug, season, episode) {
-  return withCache(`ep_${slug}_${season}_${episode}`, async () => {
-    const patterns = [
-      `${slug}-${season}x${episode}`,
-      `${slug}-s${season}e${episode}`,
-      `${slug}-saison-${season}-episode-${episode}`,
-    ]
-
-    for (const pattern of [...new Set(patterns)]) {
-      const path = `/episode/${pattern}/`
-      const html = await fetchText(path, { timeout: PAGE_TIMEOUT })
-      if (html && html.length > 100) {
-        const pageEp = extractEpisodeNumber(html)
-        if (pageEp && pageEp.season === season && pageEp.episode === episode) {
-          console.log(`[Coflix] Found episode (validated): ${path}`)
-        } else if (pageEp && Math.abs((pageEp.episode || 0) - episode) > 1) {
-          continue
+// ─── 3. Player (tous les embeds d'un épisode) ───────────────────────────────
+/**
+ * POST /ajax/episode/player?episode_id={epId} → liste d'embeds.
+ * Chaque record : { version: 'VF'|'VOSTFR'|..., server_link, server_type }.
+ * Retourne [{ url, lang }] — lang déduit de version, complété par le slug.
+ */
+async function getEpisodeEmbeds(epId, fallbackLang, opts = {}) {
+    return withCache(`emb_${epId}`, async () => {
+        const json = await ajaxPost(`/ajax/episode/player?episode_id=${encodeURIComponent(epId)}`,
+            `episode_id=${encodeURIComponent(epId)}`, opts);
+        if (!json || json.status === false || !Array.isArray(json.message)) return [];
+        const out = [];
+        for (const srv of json.message) {
+            let url = srv && srv.server_link;
+            if (url && typeof url === 'object' && url.url) url = url.url;
+            if (!url || typeof url !== 'string' || !url.startsWith('http')) continue;
+            if (isDeadUrl(url)) continue;
+            const v = String(srv.version || '').toLowerCase();
+            const lang = v.includes('vostfr') ? 'ja'
+                : (v.includes('vf') || v.includes('french') || v.includes('true')) ? 'fr' : fallbackLang;
+            out.push({ url, lang });
         }
-
-        const iframeUrl = extractIframeUrl(html)
-        if (iframeUrl) {
-          return { url: iframeUrl, lang: extractLanguage(html, path) }
-        }
-      }
-    }
-    return null
-  }, { successTtl: 300000, failureTtl: 30000 })
+        return out;
+    }, { successTtl: 120000, failureTtl: 30000 });
 }
 
-// ─── Fonction principale ────────────────────────────────────────────────────
+// ─── Résolution ─────────────────────────────────────────────────────────────
+async function resolveEmbedToStream(embedUrl, baseStream, signal) {
+    try {
+        const resolved = await resolveStream({ ...baseStream, url: embedUrl }, 0);
+        if (!resolved || resolved.isDirect === false) return null;
+        if (!resolved.url || resolved.url.includes('[object')) return null;
+        return resolved;
+    } catch (e) {
+        if (isAborted(signal)) throw e;
+        return null;
+    }
+}
 
-export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
-  const signal = options?.signal || null
-  if (isAborted(signal)) return []
-  setCurrentSignal(signal)
+// ─── Pipeline principal ─────────────────────────────────────────────────────
+export async function extractStreams(tmdbId, mediaType, season, episode, { signal } = {}) {
+    const type = normalizeMediaType(mediaType);
+    const epNum = Math.max(1, parseInt(episode, 10) || 1);
+    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
 
-  const titles = await getTmdbTitles(tmdbId, mediaType, { season })
-  if (!titles || titles.length === 0) return []
+    let titles = [];
+    try {
+        titles = await getTmdbTitles(tmdbId, type, { season: seasonNum });
+    } catch (e) {
+        if (isAborted(signal)) throw e;
+    }
+    if (!titles || titles.length === 0) return [];
 
-  const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season
-  const targetSeason = parseInt(effectiveSeason) || 1
-  const targetEpisode = parseInt(episode) || 1
-
-  // ─── FILMS ───────────────────────────────────────────────────────────────
-  if (mediaType === 'movie') {
-    for (const title of titles.slice(0, MAX_MOVIE_TITLES)) {
-      const candidates = generateSlugCandidates(title, null, titles._metadata?.year).slice(0, MAX_SLUG_CANDIDATES)
-      for (const slug of [...new Set(candidates)]) {
-        const result = await probeMovie(slug)
-        if (result) {
-          const stream = toStream(result.url, result.lang, 'Coflix', 'https://coflix.cymru')
-          const resolved = await resolveStream(stream)
-          if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-          return [{ ...stream, provider: 'coflix' }]
+    // 1. Recherche (requêtes dédupliquées, budget serré)
+    const queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
+    let candidates = [];
+    for (const q of queries) {
+        if (isAborted(signal)) return [];
+        try {
+            candidates = await searchCandidates(q, { signal });
+        } catch (e) {
+            if (isAborted(signal)) throw e;
+            candidates = [];
         }
-      }
+        if (candidates.length >= 3) break;
     }
+    if (!candidates.length) return [];
 
-    // Fallback : recherche via WP REST API
-    console.log('[Coflix] Movie slug failed, trying WP API search...')
-    const wpResult = await searchViaWpApi(titles[0], mediaType, null, null)
-    if (wpResult) {
-      const stream = toStream(wpResult.url, wpResult.lang, 'Coflix', 'https://coflix.cymru')
-      const resolved = await resolveStream(stream)
-      if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-      return [{ ...stream, provider: 'coflix' }]
-    }
-
-    console.log(`[Coflix] No movie match for ${tmdbId}`)
-    return []
-  }
-
-  // ─── SÉRIES (TV / Anime) ────────────────────────────────────────────────
-  // Résolution des épisodes cibles via ArmSync (gère les saisons multiples)
-  const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, targetSeason, targetEpisode)
-
-  for (const ep of targetEpisodes) {
-    for (const title of titles.slice(0, MAX_SERIES_TITLES)) {
-      const candidates = generateSlugCandidates(title, targetSeason, titles._metadata?.year).slice(0, MAX_SLUG_CANDIDATES)
-      for (const slug of [...new Set(candidates)]) {
-        const result = await probeEpisode(slug, targetSeason, ep)
-        if (result) {
-          const stream = toStream(result.url, result.lang, 'Coflix', 'https://coflix.cymru')
-          const resolved = await resolveStream(stream)
-          if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-          return [{ ...stream, provider: 'coflix' }]
+    // 2. Score contre TOUTES les variantes TMDB (le site utilise parfois le
+    //    titre FR quand TMDB expose le titre EN en primary : Vaiana/Moana) →
+    //    on prend le meilleur score pour éviter les faux rejets.
+    const scoreOf = (c) => {
+        const slugClean = c.slug.replace(/-(vf|vostfr|truefrench|french)$/i, '');
+        let best = 0;
+        for (const t of titles.slice(0, 5)) {
+            const s = titleScore(slugClean, String(t).trim());
+            if (s > best) best = s;
         }
-      }
-    }
+        return best;
+    };
+    const scored = candidates
+        .map((c) => ({ ...c, score: scoreOf(c) }))
+        .filter((c) => c.score >= 0.34)
+        .sort((a, b) => b.score - a.score);
 
-    // Fallback : chercher avec l'épisode original si le numéro absolu diffère
-    if (ep !== targetEpisode) {
-      for (const title of titles.slice(0, MAX_SERIES_TITLES)) {
-        const candidates = generateSlugCandidates(title, targetSeason, null).slice(0, MAX_SLUG_CANDIDATES)
-        for (const slug of [...new Set(candidates)]) {
-          const result = await probeEpisode(slug, targetSeason, targetEpisode)
-          if (result) {
-            const stream = toStream(result.url, result.lang, 'Coflix', 'https://coflix.cymru')
-            const resolved = await resolveStream(stream)
-            if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-            return [{ ...stream, provider: 'coflix' }]
-          }
+    const streams = [];
+    const seenEmbeds = new Set();
+    let langsResolved = 0;
+
+    // 3. Par langue (VF puis VOSTFR) : retrouver le record et l'épisode
+    for (const lang of ['fr', 'ja']) {
+        if (isAborted(signal)) break;
+        if (langsResolved >= MAX_LANGS) break;
+
+        const langCands = scored.filter((c) => c.lang === lang);
+        if (!langCands.length) continue;
+
+        for (const cand of langCands.slice(0, 3)) {
+            if (isAborted(signal)) break;
+
+            let embeds = [];
+            if (type === 'movie' || !seasonNum) {
+                // Film : epId du suggest = fiche unique
+                embeds = await getEpisodeEmbeds(cand.epId, lang, { signal });
+            } else {
+                // Série : list-episode du record → epId du numéro demandé
+                const movieId = await getMovieId(cand.slug, { signal });
+                if (!movieId) continue;
+                const eps = await listEpisodes(movieId, { signal });
+                const target = eps.find((e) => e.num === epNum);
+                if (!target) continue; // épisode absent du site : pas de repli
+                embeds = await getEpisodeEmbeds(target.epId, lang, { signal });
+            }
+
+            let resolvedThisLang = 0;
+            for (const emb of embeds) {
+                if (resolvedThisLang >= MAX_EMBEDS_PER_LANG) break;
+                if (seenEmbeds.has(emb.url)) continue;
+                seenEmbeds.add(emb.url);
+
+                const baseStream = {
+                    name: 'Coflix',
+                    title: `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] Épisode ${epNum}`,
+                    language: lang,
+                    quality: 'HD',
+                };
+                const st = await resolveEmbedToStream(emb.url, baseStream, signal);
+                if (!st) continue;
+                delete st.isDirect;
+                delete st.originalUrl;
+                streams.push(st);
+                resolvedThisLang++;
+            }
+
+            if (resolvedThisLang > 0) { langsResolved++; break; }
         }
-      }
     }
-  }
 
-  // Fallback final : recherche via WP REST API
-  console.log('[Coflix] All slug attempts failed, trying WP API search...')
-  const wpResult = await searchViaWpApi(titles[0], mediaType, targetSeason, targetEpisode)
-  if (wpResult) {
-    const stream = toStream(wpResult.url, wpResult.lang, 'Coflix', 'https://coflix.cymru')
-    const resolved = await resolveStream(stream)
-    if (resolved && resolved.url) return [{ ...resolved, provider: 'coflix' }]
-    return [{ ...stream, provider: 'coflix' }]
-  }
-
-  console.log(`[Coflix] No match found for ${tmdbId} (${mediaType})`)
-  return []
+    return streams;
 }

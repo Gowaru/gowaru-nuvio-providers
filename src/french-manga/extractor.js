@@ -1,11 +1,11 @@
 import cheerio from 'cheerio-without-node-native'
 import { fetchText, fetchJson, ajaxSearch, setCurrentSignal } from './http.js'
-import { resolveStream, safeFetch, isAborted } from '../utils/resolvers.js'
+import { resolveStream, safeFetch, isAborted, sleep } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
-  LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES,
+  LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES, ensureMirror,
 } from './config.js'
 
 function normalize(s) {
@@ -359,7 +359,8 @@ async function fetchEpisodeApi(newsid) {
         const elapsed = Date.now() - start;
 
         if (resolved && resolved.url && resolved.isDirect) {
-            // Skip known-blocked CDN domains (tnmr.org returns 403 on HLS)
+            // Skip known-blocked CDN domains (tnmr.org returns 403 on HLS) —
+            // re-vérifié live (2026-09) : 403 même avec Referer luluvdo.
             const urlLower = (resolved.url || '').toLowerCase();
             if (urlLower.includes('tnmr.org') && !urlLower.includes('cdn-tnmr.org')) {
                 console.log(`[FrenchManga] ✗ Blocked CDN tnmr.org (${elapsed}ms): ${resolved.url.slice(0, 60)}... - skipping`);
@@ -374,29 +375,24 @@ async function fetchEpisodeApi(newsid) {
             return resolved
         }
 
-        if (resolved && resolved.url && !resolved.isDirect) {
-            console.log(`[FrenchManga] ⚠ Resolve embed (${elapsed}ms): ${stream.url.slice(0, 80)} - isDirect=false, keeping as fallback`)
-            return resolved
-        }
-
-        if (resolved && resolved.url) {
-            console.log(`[FrenchManga] ⚠ Resolve uncertain (${elapsed}ms): ${stream.url.slice(0, 80)} - keeping as fallback`)
-            return resolved
-        }
-
-    console.log(`[FrenchManga] ✗ Resolve null: ${(stream.url || '').slice(0, 80)} - returning embed fallback`)
-    return stream
-  } catch (e) {
-    console.log(`[FrenchManga] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message} - returning embed fallback`)
-    return stream
-  }
+        // ⚠️ Anti flux-qui-ne-lance-jamais : un embed non résolu (isDirect=false,
+        // page HTML d'hébergeur) n'est JAMAIS jouable dans les apps — le servir
+        // comme stream produit « la vidéo ne se lance jamais ». Les embeds morts
+        // (page supprimée) et les hébergeurs non supportés rentrent tous dans ce
+        // cas. Convention repo (pattern wookafr/fluneo) : on rejette.
+        console.log(`[FrenchManga] ✗ Resolve non direct (${elapsed}ms): ${(stream.url || '').slice(0, 70)} - rejeté`)
+        return null
+    } catch (e) {
+        console.log(`[FrenchManga] ✗ Resolve ERROR: ${(stream.url || '').slice(0, 60)}... - ${e.message} - rejeté`)
+        return null
+    }
 }
 
-async function detectSubType(tmdbId, mediaType, titles) {
+async function detectSubType(tmdbId, mediaType) {
   const apiKey = '8265bd1679663a7ea12ac168da84d2e8'
   const type = mediaType === 'movie' ? 'movie' : 'tv'
   try {
-    const details = await cached(`tmdb_${tmdbId}_${mediaType}`, async () => {
+    const details = await cached(`tmdb_${tmdbId}_${type}`, async () => {
       const url = `https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}&language=en-US`
       const res = await safeFetch(url)
       if (!res || !res.ok) return null
@@ -417,19 +413,31 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   if (isAborted(signal)) return []
   setCurrentSignal(signal)
 
-  const titles = await getTmdbTitles(tmdbId, mediaType, { season })
-  if (!titles || titles.length === 0) return []
+  // ⚠️ Nuvio passe 'series' (pas 'tv') — 9ᵉ occurrence du bug de dispatch dans
+  // ce repo : normaliser AVANT tout test mediaType ('movie'/'tv' exacts).
+  const type = mediaType === 'series' ? 'tv' : mediaType
 
-  const subType = await detectSubType(tmdbId, mediaType, titles)
+  // 0. Miroir dynamique : le site 301-redirect la racine vers le miroir
+  //    courant (wNN). Le w16 codé en dur meurt à chaque rotation de miroir.
+  await ensureMirror()
+  if (isAborted(signal)) return []
+
+  // 1. Titres TMDB + subType (genre anime) en parallèle — les deux ne
+  //    dépendent que de tmdbId/type, séquentiel ils coûtaient ~1s.
+  const [titles, subType] = await Promise.all([
+    getTmdbTitles(tmdbId, type, { season }).catch(() => []),
+    detectSubType(tmdbId, type).catch(() => null),
+  ])
+  if (!titles || titles.length === 0) return []
   if (subType) console.log(`[FrenchManga] Detected subtype: ${subType}`)
 
   if (isAborted(signal)) return []
 
-  if (mediaType === 'movie') {
+  if (type === 'movie') {
     return extractMovie(tmdbId, titles, subType)
   }
 
-  return extractSeries(tmdbId, mediaType, titles, season, episode, subType)
+  return extractSeries(tmdbId, type, titles, season, episode, subType)
 }
 
 async function extractMovie(tmdbId, titles, subType) {
@@ -546,7 +554,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
     const streams = []
     const seenUrls = new Set()
     const targetEp = targetEpisodeNums[0]
-    const MAX_SERVERS_PER_LANG = 2  // Early-exit: resolve max 2 servers per language
+    const MAX_SERVERS_PER_LANG = 3  // Early-exit: resolve max 3 servers per language
 
     for (const [lang, episodes] of Object.entries(apiData.versions)) {
       let ep = episodes.find(e => e.num === targetEp)
@@ -581,12 +589,6 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
         if (resolved && resolved.url && resolved.isDirect) {
           streams.push({ ...resolved, provider: 'french-manga' })
           resolvedCount++
-        } else if (resolved && resolved.url && !resolved.isDirect) {
-          // Embed fallback: include unresolved embeds when no direct stream available
-          stream.provider = 'french-manga'
-          stream.isDirect = false
-          streams.push(stream)
-          resolvedCount++
         }
       }
     }
@@ -603,7 +605,7 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 async function extractStreamsFromApi(apiData, name, subType) {
   const streams = []
   const seenUrls = new Set()
-  const MAX_SERVERS_PER_LANG = 2
+  const MAX_SERVERS_PER_LANG = 3
 
   for (const [lang, episodes] of Object.entries(apiData.versions)) {
     // For movies, take the first episode

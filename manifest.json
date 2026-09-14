@@ -148,8 +148,8 @@
     {
       "id": "coflix",
       "name": "Coflix",
-      "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki.",
-      "version": "1.0.9",
+      "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki (API AJAX, lecteurs Vidzy/Uqload/FSVID).",
+      "version": "2.0.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -222,7 +222,7 @@
       "id": "french-manga",
       "name": "French-Manga",
       "description": "Animes VF et VOSTFR en streaming sur French-Manga.net",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -270,7 +270,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (recherche exacte par tag TMDB, réglages langue/hosts).",
-      "version": "2.0.18",
+      "version": "2.0.19",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -621,6 +621,30 @@
       "filename": "providers/fluneo.js",
       "enabled": true,
       "logo": "https://myfluneo.eu/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "voirdrama",
+      "name": "Voirdrama",
+      "description": "Dramas VF et VOSTFR en streaming sur voirdrama.to (lecteurs VidMoly, mail.ru, VOE).",
+      "version": "0.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/voirdrama.js",
+      "enabled": true,
+      "logo": "https://voirdrama.to/favicon.ico",
       "contentLanguage": [
         "fr"
       ],
