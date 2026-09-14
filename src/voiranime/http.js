@@ -75,11 +75,15 @@ export async function fetchText(url, options = {}) {
         }
 
         try {
+            // ⚠ L'API fetch du runtime SUIV déjà les redirections : passer
+            // redirect: 'follow' explicitement (le site renvoie des 302 vers
+            // ?post_type=wp-manga&s=… et les slugs courts 301 vers le canonique).
             const res = await safeFetch(url, {
                 headers: mergedHeaders,
                 method: resolvedMethod,
                 timeout,
                 signal,
+                redirect: 'follow',
                 ...rest
             });
 
