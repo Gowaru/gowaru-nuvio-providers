@@ -23,10 +23,12 @@ async function searchAnime(title) {
         const results = [];
 
         // Only extract links from search result items, not from sidebar/menus/footer
-        $('.post-title a, .TPost a, .TPostMv a, article a[href*="/animes/"]').each((i, el) => {
+        // FIX films : les films sont servis sous /film/ (pas /animes/) — exclure
+        // les films faisait échouer tout le chemin movie (0 stream sur les films).
+        $('.post-title a, .TPost a, .TPostMv a, article a[href*="/animes/"], article a[href*="/film/"]').each((i, el) => {
             const h = $(el).attr('href') || '';
             const t = $(el).text().trim();
-            if (h.includes('/animes/')) {
+            if (h.includes('/animes/') || h.includes('/film/')) {
                 // Use image alt as title if available (more accurate than link text)
                 // TV-safe : .closest() n'existe pas dans le runtime cheerio de NuvioTV
                 const imgAlt = (typeof $(el).closest === 'function')
@@ -36,12 +38,12 @@ async function searchAnime(title) {
             }
         });
 
-        // Fallback: if no structured results, look for any /animes/ link in likely content areas
+        // Fallback: if no structured results, look for any /animes/ or /film/ link in likely content areas
         if (results.length === 0) {
-            $('.content, #main, main, .result-item, li > a[href*="/animes/"]').each((i, el) => {
+            $('.content, #main, main, .result-item, li > a[href*="/animes/"], li > a[href*="/film/"]').each((i, el) => {
                 const h = $(el).attr('href') || '';
                 const t = $(el).text().trim();
-                if (h.includes('/animes/') && t.length > 2) {
+                if ((h.includes('/animes/') || h.includes('/film/')) && t.length > 2) {
                     const imgAlt = (typeof $(el).closest === 'function')
                         ? $(el).closest('li, div').find('img').first().attr('alt')
                         : null;
@@ -50,12 +52,12 @@ async function searchAnime(title) {
             });
         }
 
-        // Last resort: grab /animes/ links from the whole page
+        // Last resort: grab /animes/ + /film/ links from the whole page
         if (results.length === 0) {
-            $('a[href*="/animes/"]').each((i, el) => {
+            $('a[href*="/animes/"], a[href*="/film/"]').each((i, el) => {
                 const h = $(el).attr('href') || '';
                 const t = $(el).text().trim();
-                if (h.includes('/animes/') && t.length > 2) {
+                if ((h.includes('/animes/') || h.includes('/film/')) && t.length > 2) {
                     results.push({ title: t, url: h, rawText: t });
                 }
             });
@@ -324,6 +326,12 @@ async function extractPlayersFromEpisode(episodeUrl) {
 
                 if (playerSrc && playerSrc.startsWith('http')) {
                     const playerName = getPlayerName(playerSrc);
+                    // Skip early les hosts morts/lents (gain ~8-15s par lecteur mort)
+                    const pLower = playerSrc.toLowerCase();
+                    if (pLower.includes('sendvid.com') || pLower.includes('vidstream.pro')) {
+                        console.log(`[AnimeVOSTFR] Skip host mort (${playerName}): ${playerSrc.slice(0, 60)}`);
+                        continue;
+                    }
                     const stream = await resolveStream({
                         name: `AnimeVOSTFR`,
                         title: `${playerName} (${entry.serverName})`,
@@ -331,11 +339,24 @@ async function extractPlayersFromEpisode(episodeUrl) {
                         quality: "HD",
                         headers: { "Referer": BASE_URL }
                     });
-                    if (stream) {
-                        streams.push(stream);
-                        if (DIRECT_HOSTS.some(h => playerSrc.toLowerCase().includes(h))) directCount++;
-                        if (directCount >= 2) break;
-                    }
+                if (stream && stream.isDirect !== false) {
+                    const { originalUrl, ...clean } = stream;
+                    clean.name = `AnimeVOSTFR`;
+                    clean.title = `${playerName} (${entry.serverName})`;
+                    // isDirect est CONSERVÉ : le filtre final du provider
+                    // (directStreams = deduped.filter(s => s.isDirect)) en dépend.
+                    clean.isDirect = true;
+                    // FIX langue : le NOM DU TAB est l'indicateur autoritaire
+                    // ("Lecteur VF" / "Player VF" / "Lecteur VOSTFR") — l'URL de la
+                    // série contient souvent "-vf-vostfr" et ne permet pas de trancher.
+                    if (/vostfr/i.test(entry.serverName)) clean.language = 'ja';
+                    else if (/\bvf\b/i.test(entry.serverName)) clean.language = 'fr';
+                    streams.push(clean);
+                    if (DIRECT_HOSTS.some(h => playerSrc.toLowerCase().includes(h))) directCount++;
+                    if (directCount >= 2) break;
+                } else if (stream) {
+                    console.log(`[AnimeVOSTFR] ${playerSrc.slice(0, 60)} unresolved (embed mort) — rejeté`);
+                }
                 }
             } catch (err) {
                 console.error(`[AnimeVOSTFR] Failed to resolve player "${entry.serverName}": ${err.message}`);
@@ -398,8 +419,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode);
 
     // For movies, use season=1, episode=1 to search episode pages
+    // (mais season/episode restent null dans findEpisodeUrl → mode movie : le
+    // lecteur est DANS la page /film/<slug>/ elle-même, pas dans /episode/)
     const searchSeason = (mediaType === 'movie' && season == null) ? 1 : effectiveSeason;
     const searchEpisode = (mediaType === 'movie' && episode == null) ? 1 : episode;
+    const isMoviePath = mediaType === 'movie' && season == null && episode == null;
 
     // OPTIMISATION: Limiter les recherches à 3 titres max (au lieu de 8+)
     // Prioriser le titre principal + 1 variante courte
@@ -487,13 +511,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
 
         const epResults = [];
-        for (const ep of targetEpisodes) {
-            const isAbsolute = ep !== searchEpisode;
-            const episodeUrl = await findEpisodeUrl(match.url, searchSeason, ep, isAbsolute);
-            if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
-                checkedEpisodeUrls.add(episodeUrl);
-                const playerStreams = await extractPlayersFromEpisode(episodeUrl);
-                epResults.push({ ep, playerStreams });
+        if (isMoviePath) {
+            // FIX films : la page /film/<slug>/ contient le lecteur DIRECTEMENT
+            // (TPlayerTb avec trembed trtype=1) — pas de page /episode/. On passe
+            // la page film elle-même à extractPlayersFromEpisode.
+            if (!checkedEpisodeUrls.has(match.url)) {
+                checkedEpisodeUrls.add(match.url);
+                const playerStreams = await extractPlayersFromEpisode(match.url);
+                epResults.push({ ep: searchEpisode, playerStreams });
+            }
+        } else {
+            for (const ep of targetEpisodes) {
+                const isAbsolute = ep !== searchEpisode;
+                const episodeUrl = await findEpisodeUrl(match.url, searchSeason, ep, isAbsolute);
+                if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
+                    checkedEpisodeUrls.add(episodeUrl);
+                    const playerStreams = await extractPlayersFromEpisode(episodeUrl);
+                    epResults.push({ ep, playerStreams });
+                }
             }
         }
 
@@ -508,7 +543,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 } else {
                     s.title = `${s.title}${epType}`;
                 }
-                s.language = langSuffix;
+                // FIX : code langue normalisé (fr/ja) pour les filtres/tri NuvioTV.
+                // La langue par tab (déjà posée dans extractPlayersFromEpisode depuis
+                // le nom du tab) est prioritaire — on ne complète que si absente.
+                if (!s.language) s.language = langSuffix === 'VF' ? 'fr' : 'ja';
             });
             streams.push(...playerStreams);
             if (playerStreams.some(s => s.isDirect)) directStreamCount++;
@@ -533,13 +571,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const directStreams = deduped.filter(s => s && s.isDirect);
     const embedStreams = deduped.filter(s => s && !s.isDirect && s.url);
 
-    // Prefer direct streams. If none found, include embed URLs as fallback
-    // so the native player can attempt playback (ExoPlayer/AVPlayer handle some embeds).
-    const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
-    if (directStreams.length === 0 && embedStreams.length > 0) {
-        console.log(`[AnimeVOSTFR] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
-    }
-    console.log(`[AnimeVOSTFR] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
+    // FIX : plus AUCUN fallback embed — un lecteur non résolu est une page HTML
+    // que l'app ne peut pas lire ("ne se lance jamais"). Convention repo
+    // (wookafr/fluneo/coflix/frenchstream/animesama-co) : 0 stream propre > faux stream.
+    const validStreams = directStreams;
+    console.log(`[AnimeVOSTFR] Total streams: ${validStreams.length} direct(s)`);
     
     return sortStreamsByLanguage(validStreams);
 }
