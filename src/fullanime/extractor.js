@@ -7,7 +7,7 @@
  */
 
 import { fetchText, setCurrentSignal } from './http.js';
-import { safeFetch, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
+import { safeFetch, resolveStream, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://www.fullanime.fr";
@@ -32,23 +32,6 @@ function toSlug(title) {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
         .replace(/-+/g, '-');
-}
-
-/**
- * Quick health check on an embed URL (HEAD request, 3s timeout).
- * Returns true if the embed is accessible.
- */
-async function checkEmbed(url) {
-    try {
-        const res = await safeFetch(url, {
-            method: 'HEAD',
-            timeout: 3000,
-            headers: { "User-Agent": "Mozilla/5.0" },
-        });
-        return res && (res.ok || res.status === 302 || res.status === 301);
-    } catch (e) {
-        return false;
-    }
 }
 
 /**
@@ -138,11 +121,14 @@ function extractEmbedUrls(html) {
 /**
  * Determine language from the slug/title.
  * fullanime.fr is VOSTFR only, but we check for VF in the slug.
+ * FIX : codes normalisés (fr/ja) pour les filtres/tri NuvioTV — les labels
+ * bruts VF/VOSTFR étaient classés "Unknown" côté app. Le label lisible
+ * reste dans le titre.
  */
 function inferLanguage(slug, title) {
     const combined = `${slug} ${title}`.toLowerCase();
-    if (combined.includes('-vf') || combined.includes(' vf') || combined.includes('french')) return 'VF';
-    return 'VOSTFR';
+    if (combined.includes('-vf') || combined.includes(' vf') || combined.includes('french')) return 'fr';
+    return 'ja';
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episodeNum, options = {}) {
@@ -273,11 +259,14 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
         return [];
     }
 
-    // 5. Hybrid strategy: reorder by reliability + HEAD check
+    // 5. Résolution réelle des embeds vers des flux DIRECTS (convention repo :
+    //    le provider appelle resolveStream lui-même). FIX majeur : l'ancien
+    //    code renvoyait les URLs d'embed brutes (vidmoly/sibnet = pages HTML)
+    //    → la vidéo ne démarrait jamais dans l'app.
     const lang = inferLanguage(animeUrl || '', targetEp.title);
-    const PRIORITY = ['vidmoly', 'oneupload', 'sendvid'];
-    
-    // Reorder by reliability (vidmoly first, sendvid last)
+    const PRIORITY = ['vidmoly', 'sibnet', 'oneupload', 'sendvid'];
+
+    // Reorder by reliability + skip dead hosts (sendvid/oneupload morts en 2026)
     const sorted = [...embedUrls].sort((a, b) => {
         const pa = PRIORITY.findIndex(p => a.toLowerCase().includes(p));
         const pb = PRIORITY.findIndex(p => b.toLowerCase().includes(p));
@@ -285,44 +274,39 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
     });
     console.log(`[FullAnime] Priority order: ${sorted.map(u => u.replace('https://', '').split('/')[0]).join(' > ')}`);
 
-    // Try top 2 embeds with HEAD check
     const streams = [];
-    for (const embedUrl of sorted.slice(0, 2)) {
+    for (const embedUrl of sorted) {
         if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+        if (streams.length >= 2) break;
 
         const hostname = embedUrl.replace('https://', '').split('/')[0];
-        console.log(`[FullAnime] Checking ${hostname}...`);
+        const baseStream = {
+            name: `FullAnime (${lang === 'fr' ? 'VF' : 'VOSTFR'})`,
+            title: `FullAnime [${lang === 'fr' ? 'VF' : 'VOSTFR'}] - ${hostname}`,
+            language: lang,
+            quality: 'HD',
+            headers: { "Referer": BASE_URL + "/" },
+        };
 
-        const ok = await checkEmbed(embedUrl);
-        if (ok) {
-            streams.push({
-                url: embedUrl,
-                title: `FullAnime [${lang}]`,
-                name: `FullAnime (${lang})`,
-                language: lang,
-                provider: 'FullAnime',
-                headers: { "Referer": BASE_URL + "/" },
-            });
-            console.log(`[FullAnime] ✓ ${hostname} is alive`);
-            break;
-        } else {
-            console.log(`[FullAnime] ✗ ${hostname} is down`);
+        console.log(`[FullAnime] Resolving ${hostname}...`);
+        try {
+            const resolved = await resolveStream({ ...baseStream, url: embedUrl }, 0);
+            if (resolved && resolved.isDirect !== false && resolved.url && !resolved.url.includes('[object')) {
+                const { isDirect, originalUrl, ...clean } = resolved;
+                streams.push({ ...baseStream, ...clean, provider: 'FullAnime' });
+                console.log(`[FullAnime] ✓ ${hostname} → direct`);
+            } else {
+                console.log(`[FullAnime] ✗ ${hostname} unresolved (embed mort)`);
+            }
+        } catch (e) {
+            if (isAborted(signal)) throw e;
+            console.log(`[FullAnime] ✗ ${hostname} failed: ${e.message}`);
         }
     }
 
-    // Fallback: return first embed even if HEAD check failed
-    if (streams.length === 0 && sorted.length > 0) {
-        streams.push({
-            url: sorted[0],
-            title: `FullAnime [${lang}]`,
-            name: `FullAnime (${lang})`,
-            language: lang,
-            provider: 'FullAnime',
-            headers: { "Referer": BASE_URL + "/" },
-        });
-        console.log(`[FullAnime] Fallback: ${sorted[0].replace('https://', '').split('/')[0]} (HEAD check failed)`);
-    }
-
+    // FIX : plus AUCUN fallback embed — un embed non résolu = page HTML que
+    // l'app ne peut pas lire (stream qui n'apparaît jamais). 0 stream propre
+    // vaut mieux qu'un faux stream.
     console.log(`[FullAnime] Total streams: ${streams.length}`);
     return streams;
 }

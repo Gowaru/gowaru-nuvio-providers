@@ -320,7 +320,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.16",
+      "version": "1.0.17",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -660,7 +660,7 @@
       "id": "fullanime",
       "name": "FullAnime",
       "description": "Anime VOSTFR en streaming sur fullanime.fr. Catalogue large avec 3 hébergeurs par épisode.",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
