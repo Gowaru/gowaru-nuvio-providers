@@ -8,18 +8,21 @@ export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const DOMAIN = 'french-manga.net'
 
+// Referer en getter : suivi dynamique de la rotation de miroir (config.js
+// mute SITE.BASE_URL). Le spread { ...HEADERS } évalue le getter au moment
+// de l'appel — tous les sites d'appels restent inchangés.
 export const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-  Referer: `${SITE.BASE_URL}/`,
+  get Referer() { return `${SITE.BASE_URL}/` },
 }
 
 export const AJAX_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   Accept: 'application/json, text/html, */*',
   'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-  Referer: `${SITE.BASE_URL}/`,
+  get Referer() { return `${SITE.BASE_URL}/` },
   'X-Requested-With': 'XMLHttpRequest',
 }
 
