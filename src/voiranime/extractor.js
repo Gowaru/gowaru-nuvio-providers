@@ -538,7 +538,7 @@ function classifyEmbed(url) {
   return 'resolvable';
 }
 
-async function generateEpisodeUrl(html, targetEp, startTime) {
+async function generateEpisodeUrl(html, targetEp, startTime, effectiveSeason) {
   const $ = cheerio.load(html);
   const firstLink = $('.wp-manga-chapter a').first();
   if (!firstLink.length) return null;
@@ -550,6 +550,15 @@ async function generateEpisodeUrl(html, targetEp, startTime) {
   const slugName = match[1];
   const prefix = match[2];
   const suffix = match[4] || '';
+
+  // ⚠ ANTI-FAUX-CONTENU : le préfixe contient la saison de la page source
+  // (ex: "...-saison-1-"). Si la saison demandée n'existe pas sur le site,
+  // fabriquer l'URL depuis ce préfixe servait l'épisode de la SAISON 1
+  // (bug Gate S2 : 2 streams S1 servis pour la S2). Refuser le cross-saison.
+  const prefixSeason = prefix.match(/saison-(\d+)/i);
+  if (prefixSeason && effectiveSeason != null && parseInt(prefixSeason[1], 10) !== parseInt(effectiveSeason, 10)) {
+    return null;
+  }
 
   // Paddings testés en parallèle
   const paddings = ['0', ''];
@@ -766,16 +775,40 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
       }
 
+      // SAISONS : le site héberge chaque saison sur un slug DÉDIÉ avec un
+      // simple suffixe numérique (constaté live 09/2026 : Gate S2 VF =
+      // gate-jieitai-kanochi-nite-kaku-tatakaeri-2-vf/), PAS sur "saison-2"
+      // et INVISIBLE de la search WP. Pour S2+, ajouter les variantes
+      // {slug}-{N} et {slug}-{N}-vf en TÊTE (probe avant le slug de base,
+      // sinon le slug de base matche la page S1 et masque la vraie saison).
+      if (effectiveSeason > 1) {
+        const seasonVariants = [];
+        for (const s of uniqueSlugs) {
+          seasonVariants.push(`${s}-${effectiveSeason}`);
+          seasonVariants.push(`${s}-${effectiveSeason}-vf`);
+        }
+        const newVariants = seasonVariants.filter(v => !uniqueSlugs.includes(v));
+        uniqueSlugs.unshift(...newVariants);
+      }
+
       // Construire les URLs (VOSTFR + VF) pour tous les slugs
-      const allUrls = uniqueSlugs.flatMap(slug => [
-        `${BASE_URL}/anime/${slug}/`,
-        `${BASE_URL}/anime/${slug}-vf/`,
-      ]);
+      // (le suffixe -vf est déjà inclus dans les variantes de saison —
+      // ne pas le doubler pour éviter /anime/X-2-vf-vf/)
+      const allUrls = uniqueSlugs.flatMap(slug =>
+        slug.endsWith('-vf')
+          ? [`${BASE_URL}/anime/${slug}/`]
+          : [`${BASE_URL}/anime/${slug}/`, `${BASE_URL}/anime/${slug}-vf/`]
+      );
 
       console.log(`[VoirAnime] Parallel probe: ${uniqueSlugs.length} unique slugs (${allUrls.length} URLs)`);
-      // Limiter à 30 URLs max (fetch synchrone en QuickJS = pas de parallélisme)
-      const limitedUrls = allUrls.slice(0, 30);
-      const validUrls = await batchProbe(limitedUrls, 5, 0);
+  // ATTENTION au early-exit : les URLs sont construites en PAIRES [vostfr, vf]
+  // adjacentes. Un batchSize qui coupe une paire (ex: index 4|5) + l'early-exit
+  // après le 1er lot faisaient DISPARAÎTRE la VF quand le lot 1 contenait une
+  // page VOSTFR valide (bug Gate : VF jamais sondée). Fix : batchSize PAIRE
+  // (les 2 langues d'un même slug restent toujours dans le même lot).
+  const VF_PAIR_SIZE = 2;
+  const limitedUrls = allUrls.slice(0, 30);
+  const validUrls = await batchProbe(limitedUrls, VF_PAIR_SIZE, 0);
 
       if (validUrls.length > 0) {
         // Associer les URLs valides aux titres correspondants
@@ -911,7 +944,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       if (!episodeUrl && targetEpisodes.length > 0) {
         for (const ep of targetEpisodes) {
           if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-          const genUrl = await generateEpisodeUrl(html, ep, startTime);
+          const genUrl = await generateEpisodeUrl(html, ep, startTime, effectiveSeason);
           if (genUrl) {
             episodeUrl = genUrl;
             break;
@@ -919,10 +952,21 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
       }
 
-      // For movies, the player is on the main page itself — use match URL as fallback
+      // FILMS : le lecteur n'est PAS sur la fiche principale (placeholder
+      // YouTube anti-bot) mais sur la sous-page /film-vostfr-{slug}/ (ou
+      // /film-vf-{slug}/ depuis la fiche -vf). Ancien code : "match URL as
+      // fallback" → page sans lecteur → 0 stream systématique.
       if (!episodeUrl && mediaType === 'movie') {
-        episodeUrl = match.url;
-        console.log(`[VoirAnime] Movie fallback: using match URL as episode URL`);
+        const filmSubMatch = html.match(
+          /href="(https?:\/\/voir-anime\.to\/anime\/[^"/]+\/film-(?:vostfr|vf)-[^"]+)"/i
+        );
+        if (filmSubMatch) {
+          episodeUrl = filmSubMatch[1];
+          console.log(`[VoirAnime] Movie sub-page found: ${episodeUrl.slice(0, 80)}`);
+        } else {
+          episodeUrl = match.url;
+          console.log(`[VoirAnime] Movie fallback: using match URL as episode URL`);
+        }
       }
 
       if (!episodeUrl) continue;
@@ -948,13 +992,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   const directStreams = deduped.filter(s => s && s.isDirect);
   const embedStreams = deduped.filter(s => s && !s.isDirect && s.url);
 
-  // Prefer direct streams. If none found, include embed URLs as fallback
-  // so the native player can attempt playback (ExoPlayer/AVPlayer handle some embeds).
-  const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
+  // Prefer direct streams ONLY — convention repo (wookafr/fluneo/coflix) :
+  // les embeds non résolus (SPA/gates) ne se lancent jamais dans l'app, les
+  // exposer produit des streams qui restent bloqués sur l'écran de chargement.
+  // ⚠ Le filtre par base URL exclut les pages embed si un direct du même host
+  // existe — c'est voulu (même contenu, mieux résolu).
+  const validStreams = directStreams;
   if (directStreams.length === 0 && embedStreams.length > 0) {
-    console.log(`[VoirAnime] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
+    console.log(`[VoirAnime] 0 direct, ${embedStreams.length} embed(s) non résolus rejetés (convention repo)`);
   }
-  console.log(`[VoirAnime] Total streams: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
+  console.log(`[VoirAnime] Total streams: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed rejeté)`);
 
   return sortStreamsByLanguage(validStreams);
 }
