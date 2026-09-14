@@ -450,27 +450,18 @@ async function extractMoviePageStreams(match, subType) {
       if (subType) stream.subType = subType
 
       const resolved = await resolveWithTimeout(stream)
-      if (resolved && resolved.url) {
-        resolved.language = lang
-        streams.push({ ...resolved, provider: 'voiranime-rip' })
+      if (resolved && resolved.isDirect !== false && resolved.url) {
+        const { isDirect, originalUrl, ...clean } = resolved
+        // FIX : code langue normalisé (fr/ja) pour les filtres/tri NuvioTV
+        clean.language = lang === 'VF' ? 'fr' : 'ja'
+        streams.push({ ...clean, provider: 'voiranime-rip' })
       }
     }
 
-    if (streams.length === 0) {
-      for (const v of videoUrls) {
-        const lang = v.lang || 'VF'
-        const key = `raw:${v.url}|${lang}`
-        if (seen.has(key)) continue
-        seen.add(key)
-
-        const stream = toStream(v.url, lang, 'Voiranime-Rip', SITE.BASE_URL)
-        if (subType) stream.subType = subType
-        streams.push({ ...stream, provider: 'voiranime-rip', isDirect: false })
-      }
-    }
-
-    console.log(`[VoiranimeRip] Movie: ${streams.length} streams (${streams.filter(s => s && s.isDirect).length} direct)`)
-    // Return all streams (including embeds) — the player can handle embed URLs
+    // FIX "ne se lance jamais" : plus AUCUN fallback embed — un lecteur non
+    // résolu est une page HTML que l'app ne peut pas lire (convention repo
+    // wookafr/fluneo/coflix/frenchstream). 0 stream propre > faux stream.
+    console.log(`[VoiranimeRip] Movie: ${streams.length} direct stream(s)`)
     return streams
   } catch (e) {
     console.warn(`[VoiranimeRip] Movie extraction failed: ${e.message}`)
@@ -531,7 +522,16 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
       if (attempts.length === 0) continue
 
       // Sequential resolution — prioritize matching season first, then others
+      // FIX : cap du nombre de tentatives (un catalogue type Conan = 25+ saisons
+      // → jusqu'à 50+ fetches séquentiels = timeout plugin garanti)
+      let tried = 0
+      const MAX_EPISODE_ATTEMPTS = 6
       for (const a of attempts) {
+        if (tried >= MAX_EPISODE_ATTEMPTS) {
+          console.log(`[VoiranimeRip] Attempt cap reached (${MAX_EPISODE_ATTEMPTS})`)
+          break
+        }
+        tried++
         try {
           const result = await extractEpisodeStreams(a.match, a.season, a.episode, subType)
           if (result.length > 0) {
@@ -583,28 +583,16 @@ async function extractEpisodeStreams(match, season, episode, subType) {
       if (subType) stream.subType = subType
 
       const resolved = await resolveWithTimeout(stream)
-      if (resolved && resolved.url) {
-        resolved.language = lang
-        streams.push({ ...resolved, provider: 'voiranime-rip' })
+      if (resolved && resolved.isDirect !== false && resolved.url) {
+        const { isDirect, originalUrl, ...clean } = resolved
+        // FIX : code langue normalisé (fr/ja) pour les filtres/tri NuvioTV
+        clean.language = lang === 'VF' ? 'fr' : 'ja'
+        streams.push({ ...clean, provider: 'voiranime-rip' })
       }
     }
 
-    // If no streams resolved, return raw iframes
-    if (streams.length === 0) {
-      for (const v of videoUrls) {
-        const lang = v.lang || 'VF'
-        const key = `raw:${v.url}|${lang}`
-        if (seen.has(key)) continue
-        seen.add(key)
-
-        const stream = toStream(v.url, lang, 'Voiranime-Rip', SITE.BASE_URL)
-        if (subType) stream.subType = subType
-        streams.push({ ...stream, provider: 'voiranime-rip', isDirect: false })
-      }
-    }
-
-    console.log(`[VoiranimeRip] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter(s => s && s.isDirect).length} direct)`)
-    // Return all streams (including embeds) — the player can handle embed URLs
+    // FIX "ne se lance jamais" : plus AUCUN fallback embed (voir convention repo)
+    console.log(`[VoiranimeRip] Episode S${season}E${episode}: ${streams.length} direct stream(s)`)
     return streams
   } catch (e) {
     console.warn(`[VoiranimeRip] Episode extraction failed: ${e.message}`)
