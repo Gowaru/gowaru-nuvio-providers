@@ -148,8 +148,8 @@
     {
       "id": "coflix",
       "name": "Coflix",
-      "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki.",
-      "version": "1.0.9",
+      "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki (API AJAX, lecteurs Vidzy/Uqload/FSVID).",
+      "version": "2.0.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -270,7 +270,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (recherche exacte par tag TMDB, réglages langue/hosts).",
-      "version": "2.0.18",
+      "version": "2.0.19",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

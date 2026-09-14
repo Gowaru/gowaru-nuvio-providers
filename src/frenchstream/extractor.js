@@ -16,7 +16,10 @@ const TARGET_DIRECT = 4;     // VF + VOSTFR même si les 1ers hosts échouent
 // variante). 15s ne laissait la place qu'à 2 résolutions → VOSTFR jamais atteinte
 // (les candidats VF passent avant). 22s ≈ 4 résolutions, reste < 45s de budget plugin.
 const RESOLVE_TIMEOUT_MS = 22000;
-// Hosts connus pour timeout systématique (vérifié en live) → jamais en tête de file
+// Hosts connus pour timeout systématique (vérifié en live 2026-09) → jamais
+// en tête de file. 'kakaflix' = wrapper actuel de dood/voe/netu sur
+// french-stream.one (timeout 18 s vérifié) — matcher l'URL couvre toutes les
+// variantes (/d00d/, /sydney/, /voe3/, /tokyo/).
 const DEAD_HOSTS = ['kakaflix', 'dood', 'streamtape'];
 
 // ─── Settings utilisateur (SCRAPER_SETTINGS injecté par l'app) ──────────────
@@ -372,7 +375,7 @@ function collectTvSiteCandidates(epData, episode, subType) {
         if (!players || typeof players !== 'object') continue;
         const hosts = Object.keys(players)
             .filter(h => (players[h] || '').startsWith('http'))
-            .sort((a, b) => hostPriority(a, excludeHosts) - hostPriority(b, excludeHosts));
+            .sort((a, b) => hostPriority(a, excludeHosts, players[a]) - hostPriority(b, excludeHosts, players[b]));
         perLang.push(hosts.map(host => makeStream('Frenchstream', host, lang, players[host], null, subType)));
     }
     // Interleave par langue : [VF1, VOSTFR1, VF2, VOSTFR2, ...]. Sans ça, les
@@ -389,11 +392,18 @@ function collectTvSiteCandidates(epData, episode, subType) {
     return streams;
 }
 
-/** Tri de fiabilité des hosts : 0 = résoudre d'abord, 200 = mort/jamais */
-function hostPriority(hostKey, excludeHosts) {
+/**
+ * Tri de fiabilité des hosts : 0 = résoudre d'abord, 200 = mort/jamais.
+ * FIX 2026-09 : vérifier la CLÉ **ET** l'URL. Les hosts "voe"/"netu" sont
+ * servis via des wrappers kakaflix.lol qui timeout (18 s vérifiés en live)
+ * — la clé seule ('voe') ne matchait pas DEAD_HOSTS → ils étaient triés
+ * EN PREMIER et épuisaient le budget de résolution avant vidzy/uqload.
+ */
+function hostPriority(hostKey, excludeHosts, url) {
     const h = (hostKey || '').toLowerCase();
-    if (DEAD_HOSTS.some(d => h.includes(d))) return 200;
-    if (excludeHosts && isHostExcluded(h, excludeHosts)) return 150; // exclu par l'utilisateur mais pas mort → en tout dernier si rien d'autre
+    const u = (url || '').toLowerCase();
+    if (DEAD_HOSTS.some(d => h.includes(d) || u.includes(d))) return 200;
+    if (excludeHosts && (isHostExcluded(h, excludeHosts) || isHostExcluded(u, excludeHosts))) return 150; // exclu par l'utilisateur mais pas mort → en tout dernier si rien d'autre
     return 0;
 }
 
@@ -456,14 +466,14 @@ async function resolveCandidates(candidates) {
         try {
             const s = await resolveSingle(candidate);
             if (s && s.url && s.isDirect) direct.push(s);
-            else if (s && s.url) embeds.push(s);
+            // FIX "ne se lance jamais" : plus AUCUN fallback embed. Un embed
+            // non résolu = page HTML d'hébergeur que l'app ne peut pas lire →
+            // le stream apparaît mais ne démarre jamais. Convention repo
+            // (wookafr/fluneo/franime) : isDirect:false est rejeté.
         } catch (e) { /* skip failed candidate */ }
     }
 
-    // If direct streams found, return them; otherwise fallback to embed URLs
-    if (direct.length > 0) return dedupeByUrl(direct);
-    if (embeds.length > 0) console.log('[Frenchstream] No direct streams, returning embed fallback (' + embeds.length + ')');
-    return dedupeByUrl(embeds);
+    return dedupeByUrl(direct);
 }
 
 /**
@@ -532,14 +542,25 @@ async function verifyAndExtractMovieStreams(newsId, tmdbId, subType) {
         // un ID vidéo brut) → le filtre startsWith('http') les écarte déjà.
         // Ordre : hosts fiables d'abord, kakaflix/dood (timeout live) en dernier.
         const { excludeHosts } = getPrefs();
-        const hosts = Object.keys(players).sort((a, b) => hostPriority(a, excludeHosts) - hostPriority(b, excludeHosts));
+        const hosts = Object.keys(players).filter(host => {
+            const versions = players[host];
+            return versions && typeof versions === 'object' &&
+                Object.values(versions).some(u => typeof u === 'string' && u.startsWith('http'));
+        }).sort((a, b) => {
+            const ua = Object.values(players[a]).find(u => typeof u === 'string') || '';
+            const ub = Object.values(players[b]).find(u => typeof u === 'string') || '';
+            return hostPriority(a, excludeHosts, ua) - hostPriority(b, excludeHosts, ub);
+        });
         for (const host of hosts) {
-            if (hostPriority(host) >= 200) continue; // host mort : jamais proposé
             const versions = players[host];
             if (!versions || typeof versions !== 'object') continue;
             for (const lang of Object.keys(versions)) {
                 const url = versions[lang];
                 if (typeof url === 'string' && url.startsWith('http')) {
+                    // FIX : les wrappers kakaflix (dood/voe/netu) sont morts en
+                    // live (timeout 18 s) → jamais proposés, sinon ils brûlent
+                    // le budget de résolution et la VOSTFR n'est jamais atteinte.
+                    if (hostPriority(host, excludeHosts, url) >= 200) continue;
                     streams.push(makeStream('Frenchstream', host, lang, url, null, subType));
                 }
             }
