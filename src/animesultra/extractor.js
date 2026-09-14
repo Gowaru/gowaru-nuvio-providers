@@ -4,7 +4,12 @@ import cheerio from 'cheerio-without-node-native';
 import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-const BASE_URL = "https://ww.animesultra.org";
+// FIX 2026-09 : ww.animesultra.org est MORT (TCP/TLS KO sur les 2 IP, vérifié
+// live). Le site actif est animesultra.com — mais son moteur DLE distant est
+// lui aussi en panne (full-story 404, /dist/ 404, www1 → 525 SSL failed).
+// Le provider reste pointé sur le domaine officiel et renverra 0 stream
+// proprement tant que le backend du site ne sera pas rétabli.
+const BASE_URL = "https://animesultra.com";
 
 const searchCache = {};
 const searchPromisesCache = {};
