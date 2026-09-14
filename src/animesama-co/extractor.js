@@ -99,24 +99,40 @@ function parseSearchResults(html) {
 function parseEpisodeIframe(html) {
   if (!html) return []
   const $ = cheerio.load(html)
-  const urls = []
+  const out = []
   const seen = new Set()
+  const push = (u, langKey) => {
+    if (u && !seen.has(u)) { seen.add(u); out.push({ url: u, langKey: langKey || null }) }
+  }
 
-  // Extract iframe src from video player
-  $('#videoPlayer').each((_, el) => {
-    const src = $(el).attr('src')
-    if (src && !seen.has(src)) { seen.add(src); urls.push(src) }
-  })
+  // 1. FIX "VF n'apparaît pas" : les pages épisode exposent les lecteurs de
+  //    CHAQUE langue dans un objet JS inline `videoUrls = { vf: '…', vostfr: '…' }`.
+  //    L'iframe #videoPlayer ne montre qu'UNE seule langue (choisie par le
+  //    switcher JS côté client). Sans ce parse, on ne servait qu'un lecteur.
+  const scripts = $('script').text()
+  // Séries : `videoUrls = {vf, vostfr}` — Films : `filmUrls = {vf, vostfr}`
+  // FIX : les URLs peuvent être échappées (`https:\/\/...`) → déséchapper les
+  // slashes avant le match, sinon seule l'iframe par défaut est trouvée.
+  const objMatch = scripts.match(/(?:videoUrls|filmUrls)\s*=\s*\{([^}]{0,800})\}/)
+  if (objMatch) {
+    const raw = objMatch[1].replace(/\\\//g, '/')
+    const pairRe = /['"]?(vf|vostfr|vo|v1|v2)['"]?\s*:\s*['"](https?:\/\/[^'"\s]+)['"]/gi
+    let pm
+    while ((pm = pairRe.exec(raw)) !== null) push(pm[2], pm[1].toLowerCase())
+  }
 
-  // Fallback: any iframe with sibnet
-  if (urls.length === 0) {
+  // 2. Iframe par défaut : #videoPlayer (séries) ou .video-wrapper iframe (films)
+  push($('#videoPlayer').attr('src'))
+  if (out.length === 0) push($('.video-wrapper iframe').first().attr('src'))
+
+  // 3. Fallback: any iframe with sibnet
+  if (out.length === 0) {
     $('iframe[src*="sibnet"]').each((_, el) => {
-      const src = $(el).attr('src')
-      if (src && !seen.has(src)) { seen.add(src); urls.push(src) }
+      push($(el).attr('src'))
     })
   }
 
-  return urls
+  return out
 }
 
 function detectLanguage(html) {
@@ -230,14 +246,47 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     return extractMovie(tmdbId, titles, subType)
   }
   return extractSeries(tmdbId, mediaType, titles, season, episode, subType)
-}
-
-async function extractMovie(tmdbId, titles, subType) {
+}async function extractMovie(tmdbId, titles, subType) {
   const match = await searchAnime(titles)
   if (!match) {
     console.warn(`[AnimeSamaCo] Movie not found for TMDB ${tmdbId}`)
     return []
   }
+
+  // FIX films : sur animesama.co, les films (Akira…) n'ont PAS de page
+  // saison/film — les lecteurs VF/VOSTFR sont directement dans la page série
+  // (iframe #videoPlayer + boutons switchFilmLanguage). On parse la page série
+  // d'abord, puis fallback sur les anciennes URLs saison-1/film.
+  try {
+    const seriesHtml = await fetchText(match.url, { timeout: TIMEOUTS.PAGE })
+    // Les pages films contiennent `filmUrls` + .video-wrapper (pas de #videoPlayer)
+    if (seriesHtml && (seriesHtml.includes('filmUrls') || seriesHtml.includes('videoPlayer') || seriesHtml.includes('video-wrapper'))) {
+      const players = parseEpisodeIframe(seriesHtml)
+      if (players.length > 0) {
+        console.log(`[AnimeSamaCo] Movie players on series page: ${players.length}`)
+        const languages = detectLanguage(seriesHtml)
+        const streams = []
+        for (let i = 0; i < players.length; i++) {
+          const { url, langKey } = players[i]
+          const lang = langKey ? (langKey === 'vf' ? 'VF' : 'VOSTFR')
+                               : (languages[i % languages.length] || 'VF')
+          const stream = toStream(url, lang, 'AnimeSamaCo', SITE.BASE_URL)
+          if (subType) stream.subType = subType
+          const resolved = await resolveWithTimeout(stream)
+          if (resolved && resolved.isDirect !== false && resolved.url) {
+            const { isDirect, originalUrl, ...clean } = resolved
+            clean.language = lang === 'VF' ? 'fr' : 'ja'
+            streams.push({ ...clean, provider: 'animesama-co' })
+          }
+        }
+        if (streams.length > 0) return streams
+      }
+    }
+  } catch (e) {
+    console.warn(`[AnimeSamaCo] Movie series-page parse failed: ${e.message}`)
+  }
+
+  // Fallback historique : pages saison-1/episode-1 puis film/episode-1
   return extractEpisodeStreams(match, 1, 1, subType)
 }
 
@@ -397,75 +446,39 @@ async function extractEpisodeStreams(match, season, episode, subType) {
       return []
     }
 
-    const iframeUrls = parseEpisodeIframe(html)
+    const players = parseEpisodeIframe(html)
     const languages = detectLanguage(html)
 
-    if (iframeUrls.length === 0) {
+    if (players.length === 0) {
       console.warn(`[AnimeSamaCo] No iframe found on episode page`)
       return []
     }
 
-    console.log(`[AnimeSamaCo] Found ${iframeUrls.length} player URL(s), languages: ${languages.join(', ')}`)
+    console.log(`[AnimeSamaCo] Found ${players.length} player URL(s), languages: ${languages.join(', ')}`)
 
     const streams = []
 
-    // When only 1 iframe URL for multiple languages, the page uses JS tabs to switch player.
-    // QuickJS can't execute JS, so we label the single stream with combined languages.
-    if (iframeUrls.length === 1 && languages.length > 1) {
-      const combinedLang = languages.join('/')
-      const stream = toStream(iframeUrls[0], combinedLang, 'AnimeSamaCo', SITE.BASE_URL)
+    for (let i = 0; i < players.length; i++) {
+      const { url, langKey } = players[i]
+      // Label autoritaire = clé de l'objet videoUrls ; fallback positionnel sinon
+      const lang = langKey ? (langKey === 'vf' ? 'VF' : 'VOSTFR')
+                           : (languages[i % languages.length] || 'VF')
+      const stream = toStream(url, lang, 'AnimeSamaCo', SITE.BASE_URL)
       if (subType) stream.subType = subType
 
       const resolved = await resolveWithTimeout(stream)
-      if (resolved && resolved.url) {
-        resolved.language = combinedLang
-        streams.push({ ...resolved, provider: 'animesama-co' })
-      } else {
-        streams.push({ ...stream, provider: 'animesama-co', isDirect: false })
-      }
-    } else {
-      const seen = new Set()
-      for (const lang of languages) {
-        for (const url of iframeUrls) {
-          const key = `${url}|${lang}`
-          if (seen.has(key)) continue
-          seen.add(key)
-
-          const stream = toStream(url, lang, 'AnimeSamaCo', SITE.BASE_URL)
-          if (subType) stream.subType = subType
-
-          const resolved = await resolveWithTimeout(stream)
-          if (resolved && resolved.url) {
-            resolved.language = lang
-            streams.push({ ...resolved, provider: 'animesama-co' })
-          }
-        }
+      if (resolved && resolved.isDirect !== false && resolved.url) {
+        const { isDirect, originalUrl, ...clean } = resolved
+        clean.language = lang === 'VF' ? 'fr' : 'ja'
+        streams.push({ ...clean, provider: 'animesama-co' })
       }
     }
 
-    if (streams.length === 0) {
-      const label = languages.length > 1 ? languages.join('/') : (languages[0] || 'VF')
-      for (const url of iframeUrls) {
-        const stream = toStream(url, label, 'AnimeSamaCo', SITE.BASE_URL)
-        if (subType) stream.subType = subType
-        streams.push({ ...stream, provider: 'animesama-co', isDirect: false })
-      }
-    }
-
-    console.log(`[AnimeSamaCo] Episode S${season}E${episode}: ${streams.length} streams (${streams.filter(s => s.isDirect).length} direct)`)
-    
-    // Prefer direct streams, but keep embed URLs as fallback when sendvid.com is down
-    const directStreams = streams.filter(s => s && s.isDirect)
-    if (directStreams.length > 0) return directStreams
-    
-    // Fallback: return embed URLs so native player can attempt playback
-    const embedStreams = streams.filter(s => s && s.url)
-    if (embedStreams.length > 0) {
-      console.log(`[AnimeSamaCo] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`)
-      return embedStreams
-    }
-    
-    return []
+    // FIX "ne se lance jamais" : plus AUCUN fallback embed — un lecteur non
+    // résolu est une page HTML que l'app ne peut pas lire. Convention repo
+    // (wookafr/fluneo/coflix/frenchstream) : 0 stream propre > faux stream.
+    console.log(`[AnimeSamaCo] Episode S${season}E${episode}: ${streams.length} stream(s) direct(s)`)
+    return streams
   } catch (e) {
     console.warn(`[AnimeSamaCo] Episode extraction failed: ${e.message}`)
   }
