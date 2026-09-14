@@ -187,9 +187,35 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
 
     // Search titles sequentially with small delays to avoid 429 rate limiting
     // The site is very aggressive with rate limits — parallel requests trigger 429
+    // FILMS : le site classe les films sous le catalogue de la SÉRIE
+    // (/anime/demon-slayer/film/). La search API est stricte (le titre complet
+    // du film renvoie []) → chercher d'abord le titre de série dérivé (marqueurs
+    // movie/film/oav strippés), puis le titre brut en fallback (films standalone).
     const maxSearches = isMovie ? MAX_TITLE_SEARCHES_MOVIE : MAX_TITLE_SEARCHES;
+    let searchPool = titles.slice(0, maxSearches);
+    if (isMovie) {
+        const pool = [];
+        for (const t of titles.slice(0, maxSearches)) {
+            const seriesTitle = t
+                .replace(/\s*[-–:]?\s*(?:the\s+)?movie\b.*$/i, '')
+                .replace(/\s*[-–:]?\s*(?:le\s+)?film\b.*$/i, '')
+                .replace(/\s*[-–:]?\s*oav\b.*$/i, '')
+                .trim();
+            // La search API matche en PRÉFIXE (q="kimetsu" ✓, q="Demon Slayer -Kimetsu…" [])
+            // → ajouter des variantes courtes (2 puis 3 premiers mots) pour passer le
+            // sous-titre "-Kimetsu no Yaiba-" qui casse le match préfixe.
+            const words = seriesTitle.split(/\s+/).filter(Boolean);
+            for (const n of [2, 3]) {
+                const short = words.slice(0, n).join(' ');
+                if (short.length >= 3 && !pool.includes(short)) pool.push(short);
+            }
+            if (seriesTitle.length >= 3 && !pool.includes(seriesTitle)) pool.push(seriesTitle);
+            if (!pool.includes(t)) pool.push(t);
+        }
+        searchPool = pool;
+    }
     const allResults = [];
-    for (const searchTitle of titles.slice(0, maxSearches)) {
+    for (const searchTitle of searchPool) {
         if (isAborted(signal)) break;
         try {
             const nt = normalize(searchTitle);

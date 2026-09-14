@@ -258,8 +258,23 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // (fetch synchrone en QuickJS = Promise.all ne parallélise pas)
     const TARGET_STREAMS = 3;
 
-    // Primary: try the generated slug for each language
-    if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    // FILMS : le site classe les films sous le catalogue de la SÉRIE (demon-slayer/film2/)
+    // → le slug dérivé du titre TMDB du film est un soft-404 garanti. Aller directement
+    // à la recherche (titres de série dérivés en premier) au lieu de brûler 4 fetchJs.
+    const searchTitles = titles.slice(0, MAX_FALLBACK_TITLES).map(t => stripSeasonSuffix(t));
+    if (mediaType === 'movie') {
+        for (const t of [...searchTitles]) {
+            const seriesTitle = t
+                .replace(/\s*[-–:]?\s*(?:the\s+)?movie\b.*$/i, '')
+                .replace(/\s*[-–:]?\s*(?:le\s+)?film\b.*$/i, '')
+                .replace(/\s*[-–:]?\s*oav\b.*$/i, '')
+                .trim();
+            if (seriesTitle.length >= 3 && !searchTitles.includes(seriesTitle)) searchTitles.unshift(seriesTitle);
+        }
+    }
+
+    // Primary: try the generated slug for each language (skip for movies — see above)
+    if (mediaType !== 'movie' && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         for (const lang of languages) {
             if (streams.length >= TARGET_STREAMS) break;
             const result = await fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes);
@@ -290,22 +305,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // If primary failed, try search API to find correct slug (much faster than alt slug probing)
     if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const foundSlugs = [];
-        // Strip season suffixes before searching ("No Longer Allowed in Another World Season 1"
-        // returns wrong results; "No Longer Allowed in Another World" returns correct slug)
-        const searchTitles = titles.slice(0, MAX_FALLBACK_TITLES).map(t => stripSeasonSuffix(t));
-        // Films : le titre TMDB est le titre du FILM ("Demon Slayer … The Movie: Mugen
-        // Train") alors que le site classe le film sous le catalogue de la SÉRIE
-        // (demon-slayer/film2/). Couper aux marqueurs de film pour chercher la série.
-        if (mediaType === 'movie') {
-            for (const t of [...searchTitles]) {
-                const seriesTitle = t
-                    .replace(/\s*[-–:]?\s*(?:the\s+)?movie\b.*$/i, '')
-                    .replace(/\s*[-–:]?\s*(?:le\s+)?film\b.*$/i, '')
-                    .replace(/\s*[-–:]?\s*oav\b.*$/i, '')
-                    .trim();
-                if (seriesTitle.length >= 3 && !searchTitles.includes(seriesTitle)) searchTitles.unshift(seriesTitle);
-            }
-        }
         for (const t of searchTitles) {
             const slugs = await searchSlugsScored(t);
             for (const s of slugs) {
