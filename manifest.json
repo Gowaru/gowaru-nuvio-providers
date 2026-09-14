@@ -633,6 +633,30 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "voirdrama",
+      "name": "Voirdrama",
+      "description": "Dramas VF et VOSTFR en streaming sur voirdrama.to (lecteurs VidMoly, mail.ru, VOE).",
+      "version": "0.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/voirdrama.js",
+      "enabled": true,
+      "logo": "https://voirdrama.to/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
       "id": "fullanime",
       "name": "FullAnime",
       "description": "Anime VOSTFR en streaming sur fullanime.fr. Catalogue large avec 3 hébergeurs par épisode.",
