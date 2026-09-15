@@ -6,7 +6,7 @@
       "id": "anime-ultime",
       "name": "Anime-Ultime",
       "description": "Animes VOSTFR et VF en streaming sur v5.anime-ultime.net (séries licenciées exclues par le site).",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -199,7 +199,7 @@
       "id": "dulourd",
       "name": "DuLourd",
       "description": "Séries, animes et cartoons en streaming VF et VOSTFR.",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "author": "Gowaru",
       "supportedTypes": [
         "tv"
@@ -270,7 +270,7 @@
       "id": "voiranime-homes",
       "name": "VoirAnime.homes",
       "description": "Animes VF et VOSTFR en streaming sur voiranime.homes (moteur DLE, miroir French-Manga).",
-      "version": "0.0.2",
+      "version": "0.1.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -542,7 +542,7 @@
       "id": "streamzo",
       "name": "StreamZo",
       "description": "Films et séries en streaming VF/VOSTFR sur Streamzo.fr (recherche par suggestion, langues multi-sources).",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -707,8 +707,8 @@
     {
       "id": "animevost-fr",
       "name": "AnimeVOST.fr",
-      "description": "Anime VOSTFR 1080p en streaming via animevost.fr (API JSON, catalogue en croissance).",
-      "version": "0.0.1",
+      "description": "Anime VOSTFR en streaming via animevost.fr (HLS gupload, catalogue en croissance).",
+      "version": "0.1.0",
       "author": "Gowaru",
       "supportedTypes": [
         "tv"

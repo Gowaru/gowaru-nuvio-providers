@@ -15,7 +15,7 @@ function normalize(s) {
   return (s || '')
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[':!.,?()\[\]]/g, ' ')
+    .replace(/[':!.,?()\[\]\/-]/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ').trim()
 }
@@ -35,19 +35,30 @@ function scoreMatch(resultTitle, searchTitle) {
   if (!nt || !nr) return 0
 
   // Remove season info for matching
-  const cleanNr = nr.replace(/saison\s*\d+/g, '').replace(/:\s*$/, '').trim()
-  const cleanNt = nt.replace(/saison\s*\d+/g, '').replace(/:\s*$/, '').trim()
+  const cleanNr = nr.replace(/saison\s*\d+/g, '').replace(/:\s*$/, '').replace(/\s+/g, ' ').trim()
+  const cleanNt = nt.replace(/saison\s*\d+/g, '').replace(/:\s*$/, '').replace(/\s+/g, ' ').trim()
 
   if (cleanNr === cleanNt || nr === nt) return SCORES.EXACT_MATCH
   if (nr.includes(nt) || nt.includes(nr)) {
     // Pénalité anti-fan-edit : chaque mot significatif en trop dans le résultat
     // (ex: requête "Naruto" → résultat "Naruto Shippuden Kai" = 2 mots extra)
     // retire -25. Empêche les recuts/dérivés de battre le titre exact.
-    const extra = countExtraWords(nr, nt)
+    const extra = countExtraWords(cleanNr, cleanNt)
+    let score = 0
     if (extra > 0) {
-      return Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
+      score = Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
+    } else {
+      score = SCORES.STRONG_MATCH
     }
-    return SCORES.STRONG_MATCH
+    // Bonus position : quand le résultat COMMENCE par la requête, la page est
+    // plus fidèle qu'un homonyme où la requête est noyée au milieu/à la fin
+    // (ex: requête "Gate" → "Gate - Au-delà de la porte" (80) doit battre
+    // "THE NEW GATE" (75) — countExtraWords ignore 'the' (stop-word) et
+    // pénalise donc moins l'homonyme que le sous-titre de la vraie page).
+    const nrTokens = cleanNr.split(/\s+/)
+    const ntTokens = cleanNt.split(/\s+/)
+    if (nrTokens[0] === ntTokens[0]) score += 30
+    return score
   }
 
   const words = cleanNt.split(/\s+/).filter(w => w.length > 2)
@@ -98,7 +109,13 @@ function bestMatch(items, title, targetSeason) {
     }
     if (score > bestScore) { bestScore = score; best = item }
   }
-  return bestScore >= SCORES.MIN_MATCH ? best : null
+  if (bestScore >= SCORES.MIN_MATCH) {
+    // Traçabilité du score : le garde cross-saison l'utilise pour refuser les
+    // pages ambiguës médiocres (season=null + score faible = match incertain).
+    best.score = bestScore
+    return best
+  }
+  return null
 }
 
 function parseSearchResults(html) {
@@ -266,7 +283,10 @@ async function trySearchFallback(allResults, tmdbTitles) {
 
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value) {
-      console.log(`[${PROVIDER}] Fallback matched: "${r.value.title}" (newsid: ${r.value.newsid})`)
+      // Le titre de la page (#serie-config) porte souvent la saison explicite
+      // — l'extraire ici sinon le garde anti-cross-saison ne peut pas trancher.
+      r.value.season = extractSeason(r.value.title)
+      console.log(`[${PROVIDER}] Fallback matched: "${r.value.title}" (newsid: ${r.value.newsid}, season: ${r.value.season})`)
       return r.value
     }
   }
@@ -422,6 +442,18 @@ async function extractMovie(tmdbId, titles, subType) {
     return []
   }
 
+  // Garde anti-faux-contenu : le catalogue du site est 100% séries (vérifié
+  // live 2026-09 — aucune fiche film). Une fiche "série" qui répond à une
+  // demande movie sert son épisode 1 = faux contenu. Un vrai film anime est
+  // marqué "... le film - Saison 1" et expose l'œuvre via ce newsid : on
+  // n'accepte que les titres explicitement marqués film/ova/spécial.
+  const isActualFilm = /(-|\s)(le-)?(film|movie|ova|ona|special)(-|\s|$)/i.test(match.title)
+    || /(-|\s)(le-)?(film|movie)(-|\s|$)/i.test(match.altTitle || '')
+  if (!isActualFilm) {
+    console.log(`[${PROVIDER}] Movie demandé mais le site n'héberge pas ce film (catalogue séries) : "${match.title}" ignoré`)
+    return []
+  }
+
   console.log(`[${PROVIDER}] Movie match: ${match.title} -> ${match.url}`)
   try {
     // Use newsid from search result if available, otherwise fetch page
@@ -500,7 +532,24 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
     }
 
     if (match.season !== targetSeasonNum) {
-      console.log(`[${PROVIDER}] ⚠ Season search didn't find S${targetSeasonNum}, using original match`)
+      // Garde anti-cross-saison : le match gardé porte une saison EXPLICITE
+      // différente de celle demandée (ex: "... - Saison 1" pour une demande
+      // S2) → servir ses streams = faux contenu (leçon Gate S2). Une page
+      // sans marqueur de saison (season=null) peut être multi-saisons : on
+      // l'accepte (l'API d'épisodes tranche par numéro d'épisode).
+      if (match.season != null) {
+        console.log(`[${PROVIDER}] ✗ Refus cross-saison : "${match.title}" = S${match.season} ≠ S${targetSeasonNum}`)
+        return []
+      }
+      // Page sans marqueur de saison : acceptable seulement si le match est
+      // FORT (titre quasi identique). Un match médiocre (ex: "Steins;Gate -
+      // Le Film" score 35 pour une demande "Gate" S2) est un homonyme —
+      // le servir = faux contenu.
+      if ((match.score || 0) < SCORES.STRONG_MATCH) {
+        console.log(`[${PROVIDER}] ✗ Refus match ambigu S${targetSeasonNum} : "${match.title}" (score ${match.score} < ${SCORES.STRONG_MATCH})`)
+        return []
+      }
+      console.log(`[${PROVIDER}] ⚠ Season search didn't find S${targetSeasonNum}, page sans marqueur de saison conservée`)
     }
   }
 

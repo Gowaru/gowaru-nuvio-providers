@@ -30,14 +30,30 @@ function scoreSearchResult(result, query, season) {
     const t = normalize(result.title);
     if (!q || !t) return 0;
     let score = 0;
-    if (t === q) score += 100;
-    else if (t.includes(q) || q.includes(t)) score += 60;
-
-    const qWords = q.split(/\s+/).filter(w => w.length > 2);
-    const tWords = t.split(/\s+/);
-    for (const w of qWords) {
-        if (tWords.includes(w)) score += 12;
+    if (t === q) {
+        score += 100;
+    } else {
+        // Match par TOKENS ENTIERS (jamais par sous-chaîne) : "Gate" ne doit
+        // pas matcher "Ikebukuro West Gate Park" ni "Rainbow Gate!" —
+        // l'ancien scoring (+60 inclusion) faisait servir l'épisode 1 d'une
+        // autre série pour une requête 1-mot (faux contenu Gate 63663).
+        const qTokens = q.split(/[^a-z0-9]+/).filter((w) => w.length > 1);
+        const tTokens = t.split(/[^a-z0-9]+/);
+        if (!qTokens.length) return 0;
+        let matched = 0;
+        for (const w of qTokens) if (tTokens.includes(w)) matched++;
+        if (matched === 0) return 0;
+        score += Math.round((matched / qTokens.length) * 80);
+        // Pénalité mots du résultat hors requête (homonymes : "West", "Park",
+        // "Rainbow", "Stride"…) — les mots structurels sont ignorés.
+        const NOISE = new Set(['saison', 'season', 'the', 'le', 'la', 'les', 'de', 'du', 'et', 'oav', 'ost', 'film', 'special', 'streaming']);
+        const extras = tTokens.filter((w) => w.length > 2 && !NOISE.has(w) && !qTokens.includes(w)).length;
+        score -= Math.min(extras * 25, 75);
+        // Bonus position : le résultat qui COMMENCE par la requête est fidèle
+        // ("Gate - Au-delà..." > "...Gate Hen")
+        if (tTokens[0] === qTokens[0]) score += 30;
     }
+
     // Pénalités selon le format (pour une série TV, éviter OAV/OST/Film)
     const fmt = (result.format || '').toUpperCase();
     if (fmt === 'OAV' || fmt === 'OST') score -= 25;
