@@ -1,42 +1,37 @@
 /**
- * Extractor for Coflix — domaine actif : coflix.wiki (vérifié live 2026-09).
+ * Extractor for French-Anime (french-anime.com).
  *
- * Pourquoi l'ancien provider renvoyait 0 stream :
- *  - les domaines codés en dur (coflix.boston/.cymru/.esq/.group) sont derrière
- *    BotBlocker (fingerprinting + CAPTCHA + cookie signé) → tout échouait ;
- *  - coflix.fr est une vitrine white-label vers gupy.fr (offres SVOD légales,
- *    aucun lecteur) — l'API WP REST codée en dur n'a jamais existé.
+ * Architecture réelle (diagnostic live 2026-09) :
+ *  - french-anime.com : Cloudflare MANAGED challenge (cf-mitigated: challenge,
+ *    cType: 'managed') sur toutes les routes → non contournable en QuickJS.
+ *  - french-anime.fr : IP OVH sans Cloudflare, répond 200, mais c'est une
+ *    VITRINE white-label (WordPress 6.7.7) dont les 321 liens de contenu
+ *    pointent vers gupy.fr (portail SVOD légal, lui aussi CF-challengé) —
+ *    aucun lecteur sur le domaine lui-même.
+ *  - Le catalogue exact du showcase (Your Name, Le Château ambulant,
+ *    Chainsaw Man Le Film : L'arc de Reze, JJK Exécution, Demon Slayer
+ *    La Forteresse infinie…) est celui de coflix.wiki — vérifié titre par
+ *    titre via /ajax/search/suggest.
  *
- * Nouvelle chaîne (API AJAX du thème, SANS challenge) :
- *   1. GET  /ajax/search/suggest?keyword={titre}     → {html} avec hrefs
- *      /film/{slug}-vf|vostfr|truefrench/ep-{epId}
- *   2. GET  /ajax/episode/list-episode?movieId={id}  → {html} data-num/data-id
- *      (les épisodes = epId directs, PAS des numéros)
- *   3. POST /ajax/episode/player?episode_id={epId}   → {message:[{version,
- *      server_link, server_type}]} — TOUS les embeds en une requête.
- *
- * Garde-fous (conventions repo) :
- *  - 'series' normalisé en 'tv' ;
- *  - embeds non résolus (isDirect:false) JAMAIS retournés ;
- *  - wrappers kakaflix (dood/voe sur ce site) = morts → écartés avant résolution.
+ * Stratégie : déléguer au backend réel (coflix.wiki, API AJAX sans challenge)
+ * avec le même pipeline que le provider Coflix (search → épisodes → embeds →
+ * résolveurs), en excluant les faux-matchs homonymes connus (Gate→Steins-Gate,
+ * Gates→Mister Gates).
  */
 
-import { fetchText, fetchTextSafe, ajaxGet, ajaxPost, setCurrentSignal, SITE } from './http.js';
+import { fetchTextSafe, ajaxGet, ajaxPost, setCurrentSignal, SITE } from './http.js';
 import { resolveStream, isAborted } from '../utils/resolvers.js';
-import { getTmdbTitles } from '../utils/metadata.js';
-import { toStream } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
+import { getTmdbTitles } from '../utils/metadata.js';
 
-const withCache = createCache('cfw', 'Coflix');
+const withCache = createCache('fra', 'FrenchAnime');
 
-const SEARCH_TIMEOUT = 12000;
 const PAGE_TIMEOUT = 12000;
-const RESOLVE_TIMEOUT = 9000;
-const MAX_LANGS = 2;             // VF + VOSTFR
-const MAX_EMBEDS_PER_LANG = 2;   // lecteurs résolus par langue
-const MAX_SUGGEST_QUERIES = 3;
+const MAX_SUGGEST_QUERIES = 5;
+const MAX_EMBEDS_PER_LANG = 2;
+const MAX_LANGS = 2;
 
-// Hosts morts sur ce site (vérifié live 2026-09 : timeout 18 s) → écartés
+/** Hosts confirmés morts ou irrésolvables sur ce backend (2026-09). */
 const DEAD_HOSTS = ['kakaflix'];
 
 function isDeadUrl(url) {
@@ -48,6 +43,23 @@ function normalizeMediaType(mediaType) {
     const t = String(mediaType || '').toLowerCase();
     if (t === 'movie' || t === 'film') return 'movie';
     return 'tv';
+}
+
+/**
+ * Faux-matchs homonymes à exclure (leçon du sweep Gate 63663) :
+ * la search textuelle renvoie ces slugs pour des requêtes courtes.
+ */
+const EXCLUDED_SLUGS = [
+    'steins-gate',
+    'the-new-gate',
+    'divine-gate',
+    'mister-gates',
+    'corruption-of-champions',
+];
+
+function isExcludedSlug(slug) {
+    const s = String(slug || '').toLowerCase();
+    return EXCLUDED_SLUGS.some((x) => s.includes(x));
 }
 
 function cleanTitleForSlug(title) {
@@ -74,8 +86,8 @@ function titleScore(candidate, query) {
 
 // ─── 1. Recherche ───────────────────────────────────────────────────────────
 /**
- * Recherche suggest. Retourne des candidats dédupliqués par slug de série :
- *   { slug, epId, label, lang }
+ * Recherche suggest. Retourne des candidats dédupliqués par slug :
+ *   { slug, epId, lang }
  * La langue est déduite du suffixe du slug (convention du site).
  */
 export async function searchCandidates(query, opts = {}) {
@@ -83,11 +95,12 @@ export async function searchCandidates(query, opts = {}) {
     if (!json || !json.html || typeof json.html !== 'string') return [];
     const out = [];
     const seen = new Set();
-    const re = /href="https?:\/\/coflix\.wiki\/film\/([^"/]+)\/ep-(\d+)"/g;
+    const re = /href="https?:\/\/coflix\.wiki\/film\/([^"\/]+)\/ep-(\d+)"/g;
     let m;
     while ((m = re.exec(json.html)) !== null) {
         const slug = m[1];
         if (seen.has(slug)) continue;
+        if (isExcludedSlug(slug)) continue;
         seen.add(slug);
         const lang = /-vostfr$/i.test(slug) ? 'ja'
             : /(-vf|-truefrench|-french)$/i.test(slug) ? 'fr' : null;
@@ -169,10 +182,21 @@ async function resolveEmbedToStream(embedUrl, baseStream, signal) {
 }
 
 // ─── Pipeline principal ─────────────────────────────────────────────────────
+/**
+ * @param {string|number} tmdbId
+ * @param {'tv'|'series'|'movie'} mediaType - 'series' normalisé en 'tv'
+ * @param {string|number} [season]
+ * @param {string|number} [episode]
+ * @param {object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @returns {Promise<Array>}
+ */
 export async function extractStreams(tmdbId, mediaType, season, episode, { signal } = {}) {
     const type = normalizeMediaType(mediaType);
     const epNum = Math.max(1, parseInt(episode, 10) || 1);
     const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+
+    if (signal) setCurrentSignal(signal);
 
     let titles = [];
     try {
@@ -182,12 +206,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     }
     if (!titles || titles.length === 0) return [];
 
-    // 1. Recherche (requêtes dédupliquées, budget serré)
-    // FIX : ACCUMULER les candidats de toutes les requêtes — l'ancien code
-    // réassignait `candidates =` à chaque itération, donc un titre alternatif
-    // renvoyant 0 écrasait le bon résultat de la requête précédente
-    // (ex: 4935 = Howl : "Le Château ambulant" → 1 hit, puis les variantes
-    // exotiques → 0 → pipeline mort).
+    // 1. Recherche — ACCUMULER les candidats de toutes les requêtes (ne
+    //    jamais réassigner : un titre alternatif à 0 résultat écraserait
+    //    un bon hit précédent).
     const queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
     let candidates = [];
     const seenSlugs = new Set();
@@ -208,9 +229,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     }
     if (!candidates.length) return [];
 
-    // 2. Score contre TOUTES les variantes TMDB (le site utilise parfois le
-    //    titre FR quand TMDB expose le titre EN en primary : Vaiana/Moana) →
-    //    on prend le meilleur score pour éviter les faux rejets.
+    // 2. Score contre TOUTES les variantes TMDB → meilleur score.
     const scoreOf = (c) => {
         const slugClean = c.slug.replace(/-(vf|vostfr|truefrench|french)$/i, '');
         let best = 0;
@@ -245,12 +264,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
                 // Film : epId du suggest = fiche unique
                 embeds = await getEpisodeEmbeds(cand.epId, lang, { signal });
             } else {
-                // Série : list-episode du record → epId du numéro demandé
+                // Série : list-episode du record → epId du numéro demandé.
+                // Pas de repli "saison la plus proche" : jamais de faux épisode.
                 const movieId = await getMovieId(cand.slug, { signal });
                 if (!movieId) continue;
                 const eps = await listEpisodes(movieId, { signal });
                 const target = eps.find((e) => e.num === epNum);
-                if (!target) continue; // épisode absent du site : pas de repli
+                if (!target) continue;
                 embeds = await getEpisodeEmbeds(target.epId, lang, { signal });
             }
 
@@ -261,7 +281,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
                 seenEmbeds.add(emb.url);
 
                 const baseStream = {
-                    name: 'Coflix',
+                    name: 'FrenchAnime',
                     title: `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] Épisode ${epNum}`,
                     language: lang,
                     quality: 'HD',

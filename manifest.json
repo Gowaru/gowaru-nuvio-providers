@@ -149,7 +149,7 @@
       "id": "coflix",
       "name": "Coflix",
       "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki (API AJAX, lecteurs Vidzy/Uqload/FSVID).",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -169,6 +169,30 @@
       "disabledPlatforms": [
         "tv"
       ],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "french-anime",
+      "name": "French-Anime",
+      "description": "Catalogue anime VF/VOSTFR de french-anime (backend coflix.wiki, lecteurs Vidzy/Luluvdo/Uqload).",
+      "version": "0.0.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/french-anime.js",
+      "enabled": true,
+      "logo": "https://www.french-anime.fr/fav/favicon-32x32.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
       "supportsExternalPlayer": false
     },
     {
