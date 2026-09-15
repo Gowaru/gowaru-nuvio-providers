@@ -180,9 +180,13 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
         const matchEpisode = (links, pattern) => {
             return links.find(l => {
                 if (!pattern.test(l.url)) return false;
-                if (!isAbsolute && season != null) {
+                // FIX (saison-probe) : pour l'épisode PRIMAIRE en S2+, exiger un
+                // token de saison explicite dans l'URL. Les patterns sans saison
+                // ("-episode-1") matchent sinon les pages S1/single-season et
+                // servent du contenu cross-saison. (Pour S1 on garde le tolérant.)
+                if (!isAbsolute && season != null && Number(season) > 1) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
-                    if (seasonMatch && parseInt(seasonMatch[1]) !== Number(season)) {
+                    if (!seasonMatch || parseInt(seasonMatch[1]) !== Number(season)) {
                         return false;
                     }
                 }
@@ -219,9 +223,10 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
         const matchByText = (links, pattern) => {
             return links.find(l => {
                 if (!pattern.test(l.text)) return false;
-                if (!isAbsolute && season != null) {
+                // Même garde que matchEpisode : S2+ exige un token de saison.
+                if (!isAbsolute && season != null && Number(season) > 1) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
-                    if (seasonMatch && parseInt(seasonMatch[1]) !== Number(season)) {
+                    if (!seasonMatch || parseInt(seasonMatch[1]) !== Number(season)) {
                         return false;
                     }
                 }
@@ -416,13 +421,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     ];
 
     // --- ArmSync: resolve absolute episode for TV series ---
-    const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode);
+    // ('series' = convention app, 'tv' = attendu par l'outil partagé)
+    const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType === 'series' ? 'tv' : mediaType, season, episode);
 
     // For movies, use season=1, episode=1 to search episode pages
     // (mais season/episode restent null dans findEpisodeUrl → mode movie : le
     // lecteur est DANS la page /film/<slug>/ elle-même, pas dans /episode/)
-    const searchSeason = (mediaType === 'movie' && season == null) ? 1 : effectiveSeason;
-    const searchEpisode = (mediaType === 'movie' && episode == null) ? 1 : episode;
+    const searchSeason = (mediaType === 'movie' && season == null) ? 1 : Number(effectiveSeason);
+    const searchEpisode = (mediaType === 'movie' && episode == null) ? 1 : Number(episode);
     const isMoviePath = mediaType === 'movie' && season == null && episode == null;
 
     // OPTIMISATION: Limiter les recherches à 3 titres max (au lieu de 8+)
@@ -522,8 +528,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             }
         } else {
             for (const ep of targetEpisodes) {
-                const isAbsolute = ep !== searchEpisode;
-                const episodeUrl = await findEpisodeUrl(match.url, searchSeason, ep, isAbsolute);
+                // Coercion Number() : l'app passe season/episode en string —
+                // `ep !== searchEpisode` était toujours true (number vs string)
+                // et marquait l'épisode PRIMAIRE comme absolu (garde saison
+                // désactivée + label "(Abs N)" faux).
+                const isAbsolute = Number(ep) !== searchEpisode;
+                const episodeUrl = await findEpisodeUrl(match.url, searchSeason, Number(ep), isAbsolute);
                 if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
                     checkedEpisodeUrls.add(episodeUrl);
                     const playerStreams = await extractPlayersFromEpisode(episodeUrl);
@@ -533,7 +543,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
 
         for (const { ep, playerStreams } of epResults) {
-            const epType = ep === searchEpisode ? "" : ` (Abs ${ep})`;
+            const epType = Number(ep) === searchEpisode ? "" : ` (Abs ${ep})`;
             playerStreams.forEach(s => {
                 if (!s.name.includes('(')) {
                     s.name = `AnimeVOSTFR (${langSuffix})`;
