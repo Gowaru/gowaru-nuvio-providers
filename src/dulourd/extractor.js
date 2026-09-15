@@ -16,14 +16,38 @@ function detectSubType(html, genre) {
 }
 
 function extractEpisodeId(html) {
+  // Nouveau schéma (2026-09) : getxfield(this, '117265', 'voe_vostfr', 'serial')
+  const getx = html.match(/getxfield\([^,]+,\s*'(\d+)'/);
+  if (getx) return getx[1];
+  // Ancien schéma : playEpisode('slug', '123', 'xfield')
   const m = html.match(/playEpisode\([^,]+,\s*'(\d+)'/);
   return m ? m[1] : null;
 }
 
+/**
+ * Détection du verrou Cloudflare Turnstile ajouté sur les pages épisodes
+ * (sitekey 0x4AAAAAABnb4smvZmWw45np, vérifié live 2026-09). Le lien lecteur
+ * n'est servi qu'après un token Turnstile valide (g_recaptcha_response) —
+ * insolvable depuis QuickJS. → [] propre plutôt que des requêtes vouées à
+ * l'échec (endpoint sans token = "page_error").
+ */
+function isTurnstileLocked(html) {
+  return !!html && (
+    /turnstile\.render\('#xf_lock'/.test(html) ||
+    /mod=getxfield/.test(html) && /g_recaptcha_response/.test(html)
+  );
+}
+
 function extractXfields(html) {
   const xfields = new Set();
-  const re = /playEpisode\([^,]+,\s*'\d+',\s*'([^']+)'/g;
+  // Nouveau schéma : getxfield(this, '117265', 'voe_vostfr', 'serial')
+  const reGetx = /getxfield\([^,]+,\s*'\d+',\s*'([^']+)',\s*'[^']+'\)/g;
   let m;
+  while ((m = reGetx.exec(html)) !== null) {
+    if (m[1] && m[1] !== 'trailer_link') xfields.add(m[1]);
+  }
+  // Ancien schéma : playEpisode('slug', '123', 'xfield')
+  const re = /playEpisode\([^,]+,\s*'\d+',\s*'([^']+)'/g;
   while ((m = re.exec(html)) !== null) xfields.add(m[1]);
   return [...xfields];
 }
@@ -239,6 +263,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     console.warn(`[DuLourd] Movie support is limited (pages blocked 403). Trying to fetch: ${info.url}`);
     try {
       const html = await fetchText(info.url, { timeout: CONFIG.TIMEOUTS.PAGE });
+      if (isTurnstileLocked(html)) {
+        console.log(`[DuLourd] Page film verrouillée par Cloudflare Turnstile`);
+        return [];
+      }
       const episodeId = extractEpisodeId(html);
       if (!episodeId) return [];
       const xfields = extractXfields(html);
@@ -274,6 +302,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     epHtml = await fetchText(episodeUrl, { timeout: CONFIG.TIMEOUTS.PAGE });
   } catch (e) {
     console.warn(`[DuLourd] Episode page not found: ${episodeUrl}`);
+    return [];
+  }
+
+  if (isTurnstileLocked(epHtml)) {
+    console.log(`[DuLourd] Page épisode verrouillée par Cloudflare Turnstile — lecteurs inaccessibles`);
     return [];
   }
 

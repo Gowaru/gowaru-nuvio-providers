@@ -458,9 +458,21 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     variants.map(v => resolveEmbedToStream(v.embedUrl, match.quality, refineLangFromSlug(v.lang, match.href), signal, startTime))
   )
 
+  // Dédup par chemin CDN : les embeds VF/VOSTFR du site résolvent parfois
+  // vers le MÊME fichier (seul le token ?t= diffère). Garder la 1re variante
+  // de chaque chemin évite de servir 2× le même flux sous 2 labels.
   const streams = []
+  const seenPaths = new Set()
   for (const r of results) {
-    if (r.status === 'fulfilled' && r.value) streams.push(r.value)
+    if (r.status !== 'fulfilled' || !r.value) continue
+    let pathKey = r.value.url || ''
+    try {
+      const u = new URL(pathKey)
+      pathKey = `${u.host}${u.pathname}`
+    } catch { /* URL invalide : on garde l'URL brute comme clé */ }
+    if (seenPaths.has(pathKey)) continue
+    seenPaths.add(pathKey)
+    streams.push(r.value)
   }
   console.log(`[Streamzo] S${season}E${episode}: ${streams.length} flux (${variants.map(v => v.lang).join(', ')})`)
   return streams

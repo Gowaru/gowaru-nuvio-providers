@@ -183,15 +183,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     if (!titles || titles.length === 0) return [];
 
     // 1. Recherche (requêtes dédupliquées, budget serré)
+    // FIX : ACCUMULER les candidats de toutes les requêtes — l'ancien code
+    // réassignait `candidates =` à chaque itération, donc un titre alternatif
+    // renvoyant 0 écrasait le bon résultat de la requête précédente
+    // (ex: 4935 = Howl : "Le Château ambulant" → 1 hit, puis les variantes
+    // exotiques → 0 → pipeline mort).
     const queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
     let candidates = [];
+    const seenSlugs = new Set();
     for (const q of queries) {
         if (isAborted(signal)) return [];
         try {
-            candidates = await searchCandidates(q, { signal });
+            const batch = await searchCandidates(q, { signal });
+            for (const c of batch || []) {
+                if (!seenSlugs.has(c.slug)) {
+                    seenSlugs.add(c.slug);
+                    candidates.push(c);
+                }
+            }
         } catch (e) {
             if (isAborted(signal)) throw e;
-            candidates = [];
         }
         if (candidates.length >= 3) break;
     }

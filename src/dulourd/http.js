@@ -85,11 +85,16 @@ export async function fetchApi(id, xfield, options = {}) {
   const signal = options.signal || _currentSignal;
   if (isAborted(signal)) return null;
 
-  const body = `id=${id}&xfield=${xfield}&action=playEpisode`;
+  // Endpoint actuel (2026-09) : controller.php?mod=getxfield — l'ancien
+  // Season.php?action=playEpisode répond "Hacking attempt!". Le Turnstile
+  // rend l'appel voué à l'échec sans token, mais on le tente quand même :
+  // le verrou peut être levé côté site à tout moment.
+  const body = `id=${id}&xfield=${xfield}&type=serial&page_token=&g_recaptcha_response=&user_hash=`;
+  const legacyBody = `id=${id}&xfield=${xfield}&action=playEpisode`;
   for (const domain of [CONFIG.BASE_URL, ...(CONFIG.DOMAINS || [])]) {
     if (isAborted(signal)) return null;
 
-    const url = `${domain}${CONFIG.ENDPOINTS.seasonApi}`;
+    const url = `${domain}/engine/ajax/controller.php?mod=getxfield`;
     try {
       const res = await safeFetch(url, {
         method: 'POST',
@@ -103,7 +108,9 @@ export async function fetchApi(id, xfield, options = {}) {
       });
       if (!res || !res.ok) continue;
       const text = await res.text();
-      if (text && !isCloudflareBlock(text)) return text;
+      // "page_error" = réponse du serveur sans token Turnstile valide ;
+      // "Hacking attempt!" = ancien endpoint désactivé.
+      if (text && !isCloudflareBlock(text) && !text.includes('page_error') && !text.includes('Hacking attempt')) return text;
     } catch (e) {
       console.log(`[DuLourd] API error on ${domain}: ${e.message}`);
     }

@@ -1,135 +1,246 @@
-const { fetchJson } = require('./http');
+/**
+ * Extractor for AnimeVost-fr (animevost.fr — SPA Next.js, diag live 2026-09).
+ *
+ * Chaîne réelle :
+ *   1. Search : /api/anime/search?q=X (index q partiellement cassé côté
+ *      serveur) → fallback sonde de slug /anime/{slug} (la page répond 200
+ *      avec le RSC flight contenant les épisodes même si l'API search rate).
+ *   2. Détails : /api/animes/{slug} → seasons[].episodes[] avec zoplayer_id
+ *      (id du fichier sur l'hébergeur gupload).
+ *   3. Player : la page épisode embarque <iframe src="https://gupload.xyz/
+ *      data/e/{zoplayer_id}?lang=fr">. La page gupload contient un blob
+ *      chiffré 'salt~base64' (XOR avec la clé statique G7#kP!2qZxV9mRwL)
+ *      dont le décodage donne { videoUrl: ".../720p.m3u8", subtitleTracks… }.
+ *      L'ancien provider servait l'URL de l'IFRAME (page HTML) — injouable.
+ *
+ * Garde-fous : jamais d'URL iframe servie comme stream, jamais de repli
+ * "épisode le plus proche" (0 propre > faux contenu).
+ */
 
-const BASE = 'https://animevost.fr';
+import { fetchJson, fetchText, setCurrentSignal, BASE } from './http.js';
+import { resolveStream, isAborted } from '../utils/resolvers.js';
+import { getTmdbTitles } from '../utils/metadata.js';
+import { toSlug } from '../utils/dle-extractor.js';
 
-// Cache for anime details (slug -> data)
-const animeCache = new Map();
-const CACHE_TTL = 10 * 60 * 1000; // 10 min
+/** Clé XOR statique du player gupload (stable, vérifiée sur plusieurs pages). */
+const GUPLOAD_XOR_KEY = 'G7#kP!2qZxV9mRwL';
 
-function getCached(key) {
-    const entry = animeCache.get(key);
-    if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
-    animeCache.delete(key);
-    return null;
-}
+const MAX_SEARCH_TITLES = 4;
+const TIMEOUT_MS = 12000;
 
-function setCache(key, data) {
-    animeCache.set(key, { data, ts: Date.now() });
-}
+// ─── Décodage du player gupload ─────────────────────────────────────────────
 
-// Search for anime by title
-async function searchAnime(query) {
-    const cacheKey = `search_${query.toLowerCase()}`;
-    const cached = getCached(cacheKey);
-    if (cached) return cached;
-
-    const data = await fetchJson(`/api/animes/search?q=${encodeURIComponent(query)}`);
-    if (!data || !data.results || data.results.length === 0) return null;
-
-    const result = data.results[0];
-    setCache(cacheKey, result);
-    return result;
-}
-
-// Get anime details with seasons and episodes
-async function getAnimeDetails(slug) {
-    const cacheKey = `anime_${slug}`;
-    const cached = getCached(cacheKey);
-    if (cached) return cached;
-
-    const data = await fetchJson(`/api/animes/${slug}`);
-    if (!data || !data.anime) return null;
-
-    setCache(cacheKey, data);
-    return data;
-}
-
-// Normalize title for search (remove accents, lowercase, replace special chars)
-function normalizeTitle(title) {
-    return title
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-// Extract season/episode from titles
-function extractSeasonEpisode(titles) {
-    let season = 1;
-    let episode = 1;
-
-    for (const t of titles) {
-        const seasonMatch = t.match(/saison\s+(\d+)|season\s+(\d+)|s(\d+)/i);
-        if (seasonMatch) season = parseInt(seasonMatch[1] || seasonMatch[2] || seasonMatch[3]);
-
-        const episodeMatch = t.match(/episode\s+(\d+)|ep\s+(\d+)|e(\d+)/i);
-        if (episodeMatch) episode = parseInt(episodeMatch[1] || episodeMatch[2] || episodeMatch[3]);
+/**
+ * Décode atob() en binaire fiable (charCodes 0-255) — atob des runtimes Nuvio
+ * retourne une chaîne Latin-1, ok pour le XOR octet par octet.
+ */
+function xorDecrypt(blob, key) {
+    const tilde = blob.indexOf('~');
+    if (tilde < 0) return null;
+    const b64 = blob.slice(tilde + 1);
+    if (!b64) return null;
+    try {
+        const raw = atob(b64);
+        let out = '';
+        for (let i = 0; i < raw.length; i++) {
+            out += String.fromCharCode(raw.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+        return out;
+    } catch {
+        return null;
     }
-
-    return { season, episode };
 }
 
-// Main search and extract function
-async function searchAndExtract(title, season, episode) {
-    // Try searching with the main title (without season/episode info)
-    const cleanTitle = title
-        .replace(/\s*(saison|season|s)\s*\d+/gi, '')
-        .replace(/\s*(episode|ep|e)\s*\d+/gi, '')
-        .trim();
+/**
+ * Extrait l'URL vidéo HLS depuis une page embed gupload.
+ * @returns {{ videoUrl: string, subtitles: Array<{url,label,lang}> } | null}
+ */
+export function parseGuploadEmbed(html) {
+    if (!html) return null;
+    // Le blob chiffré : une grande chaîne 'hex~base64' passée au décodeur.
+    const m = html.match(/'([A-Za-z0-9+/=]{40,}~[A-Za-z0-9+/=]+)'/);
+    if (!m) return null;
+    const decoded = xorDecrypt(m[1], GUPLOAD_XOR_KEY);
+    if (!decoded) return null;
+    let data;
+    try { data = JSON.parse(decoded); } catch { return null; }
+    if (!data || typeof data.videoUrl !== 'string' || !data.videoUrl.startsWith('http')) return null;
 
-    const searchResult = await searchAnime(cleanTitle);
-    if (!searchResult) return [];
-
-    const details = await getAnimeDetails(searchResult.slug);
-    if (!details || !details.seasons) return [];
-
-    // Find the right season
-    const seasonData = details.seasons.find(s => s.season_number === season) || details.seasons[0];
-    if (!seasonData || !seasonData.episodes) return [];
-
-    // Find the right episode
-    const episodeData = seasonData.episodes.find(e => e.episode_number === episode) || seasonData.episodes[0];
-    if (!episodeData) return [];
-
-    // Extract streams
-    const streams = [];
-
-    // From streams array (direct video URLs)
-    if (episodeData.streams && episodeData.streams.length > 0) {
-        for (const stream of episodeData.streams) {
-            if (stream.video_url) {
-                streams.push({
-                    url: stream.video_url,
-                    title: `AnimeVOST [${stream.quality || '1080p'}] [${stream.language || 'VOSTFR'}]`,
-                    name: `AnimeVOST (${stream.language || 'VOSTFR'})`,
-                    quality: stream.quality || '1080p',
-                    language: 'fr',
-                    provider: 'animevost-fr',
-                    headers: {
-                        'Referer': `${BASE}/`,
-                    },
-                });
+    const subtitles = [];
+    if (Array.isArray(data.subtitleTracks)) {
+        for (const s of data.subtitleTracks) {
+            if (s && typeof s.src === 'string' && s.src.startsWith('http')) {
+                subtitles.push({ url: s.src, label: s.label || '', lang: s.srclang || '' });
             }
         }
     }
-
-    // Fallback: construct gupload URL from zoplayer_id
-    if (streams.length === 0 && episodeData.zoplayer_id) {
-        streams.push({
-            url: `${BASE}/api/animes/${searchResult.slug}`,
-            title: `AnimeVOST [1080p] [VOSTFR]`,
-            name: 'AnimeVOST (VOSTFR)',
-            quality: '1080p',
-            language: 'fr',
-            provider: 'animevost-fr',
-            headers: {
-                'Referer': `${BASE}/`,
-            },
-        });
-    }
-
-    return streams;
+    return { videoUrl: data.videoUrl, subtitles };
 }
 
-module.exports = { searchAnime, getAnimeDetails, searchAndExtract };
+// ─── Recherche ──────────────────────────────────────────────────────────────
+
+function scoreMatch(candidateTitle, wantedTitles, candidateSlug) {
+    const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const cn = norm(candidateTitle);
+    let best = 0;
+    for (const t of wantedTitles) {
+        const wn = norm(t);
+        if (!wn || !cn) continue;
+        if (cn === wn) return 100;
+        const cnTokens = cn.split(/[^a-z0-9]+/).filter(Boolean);
+        const wnTokens = wn.split(/[^a-z0-9]+/).filter(Boolean);
+        // Le slug EXACT (fiche principale du titre) bat toujours un dérivé
+        // (spécial/OAV/film) : toSlug('Air Gear') = 'air-gear' ≠ 'air-gear-special'.
+        if (candidateSlug && candidateSlug === toSlug(t)) return 95;
+        if (cnTokens[0] === wnTokens[0]) {
+            // Le résultat commence par la requête (fidélité maximale)
+            const extras = cnTokens.filter((w) => !wnTokens.includes(w)).length;
+            best = Math.max(best, 80 - Math.min(extras * 10, 30));
+        } else if (cnTokens.includes(wnTokens[wnTokens.length - 1]) && wnTokens.length > 1) {
+            best = Math.max(best, 50);
+        }
+    }
+    return best;
+}
+
+/** Recherche API (q= partiellement cassé → simple accélérateur, pas critique). */
+async function searchApi(titles, signal) {
+    for (const t of titles.slice(0, 2)) {
+        if (isAborted(signal)) return null;
+        const data = await fetchJson(`/api/anime/search?q=${encodeURIComponent(t)}`, { signal });
+        const results = Array.isArray(data && data.results) ? data.results : [];
+        let bestResult = null;
+        let bestScore = 0;
+        for (const r of results) {
+            const slug = r && r.slug;
+            if (!slug) continue;
+            const score = scoreMatch(r.title_romaji || r.title_english || slug, titles, slug);
+            if (score > bestScore) {
+                bestScore = score;
+                bestResult = { slug, score };
+            }
+        }
+        if (bestResult && bestScore >= 70) return bestResult;
+    }
+    return null;
+}
+
+/** Sonde de slug directe : /anime/{slug} (200 + RSC même si search rate). */
+async function probeSlug(titles, signal) {
+    for (const t of titles.slice(0, MAX_SEARCH_TITLES)) {
+        if (isAborted(signal)) return null;
+        const slug = toSlug(t);
+        if (!slug) continue;
+        const html = await fetchText(`/anime/${slug}`, { signal });
+        // La page fiche valide contient les données d'épisodes dans le flight RSC
+        if (html && html.includes('zoplayer_id')) {
+            return { slug, score: 80 };
+        }
+    }
+    return null;
+}
+
+// ─── Détails + extraction ───────────────────────────────────────────────────
+
+async function getAnimeDetails(slug, signal) {
+    return fetchJson(`/api/animes/${slug}`, { signal });
+}
+
+function findEpisodeData(details, seasonNum, episodeNum) {
+    if (!details || !Array.isArray(details.seasons)) return null;
+    const seasonData =
+        details.seasons.find((s) => parseInt(s.season_number, 10) === seasonNum) ||
+        // Pas de repli cross-saison : la saison demandée doit exister.
+        null;
+    if (!seasonData || !Array.isArray(seasonData.episodes)) return null;
+    return seasonData.episodes.find((e) => parseInt(e.episode_number, 10) === episodeNum) || null;
+}
+
+/**
+ * Résout un épisode : zoplayer_id → m3u8 HLS direct.
+ *
+ * Le player gupload chiffre son blob (XOR) — mais les manifestes HLS sont
+ * servis à un chemin FIXE /data/e/hls/{zoplayer_id}/{q}.m3u8 (diagnostic
+ * live : 720p = 200 accessible SANS passer par l'embed, dont le HTML bloque
+ * le fingerprint TLS d'undici — OkHttp côté app passe). On sonde les
+ * qualités dans l'ordre et on garde la première qui répond avec un
+ * manifeste #EXTM3U valide.
+ */
+const QUALITY_ORDER = ['720p', '1080p', '480p', '360p'];
+
+async function resolveEpisodeStreams(slug, seasonNum, episodeNum, epData, signal) {
+    const zoplayerId = epData && epData.zoplayer_id;
+    if (!zoplayerId) return [];
+
+    for (const q of QUALITY_ORDER) {
+        if (isAborted(signal)) return [];
+        const m3u8Url = `https://gupload.xyz/data/e/hls/${zoplayerId}/${q}.m3u8`;
+        let manifest = null;
+        try {
+            manifest = await fetchText(m3u8Url, {
+                signal,
+                headers: { Referer: 'https://gupload.xyz/' },
+            });
+        } catch (e) {
+            if (isAborted(signal)) throw e;
+            continue;
+        }
+        if (!manifest || !manifest.includes('#EXTM3U')) continue;
+
+        const baseStream = {
+            name: 'AnimeVOST (VOSTFR)',
+            title: `AnimeVOST [VOSTFR]`,
+            url: m3u8Url,
+            quality: q,
+            language: 'ja',
+            type: 'hls',
+            headers: { Referer: 'https://gupload.xyz/' },
+        };
+        try {
+            const resolved = await resolveStream(baseStream, 0);
+            if (!resolved || !resolved.url || resolved.isDirect === false) continue;
+            delete resolved.isDirect;
+            delete resolved.originalUrl;
+            return [resolved];
+        } catch (e) {
+            if (isAborted(signal)) throw e;
+        }
+    }
+    console.log(`[AnimeVostFR] Aucun manifeste HLS pour ${slug} S${seasonNum}E${episodeNum} (${zoplayerId})`);
+    return [];
+}
+
+// ─── Entrée ─────────────────────────────────────────────────────────────────
+
+export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const signal = options.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
+
+    if (mediaType === 'movie') return []; // catalogue 100% séries
+
+    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+    const episodeNum = Math.max(1, parseInt(episode, 10) || 1);
+
+    const titles = await getTmdbTitles(tmdbId, 'tv', { season: seasonNum });
+    if (!titles || titles.length === 0) return [];
+
+    // 1. Search API puis sonde de slug
+    let match = await searchApi(titles, signal);
+    if (!match) match = await probeSlug(titles, signal);
+    if (!match) {
+        console.log(`[AnimeVostFR] Titre introuvable pour TMDB ${tmdbId}`);
+        return [];
+    }
+
+    // 2. Détails + épisode exact (jamais de repli)
+    const details = await getAnimeDetails(match.slug, signal);
+    const epData = findEpisodeData(details, seasonNum, episodeNum);
+    if (!epData) {
+        console.log(`[AnimeVostFR] S${seasonNum}E${episodeNum} absent de ${match.slug}`);
+        return [];
+    }
+
+    // 3. Résolution gupload → m3u8
+    return resolveEpisodeStreams(match.slug, seasonNum, episodeNum, epData, signal);
+}

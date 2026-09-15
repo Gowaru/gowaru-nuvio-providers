@@ -1,26 +1,23 @@
-const { searchAndExtract } = require('./extractor');
-const { getTmdbTitles } = require('../utils/metadata');
+import { extractStreams } from './extractor.js';
 
-async function getStreams(tmdbId, mediaType, season, episode) {
-    if (mediaType === 'movie') return [];
-    return getStreamsForAnime(tmdbId, season || 1, episode || 1);
-}
-
-async function getStreamsForAnime(tmdbId, season, episode) {
+/**
+ * AnimeVost-fr (animevost.fr) — catalogue VOSTFR (hébergeur gupload).
+ * @param {string|number} tmdbId
+ * @param {'tv'|'series'|'movie'} mediaType - 'series' normalisé en 'tv'
+ * @param {string|number} [season]
+ * @param {string|number} [episode]
+ * @param {object} [options]
+ * @returns {Promise<Array>}
+ */
+export async function getStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const type = mediaType === 'movie' ? 'movie' : 'tv';
     try {
-        const titles = await getTmdbTitles(tmdbId, 'tv', season);
-        if (!titles || titles.length === 0) return [];
-
-        // Try each title until we find a match
-        for (const title of titles) {
-            const result = await searchAndExtract(title, season, episode);
-            if (result && result.length > 0) return result;
-        }
-        return [];
+        return await extractStreams(tmdbId, type, season, episode, options);
     } catch (e) {
-        console.error(`[AnimeVostFR] Error: ${e.message}`);
+        if (e && String(e.message || e).includes('AbortError')) throw e;
+        console.warn(`[AnimeVostFR] Error: ${e && e.message ? e.message : e}`);
         return [];
     }
 }
 
-module.exports = { getStreams };
+export default { getStreams };
