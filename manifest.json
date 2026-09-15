@@ -101,7 +101,7 @@
       "id": "animevostfr",
       "name": "AnimeVOSTFR",
       "description": "Animes VF et VOSTFR en streaming gratuit sur AnimeVOSTFR.",
-      "version": "1.1.51",
+      "version": "1.1.52",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -422,7 +422,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.52",
+      "version": "1.1.53",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

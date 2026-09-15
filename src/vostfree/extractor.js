@@ -160,7 +160,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   ];
 
   // Résoudre les épisodes cibles via ArmSync
-  const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
+  // ('series' = convention app, 'tv' = attendu par l'outil partagé)
+  const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType === 'series' ? 'tv' : mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
   const episodeStrs = targetEpisodes.map(String);
 
   let allMatches = [];
@@ -288,8 +289,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 buttonsId = 'buttons_1';
             } else {
                 // TV: find episode in selector (Fix #1: utiliser episodeStrs avec l'absolu en priorité)
+                const buttonOptions = [];
+                const episodeMatches = (text, num) => {
+                    const m = String(text || '').match(/[Ee]pisode\s*(0*)(\d+)/i);
+                    return m ? parseInt(m[1] + m[2], 10) === num : false;
+                };
                 $('select.new_player_selector option').each((i, el) => {
                     const text = $(el).text().trim();
+                    buttonOptions.push(text);
                     for (const ep of episodeStrs) {
                         const epNum = parseInt(ep, 10);
                         const numMatch = text.match(/[Ee]pisode\s*(0*)(\d+)/i);
@@ -302,6 +309,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                         }
                     }
                 });
+
+                // Fix #3 (saison-probe) : une page SANS marqueur de saison (ex
+                // "Jujutsu Kaisen FRENCH") héberge la saison 1. Pour une S2+,
+                // servir l'épisode de même numéro = faux contenu cross-saison.
+                // La page ambiguë n'est acceptée que si l'épisode ABSOLU y est
+                // aussi (page multi-saisons) ; sinon on refuse le match.
+                {
+                    const matchSn = getSeasonNumber(match.title + ' ' + match.url);
+                    const isSeasonLess = matchSn === null;
+                    const epNum = parseInt(episodeStrs[0], 10);
+                    const absNum = episodeStrs.length > 1 ? parseInt(episodeStrs[1], 10) : null;
+                    if (buttonsId && isSeasonLess && effectiveSeason != null && effectiveSeason > 1 && absNum != null) {
+                        const hasSimple = buttonOptions.some(t => episodeMatches(t, epNum));
+                        const hasAbs = buttonOptions.some(t => episodeMatches(t, absNum));
+                        if (hasSimple && !hasAbs) {
+                            console.warn(`[Vostfree] Ambiguous season-less page (Ep${epNum} present, absolute Ep${absNum} absent) for S${effectiveSeason} — skipping ${animeUrl}`);
+                            continue;
+                        }
+                    }
+                }
 
                 // Fallback: if selector exists but empty (single-episode page), use buttons_1
                 if (!buttonsId) {
@@ -417,14 +444,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     }
 
     const directStreams = streams.filter(s => s && s.isDirect);
-    const embedStreams = streams.filter(s => s && !s.isDirect && s.url);
+    const embedCount = streams.filter(s => s && !s.isDirect && s.url).length;
 
-    // Prefer direct streams. If none found, include embed URLs as fallback.
-    const validStreams = directStreams.length > 0 ? directStreams : embedStreams;
-    if (directStreams.length === 0 && embedStreams.length > 0) {
-        console.log(`[Vostfree] No direct streams, using ${embedStreams.length} embed URL(s) as fallback`);
-    }
-    console.log(`[Vostfree] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedStreams.length} embed)`);
+    // Convention repo : ne JAMAIS servir d'embed non résolu en fallback
+    // (non jouable par ExoPlayer) — uniquement les directs.
+    const validStreams = directStreams;
+    console.log(`[Vostfree] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedCount} embed rejeté)`);
 
     const cleaned = validStreams.map(s => ({
         name: s.name || 'Vostfree',

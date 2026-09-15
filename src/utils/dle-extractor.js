@@ -7,6 +7,10 @@ import { resolveStream, safeFetch, isBudgetExhausted, PROVIDER_BUDGET_MS } from 
 
 const ARM_API = "https://arm.haglund.dev/api/v2";
 const CINEMATA_API = "https://v3-cinemeta.strem.io";
+// Dupliquées de metadata.js (non exportées) — utilisées par
+// getAbsoluteEpisodeFromTmdb pour le fallback d'épisode absolu.
+const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
+const TMDB_API_BASE = "https://api.themoviedb.org/3";
 
 async function syncFetch(url, options = {}) {
   try {
@@ -331,12 +335,21 @@ export async function resolveTargetEpisodes(tmdbId, mediaType, season, episode, 
   if (startTime != null && isBudgetExhausted(startTime, budgetMs)) return episodes
 
   try {
+    let absoluteEpisode = null
     const imdbId = await getImdbId(tmdbId, mediaType)
     if (imdbId && (startTime == null || !isBudgetExhausted(startTime, budgetMs))) {
-      const absoluteEpisode = await getAbsoluteEpisode(imdbId, season, epNum)
-      if (absoluteEpisode && absoluteEpisode !== epNum) {
-        episodes.push(absoluteEpisode)
-      }
+      absoluteEpisode = await getAbsoluteEpisode(imdbId, season, epNum)
+    }
+    // Fallback TMDB (structure saisonnière autoritaire pour les anime) :
+    // cinemeta regroupe les anime par arcs TVDB,ARM n'a pas toujours la
+    // correspondance → sans ce fallback, l'épisode absolu est indisponible
+    // pour beaucoup d'anime (ex: JJK) et les garde-fous anti cross-saison
+    // des providers n'ont plus le disambiguisateur.
+    if (!absoluteEpisode && (startTime == null || !isBudgetExhausted(startTime, budgetMs))) {
+      absoluteEpisode = await getAbsoluteEpisodeFromTmdb(tmdbId, season, epNum)
+    }
+    if (absoluteEpisode && absoluteEpisode !== epNum) {
+      episodes.push(absoluteEpisode)
     }
   } catch (e) {
     console.warn(`[ArmSync] Failed: ${e.message}`)
