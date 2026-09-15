@@ -1,10 +1,19 @@
 /**
  * HTTP Utilities for French-Anime.
  *
- * Le contenu de french-anime (.com CF-challengé, .fr vitrine) est servi par
- * coflix.wiki → on réutilise exactement la chaîne HTTP coflix (API AJAX du
- * thème, sans challenge, headers X-Requested-With + Referer requis).
- * Voir src/coflix/http.js pour le détail de l'architecture du site.
+ * Deux canaux :
+ *  1. DIRECT — french-anime.com (site DLE réel, /animes-vf/{id}-{slug}.html).
+ *     Derrière Cloudflare managed challenge : bloqué depuis les IP datacenter,
+ *     mais les IP résidentielles (réseau de l'app) passent généralement.
+ *  2. FALLBACK — coflix.wiki (API AJAX du thème, sans challenge), qui porte
+ *     une grande partie du même catalogue. Utilisé quand le canal direct
+ *     renvoie un challenge CF.
+ *
+ * Architecture coflix (voir aussi src/coflix/http.js) :
+ *   recherche  → GET /ajax/search/suggest?keyword={q}
+ *   épisodes   → GET /ajax/episode/list-episode?movieId={id}
+ *   embeds     → POST /ajax/episode/player?episode_id={id}
+ *   (headers X-Requested-With + Referer requis)
  */
 
 import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
@@ -12,6 +21,10 @@ import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
+/** Canal DIRECT : site DLE réel. */
+export const FA_SITE = 'https://french-anime.com';
+
+/** Canal FALLBACK : backend réel du catalogue (cf. diagnostic 2026-09). */
 export const SITE = 'https://coflix.wiki';
 
 const rateLimit = createProviderRateLimiter();
@@ -22,7 +35,7 @@ export const HEADERS = {
     'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
 };
 
-/** Headers AJAX (X-Requested-With requis par le thème). */
+/** Headers AJAX coflix (X-Requested-With requis par le thème). */
 export function ajaxHeaders(extra = {}) {
     return {
         ...HEADERS,
@@ -33,21 +46,23 @@ export function ajaxHeaders(extra = {}) {
     };
 }
 
-/** Détecte une page de blocage (BotBlocker/Cloudflare). */
+/** Détecte une page de blocage (Cloudflare managed challenge / BotBlocker). */
 export function isBlockPage(text) {
     if (!text) return false;
     return (
-        text.includes('BotBlocker') ||
         text.includes('Just a moment') ||
         text.includes('cf-browser-verification') ||
-        text.includes('Attention Required')
+        text.includes('Attention Required') ||
+        text.includes('BotBlocker')
     );
 }
+
+// ─── Canal DIRECT (french-anime.com) ────────────────────────────────────────
 
 async function rawFetch(url, options = {}) {
     const signal = options.signal || _currentSignal;
     if (isAborted(signal)) throw new Error('AbortError: Request aborted');
-    await rateLimit('coflix.wiki');
+    await rateLimit('french-anime.com');
     const { headers, method, body, timeout } = options;
     return safeFetch(url, {
         headers: headers || HEADERS,
@@ -59,17 +74,32 @@ async function rawFetch(url, options = {}) {
     });
 }
 
-/** GET HTML. Throw en cas d'échec/blocage. */
-export async function fetchText(url, options = {}) {
+/**
+ * GET HTML sur french-anime.com. Throw en cas d'échec/blocage.
+ * L'appelant distingue le challenge CF via l'erreur `blocked: true`.
+ */
+export async function fetchFaText(url, options = {}) {
     for (let attempt = 0; attempt <= 1; attempt++) {
+        let res = null;
         try {
-            const res = await rawFetch(url, options);
-            if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : 'no-response'} for ${url}`);
+            res = await rawFetch(url, options);
+            if (!res) throw new Error(`no-response for ${url}`);
+            if (res.status === 403 || res.status === 503) {
+                const err = new Error(`Blocked (CF) for ${url}`);
+                err.blocked = true;
+                throw err;
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
             const text = await res.text();
-            if (isBlockPage(text)) throw new Error(`Blocked (BotBlocker/CF) for ${url}`);
+            if (isBlockPage(text)) {
+                const err = new Error(`Blocked (CF page) for ${url}`);
+                err.blocked = true;
+                throw err;
+            }
             return text;
         } catch (e) {
             if (isAborted(options.signal || _currentSignal)) throw e;
+            if (e.blocked) throw e; // pas de retry sur un challenge
             if (attempt < 1) await sleep(800);
             else throw e;
         }
@@ -77,16 +107,18 @@ export async function fetchText(url, options = {}) {
     return null;
 }
 
-/** GET tolérant : null au lieu de throw (sondes de slugs). */
+// ─── Canal FALLBACK (coflix.wiki AJAX) ──────────────────────────────────────
+
+/** GET HTML tolérant : null au lieu de throw (sondes de slugs). */
 export async function fetchTextSafe(url, options = {}) {
-    try { return await fetchText(url, options); }
+    try { return await fetchFaText(url, options); }
     catch (e) {
         if (isAborted(options.signal || _currentSignal)) throw e;
         return null;
     }
 }
 
-/** GET JSON d'une route /ajax/. null si échec. */
+/** GET JSON d'une route /ajax/ coflix. null si échec. */
 export async function ajaxGet(path, options = {}) {
     try {
         const res = await rawFetch(`${SITE}${path}`, { ...options, headers: ajaxHeaders(options.headers) });
@@ -100,7 +132,7 @@ export async function ajaxGet(path, options = {}) {
     }
 }
 
-/** POST d'une route /ajax/ (ex: /ajax/episode/player). null si échec. */
+/** POST d'une route /ajax/ coflix (ex: /ajax/episode/player). null si échec. */
 export async function ajaxPost(path, body, options = {}) {
     try {
         const res = await rawFetch(`${SITE}${path}`, {

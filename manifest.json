@@ -175,7 +175,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Catalogue anime VF/VOSTFR de french-anime (backend coflix.wiki, lecteurs Vidzy/Luluvdo/Uqload).",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
