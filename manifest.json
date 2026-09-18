@@ -419,6 +419,31 @@
       "supportsExternalPlayer": false
     },
     {
+      "id": "voiranime-one",
+      "name": "VoirAnime.one",
+      "description": "Animes VF et VOSTFR en streaming sur VoirAnime.one (catalogue riche : TV, films, OVA, 24k épisodes).",
+      "version": "0.1.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/voiranime-one.js",
+      "enabled": true,
+      "logo": "https://voiranime.one/assets/voiranime-logo.svg",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "catalogs": [],
+      "stremioAddonsConfig": {
+        "addonCatalogs": []
+      }
+    },
+    {
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",

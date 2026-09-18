@@ -2518,6 +2518,10 @@ export async function resolveStream(stream, depth = 0) {
                     if (strictUrl) {
                         let extractedUrl = strictUrl[1] || strictUrl[0];
                         if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
+                        // Dé-échapper les slashes JSON (ex: VK "https:\/\/host\/..." dans le player)
+                        if (extractedUrl.includes(String.fromCharCode(92))) {
+                            extractedUrl = extractedUrl.split(String.fromCharCode(92) + '/').join('/').split(String.fromCharCode(92) + 'u002F').join('/');
+                        }
 
                         const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
 
@@ -2538,6 +2542,10 @@ export async function resolveStream(stream, depth = 0) {
                     if (looseUrl) {
                         let extractedUrl = looseUrl[0];
                         if (extractedUrl.startsWith('//')) extractedUrl = "https:" + extractedUrl;
+                        // Dé-échapper les slashes JSON (ex: VK "https:\/\/host\/..." dans le player)
+                        if (extractedUrl.includes(String.fromCharCode(92))) {
+                            extractedUrl = extractedUrl.split(String.fromCharCode(92) + '/').join('/').split(String.fromCharCode(92) + 'u002F').join('/');
+                        }
 
                         const isInvalidExtension = extractedUrl.match(/\.(css|js|html|php|jpg|png|gif|svg)(\?.*)?$/i);
 
