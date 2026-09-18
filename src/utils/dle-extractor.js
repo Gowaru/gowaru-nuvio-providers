@@ -3,7 +3,7 @@
  * Centralizes duplicate code between site-specific extractors.
  */
 import cheerio from 'cheerio-without-node-native'
-import { resolveStream, safeFetch, isBudgetExhausted, PROVIDER_BUDGET_MS } from './resolvers.js'
+import { resolveStream, safeFetch, isBudgetExhausted, PROVIDER_BUDGET_MS, normalizeLanguageCode } from './resolvers.js'
 
 const ARM_API = "https://arm.haglund.dev/api/v2";
 const CINEMATA_API = "https://v3-cinemeta.strem.io";
@@ -108,6 +108,38 @@ async function getAbsoluteEpisodeFromTmdb(tmdbId, season, episode) {
       return absolute;
     }
     if (n < targetSeason) total += parseInt(s.episode_count, 10) || 0;
+  }
+  return null;
+}
+
+/**
+ * Reverse-map d'un numéro d'épisode absolu vers (saison, épisode) TMDB.
+ * Utilisé quand l'app TV envoie season=null + numéro absolu (IDs anime
+ * kitsu:/mal:/anilist:) : les providers à pages par saison ont besoin du
+ * couple (S,E) pour chercher la bonne page.
+ *
+ * @returns {Promise<{season:number, episode:number}|null>}
+ */
+export async function getSeasonEpisodeFromAbsolute(tmdbId, absoluteEpisode) {
+  if (!tmdbId || !absoluteEpisode || absoluteEpisode <= 0) return null;
+  try {
+    const res = await syncFetch(`${TMDB_API_BASE}/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`);
+    if (!res) return null;
+    const data = parseMaybeTruncatedJson(await res.text());
+    const seasons = data && Array.isArray(data.seasons) ? data.seasons : null;
+    if (!seasons) return null;
+    let total = 0;
+    for (const s of seasons) {
+      const n = parseInt(s && s.season_number, 10);
+      if (!isFinite(n) || n <= 0) continue; // saison 0 = spéciaux
+      const count = parseInt(s.episode_count, 10) || 0;
+      if (absoluteEpisode <= total + count) {
+        return { season: n, episode: absoluteEpisode - total };
+      }
+      total += count;
+    }
+  } catch (e) {
+    console.warn(`[ArmSync] Reverse-map failed: ${e.message}`);
   }
   return null;
 }
@@ -295,12 +327,16 @@ export async function detectSubType(tmdbId, mediaType) {
 export function toStream(url, language, providerName, siteUrl, opts = {}) {
   const { quality, subType, title, size } = opts;
   const origin = (() => { try { return new URL(url).origin } catch { return siteUrl } })()
+  // Normaliser la langue vers les codes app (fr/en/multi/ja) : les valeurs
+  // brutes "VF"/"VOSTFR" sont classées "Unknown" dans les filtres/tri NuvioTV.
+  // Le label d'origine reste visible dans name/title pour l'affichage.
+  const langCode = normalizeLanguageCode(language) || language
   const result = {
     name: `${providerName} (${language})`,
     title: title || `[${language}] ${providerName}${quality && quality !== 'HD' ? ` [${quality}]` : ''}`,
     url,
     quality: quality || 'HD',
-    language,
+    language: langCode,
     headers: {
       Referer: `${origin}/`,
       Origin: origin,
@@ -328,7 +364,19 @@ export function toStream(url, language, providerName, siteUrl, opts = {}) {
 export async function resolveTargetEpisodes(tmdbId, mediaType, season, episode, opts = {}) {
   const { startTime, budgetMs = PROVIDER_BUDGET_MS } = opts
   const epNum = parseInt(episode) || 1
-  if (mediaType !== 'tv' || !tmdbId || !season) return [epNum]
+  if (mediaType !== 'tv' || !tmdbId) return [epNum]
+
+  // Convention app TV (IDs anime kitsu:/mal:/anilist:) : season=null + numéro
+  // ABSOLU. Dans ce cas, on ne peut pas calculer l'absolu via (S,E) ; on
+  // reverse-map au contraire l'absolu vers (S,E) TMDB pour que les providers
+  // à pages par saison puissent chercher la bonne page.
+  if (season == null || season === '') {
+    // Les consommateurs matchent des numéros d'épisodes dans les pages :
+    // renvoyer la saison dans le tableau induirait des faux matches. Les
+    // providers à pages par saison utilisent getSeasonEpisodeFromAbsolute()
+    // pour récupérer les coordonnées (S,E) et affiner leur sélection.
+    return [epNum]
+  }
 
   const episodes = [epNum]
 

@@ -5,7 +5,7 @@
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
-import { resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { resolveTargetEpisodes, getSeasonEpisodeFromAbsolute } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const BASE_URL = "https://ipv4.vostfree.ws";
@@ -164,6 +164,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType === 'series' ? 'tv' : mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
   const episodeStrs = targetEpisodes.map(String);
 
+  // Convention app TV : season=null + épisode absolu (IDs anime kitsu:/mal:).
+  // Reverse-map l'absolu vers (S,E) TMDB pour orienter le tri vers la page de
+  // la bonne saison (sinon la 1re page au numéro d'épisode correspondant gagne,
+  // souvent la S1 → faux contenu pour les requêtes absolues S2+).
+  let absoluteSeasonHint = null;
+  if (mediaType !== 'movie' && (season == null || season === '')) {
+      const se = await getSeasonEpisodeFromAbsolute(tmdbId, parseInt(episode, 10));
+      if (se) absoluteSeasonHint = se.season;
+  }
+  // Saison effective pour le tri/filtrage : hint absolu (requête TV absolue)
+  // sinon saison demandée. Déclaré ici — utilisé par le deep fallback ET le tri.
+  const seasonForRanking = absoluteSeasonHint != null ? absoluteSeasonHint : effectiveSeason;
+
   let allMatches = [];
   const seenUrls = new Set();
 
@@ -199,7 +212,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   
   // Fix #2: Fallback saison optimisé — 1 seule requête stratégique au lieu de 9+
   if (!isAborted(signal) && mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
-      const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === effectiveSeason);
+      const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === seasonForRanking);
       
       if (!hasExplicitSeasonMatch) {
           // Trouver le meilleur titre pour la recherche : 1er titre purement ASCII (ex: anglais/français)
@@ -207,7 +220,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                             titlesOrdered.find(t => t.length >= MIN_QUERY_LENGTH) || 
                             titlesOrdered[0];
           if (mainTitle && mainTitle.length >= MIN_QUERY_LENGTH) {
-              const seasonQuery = `${mainTitle} Saison ${effectiveSeason}`;
+              const seasonQuery = `${mainTitle} Saison ${seasonForRanking}`;
               console.log(`[Vostfree] Season fallback: "${seasonQuery}"`);
               const batch = await searchAnime(seasonQuery, { signal });
               if (batch && batch.length > 0) {
@@ -215,7 +228,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                       if (!seenUrls.has(m.url)) {
                           seenUrls.add(m.url);
                           const mSn = getSeasonNumber(m.title + ' ' + m.url);
-                          if (mSn === null || mSn === effectiveSeason) {
+                          if (mSn === null || mSn === seasonForRanking) {
                               allMatches.push(m);
                           }
                       }
@@ -228,12 +241,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   if (allMatches.length === 0) return [];
 
   // Prioritize results that match the season if explicitly mentioned
-  if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
+  if (mediaType === 'tv' && seasonForRanking !== undefined && seasonForRanking !== null) {
       allMatches = allMatches.sort((a, b) => {
           const aSn = getSeasonNumber(a.title + ' ' + a.url);
           const bSn = getSeasonNumber(b.title + ' ' + b.url);
-          const hasA = aSn === effectiveSeason;
-          const hasB = bSn === effectiveSeason;
+          const hasA = aSn === seasonForRanking;
+          const hasB = bSn === seasonForRanking;
           if (hasA && !hasB) return -1;
           if (!hasA && hasB) return 1;
           return 0;
@@ -266,12 +279,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       }
 
       // Skip results explicitly for a different season, unless no match has the target season
-      if (mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null) {
+      if (mediaType === 'tv' && seasonForRanking !== undefined && seasonForRanking !== null) {
           const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-          if (matchSn !== null && matchSn !== effectiveSeason) {
+          if (matchSn !== null && matchSn !== seasonForRanking) {
               const hasCorrectSeason = allMatches.some(m => {
                   const sn = getSeasonNumber(m.title + ' ' + m.url);
-                  return sn !== null && sn === effectiveSeason;
+                  return sn !== null && sn === seasonForRanking;
               });
               if (hasCorrectSeason) continue;
           }

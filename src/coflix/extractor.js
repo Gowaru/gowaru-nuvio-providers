@@ -61,7 +61,11 @@ function cleanTitleForSlug(title) {
         .replace(/^-+|-+$/g, '');
 }
 
-/** Score mots communs (mots ≥ 3 lettres, demi-poids sur 3). */
+/** Score mots communs (mots ≥ 3 lettres, demi-poids sur 3).
+ * Garde stricte anti-homonymes/spin-offs : tout mot significatif du slug (≥4
+ * lettres, non générique) doit être expliqué par la requête (exact, préfixe ou
+ * extension) — sinon score 0. Ex : requête "physical 100" vs slug
+ * "physical-100-mexique-saison-1-vf" → "mexique" inexpliqué → rejet. */
 function titleScore(candidate, query) {
     const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const qw = norm(query).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
@@ -69,6 +73,12 @@ function titleScore(candidate, query) {
     const cw = new Set(norm(candidate).split(/[^a-z0-9]+/));
     let hits = 0;
     for (const w of qw) if (cw.has(w)) hits += (w.length === 3 ? 0.5 : 1);
+    const GENERIC = /(vf|vostfr|truefrench|french|saison|season|film|movie|episode|complete|integral|integrale|oav|special)$/;
+    for (const w of cw) {
+        if (w.length < 4 || GENERIC.test(w)) continue;
+        if (qw.some((q) => q === w || (q.length >= 4 && (w.startsWith(q) || q.startsWith(w))))) continue;
+        return 0; // mot étranger à la requête → pas ce titre
+    }
     return hits / qw.length;
 }
 
