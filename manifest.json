@@ -149,7 +149,7 @@
       "id": "coflix",
       "name": "Coflix",
       "description": "Films et séries en streaming VF/VOSTFR sur Coflix.wiki (API AJAX, lecteurs Vidzy/Uqload/FSVID).",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -172,7 +172,7 @@
       "id": "french-anime",
       "name": "French-Anime",
       "description": "Catalogue anime VF/VOSTFR de french-anime (backend coflix.wiki, lecteurs Vidzy/Luluvdo/Uqload).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
