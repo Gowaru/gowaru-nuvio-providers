@@ -587,7 +587,7 @@
       "id": "waveanime",
       "name": "WaveAnime",
       "description": "Animes en DASH (MPD) via waveanime.fr — lecture native ExoPlayer/Media3 (Android), non supporté par AVPlayer (iOS).",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
