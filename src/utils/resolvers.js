@@ -49,7 +49,8 @@ export const BUILD_ID = BUILD_HASH;
  * @type {boolean}
  */
 const HAS_NATIVE_CRYPTO = typeof crypto !== 'undefined' &&
-    typeof crypto.subtle !== 'undefined';
+    typeof crypto.subtle !== 'undefined' &&
+    typeof TextEncoder !== 'undefined' && typeof TextDecoder !== 'undefined';
 
 // Node.js crypto module (available in test/dev, not in QuickJS)
 let _nodeCrypto = null;

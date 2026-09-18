@@ -242,7 +242,11 @@ function hasSeriesEpisodes(html) {
 function findSeriesEpisodes(html, season, episode) {
   if (!html) return []
 
-  const targetSeason = parseInt(season, 10)
+  // Convention app TV : season=null + numéro d'épisode (IDs anime absolus,
+  // ex. kitsu:12345:5). On tolère alors n'importe quelle saison portant ce
+  // numéro d'épisode (les listes du site sont courtes, risque de faux
+  // cross-saison négligeable face à un 0 systématique).
+  const seasonFilter = parseInt(season, 10)
   const targetEpisode = parseInt(episode, 10)
   const buttons = html.match(/<button\b[^>]*class=["'][^"']*\bsd-ep\b[^"']*["'][^>]*>/gi) || []
 
@@ -252,7 +256,8 @@ function findSeriesEpisodes(html, season, episode) {
     const e = el.match(/data-ep=["']?(\d+)/i)
     const src = el.match(/data-src=["']([^"']+)["']/i)
     if (!s || !e || !src) continue
-    if (parseInt(s[1], 10) !== targetSeason || parseInt(e[1], 10) !== targetEpisode) continue
+    if (Number.isFinite(seasonFilter) && parseInt(s[1], 10) !== seasonFilter) continue
+    if (parseInt(e[1], 10) !== targetEpisode) continue
 
     const langRaw = (el.match(/data-lang=["']([^"']+)["']/i)?.[1] || '').toLowerCase()
     const lang = langRaw === 'vostfr' ? 'VOSTFR' : langRaw === 'vf' ? 'VF' : (langRaw ? langRaw.toUpperCase() : 'VF')
@@ -450,7 +455,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
   const variants = findSeriesEpisodes(html, season, episode)
   if (!variants.length) {
-    console.log(`[Streamzo] Épisode S${season}E${episode} absent de ${pageUrl}`)
+    console.log(`[Streamzo] Épisode ${season != null ? `S${season}` : 'abs'}E${episode} absent de ${pageUrl}`)
     return []
   }
 

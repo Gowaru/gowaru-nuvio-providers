@@ -11,7 +11,7 @@
  */
 
 import { fetchJson, fetchText, setCurrentSignal } from './http.js';
-import { isBudgetExhausted, isAborted } from '../utils/resolvers.js';
+import { isBudgetExhausted, isAborted, normalizeLanguageCode } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { normalize } from '../utils/dle-extractor.js';
 
@@ -432,7 +432,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         url: manifestUrl,
         quality,
         type: 'dash',
-        language: 'VOSTFR',
+        language: normalizeLanguageCode('VOSTFR') || 'fr',
         headers: {
             'Referer': `${BASE_URL}/`,
             'Origin': BASE_URL,
