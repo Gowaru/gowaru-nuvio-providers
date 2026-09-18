@@ -441,6 +441,26 @@
       }
     },
     {
+      "id": "voiranime-be",
+      "name": "VoiranimeBE",
+      "description": "Simulcast anime VOSTFR ultra-frais sur voiranime.be (One Piece, Bleach TYBW, Mushoku S3) — catalogue piloté par sitemap, lecteurs m3u8.",
+      "version": "0.1.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/voiranime-be.js",
+      "enabled": true,
+      "logo": "https://voiranime.be/wp-content/uploads/2024/01/favicon.png",
+      "contentLanguage": [
+        "ja"
+      ],
+      "categories": [
+        "anime",
+        "tv"
+      ]
+    },
+    {
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
