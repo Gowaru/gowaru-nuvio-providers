@@ -40,6 +40,23 @@ function scoreSearchResult(result, query) {
     for (const w of qWords) {
         if (tWords.includes(w)) score += 12;
     }
+    // Bonus position : en cas d'égalité, préférer le titre COMMENÇANT par la
+    // requête ("gate : au-delà..." > "steins gate" pour la requête "gate").
+    if (t.startsWith(q)) score += 25;
+    // Pénalité anti-homonymes : mots significatifs du titre ABSENTS de la
+    // requête (ex: "steins gate" contient "steins" étranger à "jujutsu kaisen").
+    // Douce (−15, plafonnée) : le site ajoute souvent un sous-titre JP légitime
+    // ("Demon Slayer: Kimetsu no Yaiba") qu'il ne faut pas rejeter.
+    const GENERIC = /^(saison|season|part|movie|film|oav|special|episode|complet|integrale|cour|2nd|3rd|4th|the|la|le|les|de|du|no|no2)$/;
+    if (qWords.length >= 2) {
+        let extra = 0;
+        for (const w of tWords) {
+            if (w.length < 4 || GENERIC.test(w)) continue;
+            if (qWords.some(qw => qw === w || (qw.length >= 4 && (w.startsWith(qw) || qw.startsWith(w))))) continue;
+            extra++;
+        }
+        score -= Math.min(extra * 15, 45);
+    }
     return score;
 }
 
@@ -275,8 +292,41 @@ async function fetchEpisodeMeta(epId, signal) {
  * avec lang = 'fra' pour les épisodes récents, 'fr' pour les anciens.
  */
 async function buildSubtitles(epMeta, epId, signal) {
-    if (!epMeta || !epMeta.subtitles) return [];
-    const lang = (epMeta.created_timestamp || 0) >= SUBTITLE_LANG_THRESHOLD ? 'fra' : 'fr';
+    if (!epMeta) return [];
+    // Source réelle : epMeta.tracks[] (type 'subtitle', flags 0=full / 1=forced,
+    // language = segment d'URL 'fra'/'fr'). L'ancien code lisait epMeta.subtitles
+    // (n'existe pas dans la réponse de /api/episodes/:id) → 0 sous-titre depuis
+    // toujours.
+    if (Array.isArray(epMeta.tracks) && epMeta.tracks.length > 0) {
+        const subtitles = [];
+        for (const t of epMeta.tracks) {
+            if (!t || t.type !== 'subtitle') continue;
+            if (isAborted(signal)) break;
+            const langSeg = t.language === 'fr' ? 'fr' : 'fra';
+            const flag = t.flags === 1 ? 'forced' : 'full';
+            const assUrl = `${BASE_URL}/playback/subtitles/${epId}-${langSeg}-${flag}.ass`;
+            let url = assUrl;
+            try {
+                const assText = await fetchText(assUrl, { signal });
+                const vtt = assToVtt(assText);
+                if (vtt) url = vttToDataUri(vtt);
+            } catch (e) {
+                // fallback : garder l'URL ASS d'origine
+            }
+            subtitles.push({
+                url,
+                language: 'fra',
+                name: flag === 'forced' ? 'Français (forced)' : 'Français',
+                headers: {
+                    'Referer': `${BASE_URL}/`,
+                    'Origin': BASE_URL,
+                },
+            });
+        }
+        return subtitles;
+    }
+    // Fallback legacy (epMeta.subtitles présent sur d'anciennes réponses)
+    if (!epMeta.subtitles) return [];
     const subtitles = [];
     const tracks = [
         { key: 'fra_full', flag: 'full', label: 'Français' },
@@ -311,7 +361,8 @@ async function buildSubtitles(epMeta, epId, signal) {
  * Qualité depuis le manifest DASH
  * -------------------------------------------------------------------------- */
 
-async function parseMpdQuality(manifestUrl, signal) {
+async function parseMpd(manifestUrl, signal) {
+    const out = { quality: 'HD', audioLangs: [] };
     try {
         const text = await fetchText(manifestUrl, { signal });
         // Extraire toutes les hauteurs vidéo (width/height sur les Representations)
@@ -322,15 +373,26 @@ async function parseMpdQuality(manifestUrl, signal) {
             const h = parseInt(m[1], 10);
             if (h > maxH) maxH = h;
         }
-        if (maxH >= 2160) return '2160p';
-        if (maxH >= 1080) return '1080p';
-        if (maxH >= 720) return '720p';
-        if (maxH >= 480) return '480p';
-        if (maxH > 0) return `${maxH}p`;
-        return 'HD';
+        if (maxH >= 2160) out.quality = '2160p';
+        else if (maxH >= 1080) out.quality = '1080p';
+        else if (maxH >= 720) out.quality = '720p';
+        else if (maxH >= 480) out.quality = '480p';
+        else if (maxH > 0) out.quality = `${maxH}p`;
+        // Langues audio déclarées (lang="fr" / lang="jp" sur les AdaptationSet audio)
+        // Extraction par tag complet : robuste à l'ordre des attributs
+        const tagRe = /<AdaptationSet\b[^>]*>/g;
+        const seen = new Set();
+        while ((m = tagRe.exec(text)) !== null) {
+            const tag = m[0];
+            if (!/contentType="audio"/.test(tag)) continue;
+            const lm = /(?:^|\s)lang="([^"]+)"/.exec(tag);
+            const l = lm ? lm[1].toLowerCase() : '';
+            if (l && !seen.has(l)) { seen.add(l); out.audioLangs.push(l); }
+        }
     } catch (e) {
-        return 'HD';
+        // manifestes injoignables : défauts conservés
     }
+    return out;
 }
 
 /** --------------------------------------------------------------------------
@@ -411,8 +473,9 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     const manifestUrl = `${BASE_URL}/playback/${ep.id}/manifest.mpd`;
 
-    // MPD quality + Episode meta séquentiels (QuickJS: fetch synchrone)
-    const quality = await parseMpdQuality(manifestUrl, signal);
+    // MPD quality + audio langs + Episode meta séquentiels (QuickJS: fetch synchrone)
+    const mpd = await parseMpd(manifestUrl, signal);
+    const quality = mpd.quality;
     const epMeta = (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS))
         ? await fetchEpisodeMeta(ep.id, signal)
         : null;
@@ -426,21 +489,35 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // Le label affiche la saison/épisode demandée (S2E1) plutôt que la numérotation
     // interne du site (S1E27) quand le fallback continu est utilisé
     const epLabel = mediaType === 'movie' ? '' : ` S${usedContinuous ? (parseInt(season, 10) || 1) : (ep.season_number || season || 1)}E${usedContinuous ? (parseInt(episode, 10) || 1) : (ep.number || episode || 1)}`;
-    const stream = {
+    const baseHeaders = {
+        'Referer': `${BASE_URL}/`,
+        'Origin': BASE_URL,
+    };
+
+    // FIX : un SEUL manifest DASH porte TOUTES les pistes audio (fr + jp) —
+    // l'ancien code étiquetait le flux VOSTFR et rendait la VF invisible dans
+    // les filtres/tri de l'app. On déclare chaque piste audio détectée dans le
+    // MPD comme un stream dédié (VF en premier). NB: la sélection effective de
+    // la piste audio reste à ExoPlayer (préférence de langue de l'appareil).
+    const hasFr = mpd.audioLangs.some(l => l === 'fr' || l === 'fra');
+    const hasJp = mpd.audioLangs.some(l => l === 'jp' || l === 'jpn' || l === 'ja');
+    const variants = [];
+    if (hasFr) variants.push({ langCode: 'fr', label: 'VF' });
+    if (hasJp) variants.push({ langCode: 'ja', label: 'VOSTFR' });
+    if (variants.length === 0) variants.push({ langCode: normalizeLanguageCode('VOSTFR') || 'fr', label: 'VOSTFR' });
+
+    const streams = variants.map(v => ({
         name: 'WaveAnime',
-        title: `${serie.title}${epLabel}`,
+        title: `${serie.title}${epLabel} [${v.label}]`,
         url: manifestUrl,
         quality,
         type: 'dash',
-        language: normalizeLanguageCode('VOSTFR') || 'fr',
-        headers: {
-            'Referer': `${BASE_URL}/`,
-            'Origin': BASE_URL,
-        },
-    };
+        language: v.langCode,
+        headers: baseHeaders,
+    }));
     // Sous-titres externes Stremio-style (additif, ignoré si le runtime ne les lit pas)
-    if (subtitles.length > 0) stream.subtitles = subtitles;
+    if (subtitles.length > 0) streams[0].subtitles = subtitles;
 
-    console.log(`[WaveAnime] Stream: ${stream.quality} dash | ${serie.title}${epLabel}${subtitles.length > 0 ? ` | ${subtitles.length} sub(s)` : ''}`);
-    return [stream];
+    console.log(`[WaveAnime] ${streams.length} stream(s): ${quality} dash | ${serie.title}${epLabel} | audio: ${mpd.audioLangs.join('+') || '?'}${subtitles.length > 0 ? ` | ${subtitles.length} sub(s)` : ''}`);
+    return streams;
 }
