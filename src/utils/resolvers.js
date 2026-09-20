@@ -974,7 +974,20 @@ async function expandSingleStreamQualities(stream, options = {}) {
         if (cached) return cached;
     }
 
-    const res = await safeFetch(url, { headers: stream.headers || {} });
+    // Cap strict : ce fetch ne sert qu'au parsing qualité — un CDN lent ne
+    // doit pas consommer le budget 60 s de l'app (fallback : quality HD,
+    // type hls, ligne suivante). Double protection : timeout safeFetch
+    // (AbortSignal.timeout, si dispo) + withTimeout (Promise.race, partout).
+    let res = null;
+    try {
+        res = await withTimeout(
+            safeFetch(url, { headers: stream.headers || {}, timeout: options.manifestTimeout || 12000 }),
+            options.manifestTimeout || 12000,
+            'manifest-parse',
+        );
+    } catch (e) {
+        res = null;
+    }
     if (!res) {
         return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD'), type: 'hls' }];
     }
