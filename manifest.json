@@ -461,6 +461,26 @@
       ]
     },
     {
+      "id": "jetanimes",
+      "name": "Jetanimes",
+      "description": "Animes VOSTFR sur Jetanimes (gros catalogue, ~25 000 épisodes, joueurs VidHide/Byse résolus nativement, sans crypto côté runtime).",
+      "version": "0.1.1",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/jetanimes.js",
+      "enabled": true,
+      "logo": "https://on.jetanimes.com/wp-content/uploads/2023/11/cropped-favicon-32x32-1.png",
+      "contentLanguage": [
+        "ja"
+      ],
+      "categories": [
+        "anime",
+        "tv"
+      ]
+    },
+    {
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
