@@ -1,4 +1,4 @@
-import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords } from '../utils/dle-extractor.js';
+import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
 import { safeFetch, resolveStream, isBudgetExhausted, isAborted, getScraperSettings } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
@@ -215,6 +215,9 @@ function scoreCard(card, queryTitle, mediaType, season) {
     let score = 0;
     if (t === q) score += 120;
     if (hay.includes(q)) {
+      // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token
+      // significatif AVANT la requête ("steins", "new"…) rejette le match.
+      if (hasForeignLeadingTokens(hay, q)) return 0
       score += 70;
       // Pénalité anti-fan-edit : utilise uniquement le titre (pas l'href)
       // pour éviter les faux négatifs dus aux mots parasites dans l'URL
@@ -222,7 +225,7 @@ function scoreCard(card, queryTitle, mediaType, season) {
       const extra = countExtraWords(t, q);
       if (extra > 0) score -= Math.min(extra * 25, 55);
     }
-    if (q.includes(t)) score += 40;
+    if (q.includes(t) && q.startsWith(t + ' ')) score += 40;
     const qWords = new Set(q.split(' ').filter(w => w && w.length > 2 && !['the','and','for','with','from','des','les','une','dans','sur','via','de','du','la','le'].includes(w)));
     const tWords = new Set(hay.split(' ').filter(Boolean));
     let common = 0;

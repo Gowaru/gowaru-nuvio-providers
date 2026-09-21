@@ -232,9 +232,32 @@ export const TITLE_NOISE_WORDS = new Set([
   'vostfr', 'vost', 'vf', 'vff', 'vfq', 'vo', 'french', 'streaming',
 ])
 
+// Tokens génériques non discriminants (années, suffixes qualité/serveur,
+// numéros) — utilisés par la garde anti-homonymes pour ignorer un token
+// étranger sans valeur sémantique (ex: "the-new-gate-2024" pour "Gate").
+export const GENERIC_TOKENS = new Set([
+  ...TITLE_NOISE_WORDS,
+  'hd', 'hd1', 'hd2', 'hd3', 'hd4', 'sd', 'fhd', '4k',
+  'saison', 'season', 'episode', 'partie', 'part',
+  '2020', '2021', '2022', '2023', '2024', '2025', '2026',
+])
+
+/**
+ * Tokens du résultat absents de la requête (brut, sans filtrage).
+ * Utilisé par la garde anti-homonymes sur les positions AVANT la requête.
+ */
+export function extraTokens(resultTitle, searchTitle) {
+  const qWords = new Set((searchTitle || '').split(/\s+/).filter(Boolean))
+  return (resultTitle || '').split(/\s+/).filter(w => w && !qWords.has(w))
+}
+
 /**
  * Compte les mots significatifs du résultat absents de la requête.
  * Ignore les nombres, mots courts et mots structurels (TITLE_NOISE_WORDS).
+ * NB : les positions ne sont PAS distinguées — un homonyme
+ * ("the-new-gate" pour "gate") compte autant qu'un sous-titre légitime
+ * ("gate - au-delà de la porte") ; la garde positionnelle est faite par
+ * hasForeignLeadingTokens() dans scoreMatch.
  */
 export function countExtraWords(resultTitle, searchTitle) {
   const qWords = new Set((searchTitle || '').split(/\s+/).filter(w => w.length > 2))
@@ -244,9 +267,47 @@ export function countExtraWords(resultTitle, searchTitle) {
 }
 
 /**
+ * Garde anti-homonymes (bug "Gate" → Steins;Gate) — les deux directions :
+ *
+ * 1. Requête ⊂ résultat : l'occurrence doit être à la frontière de mots
+ *    ("gate" collé dans "stargate"/"gates" = homonyme) et tout token
+ *    significatif AVANT elle rejette ("steins" ⊂ "steins gate",
+ *    "new" ⊂ "the new gate"). Les tokens APRÈS sont des sous-titres
+ *    légitimes ("gate - au-delà de la porte") et ne comptent pas.
+ * 2. Résultat ⊂ requête : légitime seulement si le résultat EST le début
+ *    de la requête ("frieren" ⊂ "frieren beyond…"); au milieu ("gate" ⊂
+ *    "steins gate") = homonyme.
+ *
+ * Les tokens génériques (stop-words, années, hdN) sont ignorés.
+ * Retourne true si le résultat est un homonyme à rejeter.
+ */
+export function hasForeignLeadingTokens(resultTitle, searchTitle) {
+  const nt = normalize(searchTitle)
+  const nr = normalize(resultTitle)
+  if (!nt || !nr || nr === nt) return false
+  const isTokStart = (s, i) => i === 0 || s.charCodeAt(i - 1) === 32
+  const isTokEnd = (s, i) => i >= s.length || s.charCodeAt(i) === 32
+  const isGeneric = w => w.length > 2 && !/^\d+$/.test(w) && !GENERIC_TOKENS.has(w)
+
+  let pos = nr.indexOf(nt)
+  if (pos !== -1) {
+    if (!(isTokStart(nr, pos) && isTokEnd(nr, pos + nt.length))) return true
+    const leading = nr.slice(0, pos).trim().split(/\s+/).filter(Boolean)
+    return leading.some(isGeneric)
+  }
+  pos = nt.indexOf(nr)
+  if (pos !== -1) {
+    return !(pos === 0 && isTokEnd(nt, pos + nr.length))
+  }
+  return false
+}
+
+/**
  * Score a search result against the query title
  * Pénalise les mots significatifs en trop (ex: "Naruto Shippuden Kai" pour
  * une requête "Naruto" → -25/mot extra) pour éviter les fan-edits dérivées.
+ * Garde anti-homonymes : un token significatif AVANT la requête ("steins" ⊂
+ * "steins-gate", "new" ⊂ "the-new-gate", "star" ⊂ "stargate") rejette le match.
  */
 export function scoreMatch(resultTitle, searchTitle, SCORES) {
   const nt = normalize(searchTitle)
@@ -254,6 +315,7 @@ export function scoreMatch(resultTitle, searchTitle, SCORES) {
   if (!nt || !nr) return 0
   if (nr === nt) return SCORES.EXACT_MATCH
   if (nr.includes(nt) || nt.includes(nr)) {
+    if (hasForeignLeadingTokens(nr, nt)) return 0
     const extra = countExtraWords(nr, nt)
     if (extra > 0) {
       return Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)

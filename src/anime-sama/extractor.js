@@ -7,6 +7,7 @@ import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import { toSlug, stripSeasonSuffix, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://anime-sama.to";
@@ -53,6 +54,10 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
 
     let score = 0;
     if (t === q) return 100;
+    // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token significatif
+    // AVANT la requête ("steins", "new"…) rejette le match. Les tokens
+    // génériques (années, hdN, stop-words) sont ignorés par la garde.
+    if ((t.includes(q) || q.includes(t)) && hasForeignLeadingTokens(t, q)) return 0;
     if (t.includes(q)) score += 60;
     else if (q.includes(t)) {
         // Penalize short results that are substrings of the query

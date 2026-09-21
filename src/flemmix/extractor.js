@@ -2,7 +2,7 @@ import { fetchText, fetchJson, setCurrentSignal } from './http.js'
 import cheerio from 'cheerio-without-node-native'
 import { resolveStream, safeFetch, withTimeout, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
-import { toStream, normalize, resolveTargetEpisodes, stripSeasonSuffix, countExtraWords } from '../utils/dle-extractor.js'
+import { toStream, normalize, resolveTargetEpisodes, stripSeasonSuffix, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, SELECTORS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, ANIME_GENRE_ID, ANIME_KEYWORDS,
@@ -27,6 +27,9 @@ function scoreMatch(resultTitle, searchTitle) {
 
   if (cleanNr === cleanNt || nr === nt) return SCORES.EXACT_MATCH
   if (nr.includes(nt) || nt.includes(nr)) {
+    // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token significatif
+    // AVANT la requête ("steins", "the gates"…) rejette le match.
+    if (hasForeignLeadingTokens(nr, nt)) return 0
     // Pénalité anti-fan-edit : chaque mot significatif en trop dans le résultat
     // (ex: requête "Naruto" → résultat "Naruto Shippuden Kai" = 2 mots extra)
     // retire -25. Empêche les recuts/dérivés de battre le titre exact.

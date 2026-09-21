@@ -13,7 +13,7 @@
 import { fetchJson, fetchText, setCurrentSignal } from './http.js';
 import { isBudgetExhausted, isAborted, normalizeLanguageCode } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { normalize } from '../utils/dle-extractor.js';
+import { normalize, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://waveanime.fr";
 const BUDGET_MS = 45000;
@@ -33,6 +33,9 @@ function scoreSearchResult(result, query) {
     if (!q || !t) return 0;
     let score = 0;
     if (t === q) score += 100;
+    // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token significatif
+    // AVANT la requête ("steins", "new"…) rejette le match.
+    else if ((t.includes(q) || q.includes(t)) && hasForeignLeadingTokens(t, q)) score = 0;
     else if (t.includes(q) || q.includes(t)) score += 60;
 
     const qWords = q.split(/\s+/).filter(w => w.length > 2);

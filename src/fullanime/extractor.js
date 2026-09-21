@@ -9,6 +9,7 @@
 import { fetchText, setCurrentSignal } from './http.js';
 import { safeFetch, resolveStream, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://www.fullanime.fr";
 const BUDGET_MS = 40000;
@@ -201,8 +202,12 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
                 const slugNorm = normalize(r.slug);
                 let score = 0;
                 if (slugNorm === queryNorm) score += 100;
-                else if (slugNorm.includes(queryNorm)) score += 80;
-                else if (queryNorm.includes(slugNorm)) score += 60;
+                // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token
+                // significatif AVANT la requête ("steins", "new"…) rejette.
+                else if (slugNorm.includes(queryNorm) && !hasForeignLeadingTokens(slugNorm, queryNorm)) score += 80;
+                // Branche inverse : le slug doit être un PRÉFIXE ordonné de la
+                // requête ("frieren" ⊂ "frieren beyond…" ✓, "gate" ⊂ "steins gate" ✗).
+                else if (queryNorm.includes(slugNorm) && (queryNorm.startsWith(slugNorm + ' '))) score += 60;
                 if (seasonStr && r.slug.includes(seasonStr.replace(' ', '-'))) score += 50;
                 if (season && season > 1 && !r.slug.includes('saison')) score -= 30;
                 return { ...r, score };

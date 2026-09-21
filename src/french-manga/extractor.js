@@ -2,7 +2,7 @@ import cheerio from 'cheerio-without-node-native'
 import { fetchText, fetchJson, ajaxSearch, setCurrentSignal } from './http.js'
 import { resolveStream, safeFetch, isAborted, sleep } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
-import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords } from '../utils/dle-extractor.js'
+import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES, ensureMirror,
@@ -37,6 +37,9 @@ function scoreMatch(resultTitle, searchTitle) {
 
   if (cleanNr === cleanNt || nr === nt) return SCORES.EXACT_MATCH
   if (nr.includes(nt) || nt.includes(nr)) {
+    // Garde anti-homonymes (bug "Gate" → THE NEW GATE) : un token
+    // significatif AVANT la requête ("new", "steins"…) rejette le match.
+    if (hasForeignLeadingTokens(nr, nt)) return 0
     // Pénalité anti-fan-edit : chaque mot significatif en trop dans le résultat
     // (ex: requête "Naruto" → résultat "Naruto Shippuden Kai" = 2 mots extra)
     // retire -25. Empêche les recuts/dérivés de battre le titre exact.
@@ -46,10 +49,18 @@ function scoreMatch(resultTitle, searchTitle) {
     // Ex: "Invincible" (1 mot) → "Became Invincible" (9+ mots extra) → reject
     const qWordCount = cleanNt.split(/\s+/).length
     if (qWordCount <= 3 && extra >= 3) return 0
+    let score = 0
     if (extra > 0) {
-      return Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
+      score = Math.max(SCORES.STRONG_MATCH - Math.min(extra * 25, SCORES.STRONG_MATCH - SCORES.MIN_MATCH - 5), 0)
+    } else {
+      score = SCORES.STRONG_MATCH
     }
-    return SCORES.STRONG_MATCH
+    // Bonus position : la page commence par la requête ("gate au-dela…") bat
+    // un homonyme où la requête est noyée (même convention voiranime-homes).
+    const nrToks = cleanNr.split(/\s+/)
+    const ntToks = cleanNt.split(/\s+/)
+    if (nrToks[0] === ntToks[0]) score += 30
+    return score
   }
 
   const words = cleanNt.split(/\s+/).filter(w => w.length > 2)
@@ -252,7 +263,7 @@ async function trySearchFallback(allResults, tmdbTitles) {
       // (ex: "Naruto Shippuden Kai" pour la requête "Naruto") n'est pas accepté,
       // même s'il contient la requête en sous-chaîne.
       const extra = countExtraWords(nr, nt)
-      if ((nr === nt || nr.includes(nt) || nt.includes(nr)) && extra < 2) {
+      if ((nr === nt || nr.includes(nt) || nt.includes(nr)) && extra < 2 && !hasForeignLeadingTokens(nr, nt)) {
         const apiData = await fetchEpisodeApi(config.newsId)
         if (apiData && apiData.versions) {
           return {

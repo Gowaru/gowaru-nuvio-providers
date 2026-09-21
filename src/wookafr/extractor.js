@@ -1,8 +1,8 @@
-import { fetchText, postForm, fetchJson, setCurrentSignal } from './http.js'
+import { fetchText, postForm, fetchJson, setCurrentSignal, probeFinalUrl } from './http.js'
 import cheerio from 'cheerio-without-node-native'
 import { resolveStream, safeFetch, withTimeout, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
-import { toStream, toSlug, normalize, resolveTargetEpisodes, stripSeasonSuffix, countExtraWords } from '../utils/dle-extractor.js'
+import { toStream, toSlug, normalize, resolveTargetEpisodes, stripSeasonSuffix, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
 import {
   SITE, SELECTORS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, ANIME_GENRE_ID, ANIME_KEYWORDS,
@@ -29,6 +29,9 @@ function scoreMatch(resultTitle, searchTitle) {
 
   if (cleanNr === cleanNt || nr === nt) return SCORES.EXACT_MATCH
   if (nr.includes(nt) || nt.includes(nr)) {
+    // Garde anti-homonymes (bug "Gate" → Steins;Gate/Stargate) : un token
+    // significatif AVANT la requête ("steins", "star", "new"…) rejette.
+    if (hasForeignLeadingTokens(nr, nt)) return 0
     // Pénalité anti-fan-edit : chaque mot significatif en trop dans le résultat
     // (ex: requête "Naruto" → résultat "Naruto Shippuden Kai" = 2 mots extra)
     // retire -25. Empêche les recuts/dérivés de battre le titre exact.
@@ -411,9 +414,16 @@ async function searchViaWpApi(query, mediaType) {
 
   for (const post of posts) {
     const slug = post.slug || '';
-    const title = (post.title?.rendered || '').toLowerCase();
-    const queryLower = query.toLowerCase();
-    const isRelevant = title.includes(queryLower) || slug.includes(toSlug(query));
+    const rawTitle = post.title?.rendered || '';
+    const stripAcc = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // Match EXACT par tokens (garde anti-homonymes) : "gate" ne doit pas
+    // matcher "gate24-the-border" / "stargate" via un substring. Chaque token
+    // de la requête doit exister tel quel dans le slug ou le titre.
+    const qTokens = toSlug(query).split('-').filter(w => w.length > 2);
+    const slugTokens = new Set(slug.split('-'));
+    const titleTokens = new Set(stripAcc(rawTitle).split(/[^a-z0-9]+/).filter(Boolean));
+    const isRelevant = qTokens.length > 0 &&
+      qTokens.every(t => slugTokens.has(t) || titleTokens.has(t));
     if (!isRelevant) continue;
 
     // Essayer série puis film (le lien WP est toujours le bon chemin)
@@ -444,12 +454,17 @@ async function searchViaWpApi(query, mediaType) {
 async function probeSlug(slug, type, domain) {
   const path = type === 'series' ? `/streaming/series/${slug}/` : `/streaming/${slug}/`
   const url = `${domain}${path}`
-  try {
-    await fetchText(url, { method: 'HEAD', timeout: 3000 })
-    return { url, title: slug.replace(/-/g, ' '), isSeries: type === 'series' }
-  } catch {
+  // Garde anti-homonymes par redirection (bug "Gate" → GATE24: The Border) :
+  // le site 301 les slugs inconnus vers une page existante. On exige que
+  // l'URL finale corresponde EXACTEMENT au slug demandé.
+  const finalUrl = await probeFinalUrl(url, { timeout: 3000 })
+  if (!finalUrl) return null
+  const wanted = `${domain}${path}`
+  if (finalUrl.replace(/\/$/, '') !== wanted.replace(/\/$/, '')) {
+    console.log(`[Wookafr] Slug probe redirected: ${slug} → ${finalUrl} (homonyme, rejeté)`)
     return null
   }
+  return { url, title: slug.replace(/-/g, ' '), isSeries: type === 'series' }
 }
 
 function cleanSlug(slug) {
