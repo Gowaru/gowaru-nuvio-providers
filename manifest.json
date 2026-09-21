@@ -29,7 +29,7 @@
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.55",
+      "version": "1.1.56",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -53,7 +53,7 @@
       "id": "animesama-co",
       "name": "AnimeSama.co (DLE Mirror)",
       "description": "Animes VF et VOSTFR en streaming sur AnimeSama.co (miroir DLE).",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -219,7 +219,7 @@
       "id": "flemmix",
       "name": "Flemmix",
       "description": "Films et séries en streaming VF/VOSTFR sur Flemmix (serveurs signés multi-sources, recherche bilingue FR/EN).",
-      "version": "1.0.10",
+      "version": "1.0.11",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -243,7 +243,7 @@
       "id": "french-manga",
       "name": "French-Manga",
       "description": "Animes VF et VOSTFR en streaming sur French-Manga.net",
-      "version": "1.0.12",
+      "version": "1.0.13",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -267,7 +267,7 @@
       "id": "voiranime-homes",
       "name": "VoirAnime.homes",
       "description": "Animes VF et VOSTFR en streaming sur voiranime.homes (moteur DLE, miroir French-Manga).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -291,7 +291,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (recherche exacte par tag TMDB, réglages langue/hosts — Mobile uniquement).",
-      "version": "2.0.19",
+      "version": "2.0.20",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -341,7 +341,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.17",
+      "version": "1.0.18",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -484,7 +484,7 @@
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
-      "version": "1.0.13",
+      "version": "1.0.14",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -580,7 +580,7 @@
       "id": "wookafr",
       "name": "Wookafr",
       "description": "Films et séries en streaming VF/VOSTFR sur Wookafr (multi-serveurs via lecteurvideo, uqload, vidmoly…).",
-      "version": "1.0.11",
+      "version": "1.0.12",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -627,7 +627,7 @@
       "id": "waveanime",
       "name": "WaveAnime",
       "description": "Animes en DASH (MPD) via waveanime.fr — lecture native ExoPlayer/Media3 (Android), non supporté par AVPlayer (iOS).",
-      "version": "0.0.6",
+      "version": "0.0.7",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -746,7 +746,7 @@
       "id": "fullanime",
       "name": "FullAnime",
       "description": "Anime VOSTFR en streaming sur fullanime.fr. Catalogue large avec 3 hébergeurs par épisode.",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

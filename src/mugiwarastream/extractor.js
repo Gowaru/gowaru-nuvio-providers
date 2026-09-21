@@ -1,7 +1,7 @@
 import { fetchText, BASE, setCurrentSignal } from './http.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { resolveStream, safeJson, isAborted } from '../utils/resolvers.js';
-import { normalize } from '../utils/dle-extractor.js';
+import { normalize, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
 function extractPushContent(html) {
@@ -351,7 +351,9 @@ async function findSlugs(titles) {
             const nr = normalize(r.anime);
             let score = 0;
             if (nr === nt) score = 100;
-            else if (nr.includes(nt) || nt.includes(nr)) score = 80;
+            // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token
+            // significatif AVANT la requête ("steins", "new"…) rejette le match.
+            else if ((nr.includes(nt) || nt.includes(nr)) && !hasForeignLeadingTokens(nr, nt)) score = 80;
             else if (r.matched && normalize(r.matched) === nt) score = 90;
             else if (r.anime) {
                 const ra = normalize(r.anime);

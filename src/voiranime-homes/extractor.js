@@ -2,7 +2,7 @@ import cheerio from 'cheerio-without-node-native'
 import { fetchText, fetchJson, ajaxSearch, setCurrentSignal } from './http.js'
 import { resolveStream, safeFetch, isAborted } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
-import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords } from '../utils/dle-extractor.js'
+import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES,
@@ -267,7 +267,7 @@ async function trySearchFallback(allResults, tmdbTitles) {
       // (ex: "Naruto Shippuden Kai" pour la requête "Naruto") n'est pas accepté,
       // même s'il contient la requête en sous-chaîne.
       const extra = countExtraWords(nr, nt)
-      if ((nr === nt || nr.includes(nt) || nt.includes(nr)) && extra < 2) {
+      if ((nr === nt || nr.includes(nt) || nt.includes(nr)) && extra < 2 && !hasForeignLeadingTokens(nr, nt)) {
         const apiData = await fetchEpisodeApi(config.newsId)
         if (apiData && apiData.versions) {
           return {

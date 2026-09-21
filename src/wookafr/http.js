@@ -147,3 +147,27 @@ export async function fetchJson(url, options = {}) {
   try { return JSON.parse(text) }
   catch { return null }
 }
+
+/**
+ * GET et retourne l'URL FINALE après redirections. Utilisé par les probes
+ * de slug : un 301 "gate/ → gate24-the-border/" (fusion de pages côté site)
+ * ne doit PAS valider l'existence du slug demandé — sinon on sert le mauvais
+ * show (bug "Gate" → GATE24: The Border).
+ */
+export async function probeFinalUrl(url, options = {}) {
+  const signal = options.signal || _currentSignal
+  if (isAborted(signal)) return null
+  try {
+    const res = await safeFetch(url, {
+      headers: HEADERS,
+      timeout: options.timeout ?? 5000,
+      signal,
+    })
+    if (!res) return null
+    // Drain le body pour libérer la connexion (petit read, le HEAD-like).
+    try { await res.text() } catch { /* ignore */ }
+    return res.url || url
+  } catch {
+    return null
+  }
+}
