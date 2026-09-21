@@ -78,6 +78,49 @@ export function parseSearchCards(html) {
   return out;
 }
 
+// ── Catalogue complet via sitemap.xml ──────────────────────────────────────
+// La search SSR IGNORE le paramètre q (renvoie les « populaires ») : un titre
+// absent de cette liste serait introuvable bien que sa fiche existe.
+// /sitemap.xml liste TOUTES les fiches (~2670, 55 KB) → titre dérivé du slug.
+
+let sitemapCache = { at: 0, items: null };
+const SITEMAP_TTL = 24 * 60 * 60 * 1000;
+
+function titleFromSlug(slug) {
+  return String(slug || '')
+    .replace(/^\d+-/, '')
+    .replace(/-/g, ' ')
+    .trim();
+}
+
+export function parseSitemapItems(xml) {
+  if (!xml) return [];
+  const out = [];
+  const seen = new Set();
+  const re = /<loc>https:\/\/animesite\.fr\/(\d{3,}-[a-z0-9-]+)<\/loc>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const slug = m[1];
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    const title = titleFromSlug(slug);
+    if (title.length >= 2) out.push({ idAndSlug: slug, title });
+  }
+  return out;
+}
+
+async function getFullCatalog(signal) {
+  if (sitemapCache.items && Date.now() - sitemapCache.at < SITEMAP_TTL) return sitemapCache.items;
+  const xml = await fetchPage(`${BASE}/sitemap.xml`, { signal });
+  const items = parseSitemapItems(xml);
+  if (items.length > 0) {
+    sitemapCache = { at: Date.now(), items };
+    console.log(`[${PROVIDER}] Sitemap: ${items.length} fiches`);
+    return items;
+  }
+  return null;
+}
+
 function scoreCard(card, queryNorm) {
   const nTitle = normalize(card.title);
   if (!nTitle || !queryNorm) return 0;
@@ -96,6 +139,7 @@ async function findSeries(titles, signal) {
   const candidates = (titles || []).filter(Boolean).slice(0, 6);
   let best = null;
   let bestScore = 0;
+  // 1) Search SSR (rapide ; ignore q mais couvre les populaires)
   for (const title of candidates) {
     if (isBudgetExhausted(Date.now(), BUDGET_MS - RESERVE_MS)) break;
     const q = normalize(title);
@@ -111,6 +155,24 @@ async function findSeries(titles, signal) {
       }
     }
     if (bestScore >= 120) break;
+  }
+  if (best && bestScore >= 70) return best;
+  // 2) Fallback : scoring du catalogue complet (sitemap) sur TOUTES les
+  //    variantes TMDB — la search SSR ne couvre pas les titres peu populaires.
+  const catalog = await getFullCatalog(signal);
+  if (catalog) {
+    for (const title of (titles || []).filter(Boolean).slice(0, 8)) {
+      const q = normalize(title);
+      if (!q || q.length < 3) continue;
+      for (const item of catalog) {
+        const s = scoreCard(item, q);
+        if (s > bestScore) {
+          bestScore = s;
+          best = item;
+        }
+      }
+      if (bestScore >= 120) break;
+    }
   }
   return best && bestScore >= 70 ? best : null;
 }
@@ -166,7 +228,7 @@ function hostLabel(url) {
   return 'Player';
 }
 
-/** Langue depuis la page sibnet (le <title> est en cyrillique → scan global). */
+/** Langue + titre réel depuis la page sibnet (le <title> est en cyrillique). */
 async function sibnetProbe(embedUrl) {
   const meta = await safeFetch(embedUrl, {
     headers: { Referer: 'https://video.sibnet.ru/', 'User-Agent': USER_AGENT },
@@ -175,14 +237,32 @@ async function sibnetProbe(embedUrl) {
   const text = meta ? await meta.text().catch(() => '') : '';
   if (!text) return {};
   const epM = /episode\s*(\d+)/i.exec(text);
+  const ogM = /og:title" content="([^"]*)"/.exec(text);
   return {
     vostfr: /vostfr/i.test(text),
     vf: /(^|[^a-z])vf([^a-z]|$)/i.test(text),
     ep: epM ? parseInt(epM[1], 10) : null,
+    ogTitle: ogM ? decodeEntities(ogM[1]).trim() : '',
+    hasSrc: /player\.src\s*\(\s*\[\s*\{\s*src\s*:\s*["'][^"']+\.mp4/.test(text),
   };
 }
 
-async function resolveEmbed(embed, episode, signal) {
+/**
+ * Garde anti-contenu-étranger : sibnet héberge parfois sous le même embed un
+ * show totalement différent (« The Demon Hunter » pour « Gate ») ou une vidéo
+ * morte (og:title vide, pas de player.src). Un titre distant sans AUCUN token
+ * commun avec la série = contenu étranger → rejet.
+ */
+function isForeignSibnet(ogTitle, seriesTitle) {
+  const ot = normalize(ogTitle);
+  const st = normalize(seriesTitle);
+  if (!ot) return true; // vidéo morte (og:title vide)
+  const stTokens = st.split(/\s+/).filter((w) => w.length >= 3);
+  if (stTokens.length === 0) return false; // série trop courte pour valider
+  return !stTokens.some((w) => ot.includes(w));
+}
+
+async function resolveEmbed(embed, episode, signal, seriesTitle) {
   const embedUrl = embed.url;
   const host = embed.host;
   if (!embedUrl || typeof embedUrl !== 'string') return null;
@@ -190,6 +270,14 @@ async function resolveEmbed(embed, episode, signal) {
     let langHint = null;
     if (/sibnet/.test(embedUrl)) {
       const probe = await sibnetProbe(embedUrl);
+      if (probe.hasSrc === false) {
+        console.log(`[${PROVIDER}] sibnet: vidéo morte (pas de player.src) → rejet`);
+        return null;
+      }
+      if (isForeignSibnet(probe.ogTitle, seriesTitle || '')) {
+        console.log(`[${PROVIDER}] sibnet: contenu étranger "${probe.ogTitle || '(sans titre)'}" ≠ série → rejet`);
+        return null;
+      }
       if (probe.vostfr) langHint = 'VOSTFR';
       else if (probe.vf) langHint = 'VF';
       if (probe.ep && probe.ep !== episode) {
@@ -313,7 +401,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   for (const embed of embeds) {
     if (isBudgetExhausted(startTime, BUDGET_MS)) break;
     if (isAborted(signal)) break;
-    const result = await resolveEmbed(embed, e, signal);
+    const result = await resolveEmbed(embed, e, signal, series.title);
     if (!result || !result.url) continue;
     const langLabel = result.langHint || embed.langHint || 'VF';
     const langCode = normalizeLanguageCode(langLabel) || 'fr';
