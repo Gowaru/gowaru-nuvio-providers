@@ -481,6 +481,29 @@
       ]
     },
     {
+      "id": "senanimes",
+      "name": "SenAnimes",
+      "description": "Animes VF et VOSTFR sur SenAnimes (Next.js, 150 titres : séries multi-saisons + films, sources HLS/MP4 CDN maison, mapping des saisons via JSON-LD).",
+      "version": "0.1.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/senanimes.js",
+      "enabled": true,
+      "logo": "https://senanimes.com/icon.svg",
+      "contentLanguage": [
+        "fr",
+        "ja"
+      ],
+      "categories": [
+        "anime",
+        "tv",
+        "movies"
+      ]
+    },
+    {
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
