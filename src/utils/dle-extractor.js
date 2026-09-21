@@ -293,11 +293,19 @@ export function hasForeignLeadingTokens(resultTitle, searchTitle) {
   if (pos !== -1) {
     if (!(isTokStart(nr, pos) && isTokEnd(nr, pos + nt.length))) return true
     const leading = nr.slice(0, pos).trim().split(/\s+/).filter(Boolean)
+    // Construction génitive romaji « <modificateur> no <titre> » : la tête
+    // nominale EST le titre recherché (« Sousou no Frieren » ≡ « Frieren »,
+    // « Shingeki no Kyojin » ≡ « Kyojin ») — même œuvre, pas un homonyme.
+    if (leading.length > 0 && leading[leading.length - 1] === 'no') return false
     return leading.some(isGeneric)
   }
   pos = nt.indexOf(nr)
   if (pos !== -1) {
-    return !(pos === 0 && isTokEnd(nt, pos + nr.length))
+    if (pos === 0 && isTokEnd(nt, pos + nr.length)) return false
+    // Requête génitive « <mod> no <titre> » vs résultat nu : même œuvre.
+    const leadQ = nt.slice(0, pos).trim().split(/\s+/).filter(Boolean)
+    if (leadQ.length > 0 && leadQ[leadQ.length - 1] === 'no') return false
+    return true
   }
   return false
 }

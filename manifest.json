@@ -504,6 +504,52 @@
       ]
     },
     {
+      "id": "adkami",
+      "name": "ADKami",
+      "description": "Animes VF et VOSTFR sur ADKami (sondage multi-variantes des pages épisode, lecteurs tiers vidmoly/dood/voe/byse/streamtape, offsets saisonniers TMDB).",
+      "version": "0.1.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/adkami.js",
+      "enabled": true,
+      "logo": "https://www.adkami.com/favicon.ico",
+      "contentLanguage": [
+        "fr",
+        "ja"
+      ],
+      "categories": [
+        "anime",
+        "tv",
+        "movies"
+      ]
+    },
+    {
+      "id": "animesite",
+      "name": "AnimeSite",
+      "description": "Animes VF et VOSTFR sur AnimeSite (Next.js/RSC, API /api/stream/token par cookies de session, 5 lecteurs par épisode : Sibnet, Byse HLS, Sendvid ; validation saison/épisode via JSON-LD).",
+      "version": "0.1.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/animesite.js",
+      "enabled": true,
+      "logo": "https://animesite.fr/anime-site-icon.ico",
+      "contentLanguage": [
+        "fr",
+        "ja"
+      ],
+      "categories": [
+        "anime",
+        "tv",
+        "movies"
+      ]
+    },
+    {
       "id": "voiranime-rip",
       "name": "VoirAnime.rip",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.rip (site DLE).",
