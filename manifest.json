@@ -529,8 +529,8 @@
     {
       "id": "animesite",
       "name": "AnimeSite",
-      "description": "Animes VF et VOSTFR sur AnimeSite (Next.js/RSC, API /api/stream/token par cookies de session, 5 lecteurs par épisode : Sibnet, Byse HLS, Sendvid ; validation saison/épisode via JSON-LD).",
-      "version": "0.1.0",
+      "description": "Animes VF et VOSTFR sur AnimeSite (Next.js/RSC, API /api/stream/token par cookies de session, 5 lecteurs par épisode : Sibnet, Byse HLS, Sendvid ; validation saison/épisode via JSON-LD, catalogue complet via sitemap).",
+      "version": "0.1.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
