@@ -1,6 +1,6 @@
 /**
- * french-anime - Built from src/french-anime/
- * Generated: 2026-10-09T19:06:31.705791693Z
+ * aniverse - Built from src/aniverse/
+ * Generated: 2026-10-09T19:06:31.521791466Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -90,25 +90,6 @@ var __provider = (() => {
       const check = () => Date.now() >= target ? resolve() : Promise.resolve().then(check);
       check();
     });
-  }
-  function createRateLimiter(baseDelay = 1e3, jitterPercent = 0.3) {
-    const lastRequest = /* @__PURE__ */ new Map();
-    return function rateLimit2(domain) {
-      return __async(this, null, function* () {
-        const now = Date.now();
-        const last = lastRequest.get(domain) || 0;
-        const elapsed = now - last;
-        const jitter = baseDelay * jitterPercent * (Math.random() * 2 - 1);
-        const delay = Math.max(0, baseDelay + jitter - elapsed);
-        if (delay > 0) {
-          yield sleep(delay);
-        }
-        lastRequest.set(domain, Date.now());
-      });
-    };
-  }
-  function createProviderRateLimiter(baseDelay = 200, jitterPercent = 0.4) {
-    return createRateLimiter(baseDelay, jitterPercent);
   }
   function createProvider(name, extractFn, opts = {}) {
     const PROVIDER_TIMEOUT = safeConfig(`NUVIO_TIMEOUT_${name.toUpperCase().replace(/[^a-z0-9]/g, "_")}`, opts.timeout || PROVIDER_BUDGET_MS);
@@ -201,6 +182,10 @@ var __provider = (() => {
         return null;
       }
     });
+  }
+  function isBudgetExhausted(startTime, budgetMs) {
+    const elapsed = Date.now() - (startTime || 0);
+    return elapsed > (budgetMs || TV_BUDGET_MS);
   }
   function createAbortController() {
     try {
@@ -1595,7 +1580,7 @@ var __provider = (() => {
       return __spreadProps(__spreadValues({}, stream), { isDirect: false });
     });
   }
-  var PROVIDER_BUDGET_MS, MAX_STREAMS_PER_PROVIDER, MAX_SAFE_FETCH_BODY_BYTES, RUNTIME_TRUNCATION_SUFFIX, BUILD_HASH, HAS_NATIVE_CRYPTO, _nodeCrypto, HEADERS, USER_AGENT, BASE_HEADERS, _atob, CODEC_PREFERENCE, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, LANGUAGE_CODE_MAP, DEFAULT_FETCH_TIMEOUT, KNOWN_HOST_NAMES, NEVER_CORRECT_DOMAINS, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
+  var PROVIDER_BUDGET_MS, MAX_STREAMS_PER_PROVIDER, MAX_SAFE_FETCH_BODY_BYTES, RUNTIME_TRUNCATION_SUFFIX, BUILD_HASH, HAS_NATIVE_CRYPTO, _nodeCrypto, HEADERS, USER_AGENT, BASE_HEADERS, _atob, CODEC_PREFERENCE, TV_BUDGET_MS, STRICT_QUALITY_TIERS, DEFAULT_QUALITY_TIER, CODEC_PRIORITY, manifestCache, MANIFEST_CACHE_TTL, FETCH_CACHE_TTL, fetchCache, LANGUAGE_CODE_MAP, DEFAULT_FETCH_TIMEOUT, KNOWN_HOST_NAMES, NEVER_CORRECT_DOMAINS, peeledUrls, AD_IFRAME_PATTERNS, VIDEO_IFRAME_SCORE, BASE_URL_FORBIDDEN_PATTERN;
   var init_resolvers = __esm({
     "src/utils/resolvers.js"() {
       PROVIDER_BUDGET_MS = 45e3;
@@ -1622,6 +1607,7 @@ var __provider = (() => {
         }
       };
       CODEC_PREFERENCE = ["AV1", "H.265", "H.264", "VP9"];
+      TV_BUDGET_MS = 5e4;
       STRICT_QUALITY_TIERS = [2160, 1080, 720, 480, 360, 240];
       DEFAULT_QUALITY_TIER = 720;
       CODEC_PRIORITY = {
@@ -1751,227 +1737,71 @@ var __provider = (() => {
     }
   });
 
-  // src/french-anime/http.js
-  function setCurrentSignal(signal) {
-    _currentSignal = signal;
-  }
-  function ajaxHeaders(extra = {}) {
-    return __spreadValues(__spreadProps(__spreadValues({}, HEADERS2), {
-      "Accept": "application/json, text/javascript, */*; q=0.01",
-      "Referer": `${SITE}/`,
-      "X-Requested-With": "XMLHttpRequest"
-    }), extra);
-  }
-  function isBlockPage(text) {
+  // src/aniverse/http.js
+  function isChallenge(text) {
     if (!text) return false;
-    return text.includes("Just a moment") || text.includes("cf-browser-verification") || text.includes("Attention Required") || text.includes("BotBlocker");
+    return text.includes("Just a moment") || text.includes("cf-browser-verification") || text.includes("Attention Required") || text.includes("error code: 1010");
   }
-  function rawFetch(_0) {
+  function fetchApi(_0) {
     return __async(this, arguments, function* (url, options = {}) {
-      const signal = options.signal || _currentSignal;
-      if (isAborted(signal)) throw new Error("AbortError: Request aborted");
-      yield rateLimit("french-anime.com");
-      const { headers, method, body, timeout } = options;
-      return safeFetch(url, __spreadProps(__spreadValues({
-        headers: headers || HEADERS2,
-        method: method || "GET"
-      }, body ? { body } : {}), {
-        timeout: timeout || 12e3,
-        redirect: "follow",
-        signal
-      }));
-    });
-  }
-  function fetchFaText(_0) {
-    return __async(this, arguments, function* (url, options = {}) {
-      for (let attempt = 0; attempt <= 1; attempt++) {
-        let res = null;
+      const { timeout = 12e3, signal } = options;
+      const headers = __spreadValues(__spreadValues({}, BASE_HEADERS2), options.headers || {});
+      for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+        if (isAborted(signal)) return null;
         try {
-          res = yield rawFetch(url, options);
-          if (!res) throw new Error(`no-response for ${url}`);
-          if (res.status === 403 || res.status === 503) {
-            const err = new Error(`Blocked (CF) for ${url}`);
-            err.blocked = true;
-            throw err;
+          const res = yield safeFetch(url, { headers, timeout, signal, redirect: "follow" });
+          if (!res) return null;
+          const status = typeof res.status === "number" ? res.status : 0;
+          if (status === 404 || status === 422) return null;
+          if (status === 429 && attempt < RETRY_DELAYS.length) {
+            yield sleep(RETRY_DELAYS[attempt] * 2);
+            continue;
           }
-          if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
           const text = yield res.text();
-          if (isBlockPage(text)) {
-            const err = new Error(`Blocked (CF page) for ${url}`);
-            err.blocked = true;
-            throw err;
+          if (isChallenge(text) && attempt < RETRY_DELAYS.length) {
+            yield sleep(RETRY_DELAYS[attempt]);
+            continue;
           }
-          return text;
+          if (status < 200 || status >= 300) return null;
+          if (!text || text.length === 0) return null;
+          try {
+            const json = JSON.parse(text);
+            if (json == null) return null;
+            return json;
+          } catch (e) {
+            return null;
+          }
         } catch (e) {
-          if (isAborted(options.signal || _currentSignal)) throw e;
-          if (e.blocked) throw e;
-          if (attempt < 1) yield sleep(800);
-          else throw e;
+          if (isAborted(signal)) return null;
+          if (attempt < RETRY_DELAYS.length) yield sleep(RETRY_DELAYS[attempt]);
+          else return null;
         }
       }
       return null;
     });
   }
-  function fetchTextSafe(_0) {
-    return __async(this, arguments, function* (url, options = {}) {
-      try {
-        return yield fetchFaText(url, options);
-      } catch (e) {
-        if (isAborted(options.signal || _currentSignal)) throw e;
-        return null;
-      }
-    });
-  }
-  function ajaxGet(_0) {
-    return __async(this, arguments, function* (path, options = {}) {
-      try {
-        const res = yield rawFetch(`${SITE}${path}`, __spreadProps(__spreadValues({}, options), { headers: ajaxHeaders(options.headers) }));
-        if (!res || !res.ok) return null;
-        const text = yield res.text();
-        if (!text || text.length > 1048576) return null;
-        try {
-          return JSON.parse(text);
-        } catch (e) {
-          return null;
-        }
-      } catch (e) {
-        if (isAborted(options.signal || _currentSignal)) throw e;
-        return null;
-      }
-    });
-  }
-  function ajaxPost(_0, _1) {
-    return __async(this, arguments, function* (path, body, options = {}) {
-      try {
-        const res = yield rawFetch(`${SITE}${path}`, __spreadProps(__spreadValues({}, options), {
-          method: "POST",
-          body: typeof body === "string" ? body : new URLSearchParams(body).toString(),
-          headers: __spreadProps(__spreadValues({}, ajaxHeaders(options.headers)), { "Content-Type": "application/x-www-form-urlencoded" })
-        }));
-        if (!res || !res.ok) return null;
-        const text = yield res.text();
-        if (!text || text.length > 1048576) return null;
-        try {
-          return JSON.parse(text);
-        } catch (e) {
-          return null;
-        }
-      } catch (e) {
-        if (isAborted(options.signal || _currentSignal)) throw e;
-        return null;
-      }
-    });
-  }
-  var _currentSignal, FA_SITE, SITE, rateLimit, HEADERS2;
-  var init_http = __esm({
-    "src/french-anime/http.js"() {
-      init_resolvers();
-      _currentSignal = null;
-      FA_SITE = "https://french-anime.com";
-      SITE = "https://coflix.wiki";
-      rateLimit = createProviderRateLimiter();
-      HEADERS2 = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
-      };
-    }
-  });
-
-  // src/utils/cache.js
-  function cleanCache(tag) {
-    const now = Date.now();
-    const expired = [];
-    for (const [key, entry] of cache) {
-      if (now - entry.ts >= entry.ttl) {
-        expired.push(key);
-      }
-    }
-    for (const key of expired) {
-      cache.delete(key);
-    }
-    if (cache.size > DEFAULT_MAX_SIZE) {
-      const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts);
-      const toRemove = sorted.slice(0, cache.size - DEFAULT_MAX_SIZE);
-      for (const [key] of toRemove) {
-        cache.delete(key);
-      }
-    }
-    if (expired.length > 0) {
-      console.log(`[${tag}] Cache: ${expired.length} expir\xE9es supprim\xE9es, ${cache.size} entr\xE9es restantes`);
-    }
-    lastCleanup = now;
-  }
-  function createCache(namespace, tag, opts = {}) {
-    const logTag = tag || namespace.toUpperCase();
-    const prefix = `${namespace}_`;
-    const successTtl = opts.successTtl || DEFAULT_SUCCESS_TTL;
-    const failureTtl = opts.failureTtl || DEFAULT_FAILURE_TTL;
-    const maxSize = opts.maxSize || DEFAULT_MAX_SIZE;
-    function cacheKey(raw) {
-      return `${prefix}${String(raw).replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "")}`;
-    }
-    function cacheGet(key) {
-      const entry = cache.get(key);
-      if (!entry) return void 0;
-      const now = Date.now();
-      if (now - entry.ts >= entry.ttl) {
-        cache.delete(key);
-        return void 0;
-      }
-      return entry.data;
-    }
-    function cacheSet(key, data, success = true) {
-      if (Date.now() - lastCleanup > CLEANUP_INTERVAL) {
-        cleanCache(logTag);
-      }
-      if (cache.size >= maxSize) {
-        const toRemove = Math.ceil(maxSize * 0.2);
-        const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, toRemove);
-        for (const [k] of sorted) cache.delete(k);
-      }
-      cache.set(key, {
-        data,
-        ts: Date.now(),
-        ttl: success ? successTtl : failureTtl,
-        success
-      });
-    }
-    return function withCache2(_0, _1) {
-      return __async(this, arguments, function* (rawKey, fn, opts2 = {}) {
-        const key = cacheKey(rawKey);
-        if (!opts2.bypass) {
-          const cached = cacheGet(key);
-          if (cached !== void 0) {
-            console.log(`[${logTag}] Cache HIT: ${rawKey.slice(0, 60)}`);
-            return cached;
-          }
-        }
-        console.log(`[${logTag}] Cache MISS: ${rawKey.slice(0, 60)}`);
-        try {
-          const result = yield fn();
-          const isSuccess = result != null;
-          cacheSet(key, result, isSuccess);
-          if (!isSuccess) {
-            console.log(`[${logTag}] Cache: negative result cached (30s TTL)`);
-          }
-          return result;
-        } catch (error) {
-          console.warn(`[${logTag}] Cache: error, not caching: ${error == null ? void 0 : error.message}`);
-          throw error;
-        }
-      });
+  function cdnHeaders(authHeader) {
+    const h = {
+      Referer: `${BASE}/`,
+      "User-Agent": USER_AGENT2
     };
+    if (authHeader) h.Authorization = authHeader;
+    return h;
   }
-  var DEFAULT_SUCCESS_TTL, DEFAULT_FAILURE_TTL, DEFAULT_MAX_SIZE, CLEANUP_INTERVAL, cache, lastCleanup;
-  var init_cache = __esm({
-    "src/utils/cache.js"() {
-      DEFAULT_SUCCESS_TTL = 3e5;
-      DEFAULT_FAILURE_TTL = 3e4;
-      DEFAULT_MAX_SIZE = 150;
-      CLEANUP_INTERVAL = 6e4;
-      cache = /* @__PURE__ */ new Map();
-      lastCleanup = Date.now();
+  var BASE, USER_AGENT2, BASE_HEADERS2, RETRY_DELAYS;
+  var init_http = __esm({
+    "src/aniverse/http.js"() {
+      init_resolvers();
+      BASE = "https://aniverse.fr";
+      USER_AGENT2 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+      BASE_HEADERS2 = {
+        "User-Agent": USER_AGENT2,
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+        Referer: `${BASE}/`,
+        Origin: BASE
+      };
+      RETRY_DELAYS = [800, 2e3];
     }
   });
 
@@ -2334,440 +2164,577 @@ var __provider = (() => {
     }
   });
 
-  // src/french-anime/extractor.js
-  function isDeadUrl(url) {
-    const u = (url || "").toLowerCase();
-    return DEAD_HOSTS.some((d) => u.includes(d));
-  }
-  function isExcludedSlug(slug) {
-    const s = String(slug || "").toLowerCase();
-    return EXCLUDED_SLUGS.some((x) => s.includes(x));
-  }
-  function normalizeMediaType(mediaType) {
-    const t = String(mediaType || "").toLowerCase();
-    if (t === "movie" || t === "film") return "movie";
-    return "tv";
-  }
-  function cleanTitleForSlug(title) {
-    return String(title || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, "and").replace(/[’'`]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  }
-  function titleScore(candidate, query) {
-    const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    const qw = norm(query).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
-    if (!qw.length) return 0;
-    const cw = new Set(norm(candidate).split(/[^a-z0-9]+/));
-    let hits = 0;
-    for (const w of qw) if (cw.has(w)) hits += w.length === 3 ? 0.5 : 1;
-    const GENERIC = /(vf|vostfr|truefrench|french|saison|season|film|movie|episode|complete|integral|integrale|oav|special)$/;
-    for (const w of cw) {
-      if (w.length < 4 || GENERIC.test(w)) continue;
-      if (qw.some((q) => q === w || q.length >= 4 && (w.startsWith(q) || q.startsWith(w)))) continue;
-      return 0;
+  // src/utils/cache.js
+  function cleanCache(tag) {
+    const now = Date.now();
+    const expired = [];
+    for (const [key, entry] of cache) {
+      if (now - entry.ts >= entry.ttl) {
+        expired.push(key);
+      }
     }
-    return hits / qw.length;
-  }
-  function slugSeason(slug) {
-    const s = String(slug || "").toLowerCase();
-    let m = s.match(/saison-(\d+)/);
-    if (m) return parseInt(m[1], 10);
-    m = s.replace(/-(french|vf|vostfr|truefrench)$/, "").match(/-(\d+)$/);
-    if (m) return parseInt(m[1], 10);
-    return null;
-  }
-  function parseEpsBlocks(html) {
-    if (!html) return /* @__PURE__ */ new Map();
-    const out = /* @__PURE__ */ new Map();
-    const blockMatch = html.match(/<div[^>]*class="eps"[^>]*>([\s\S]*?)<\/div>/i);
-    const body = blockMatch ? blockMatch[1] : html;
-    const re = /(\d+)!(https?:\/\/[^\s<]+)/g;
-    let m;
-    while ((m = re.exec(body)) !== null) {
-      const num = parseInt(m[1], 10);
-      if (!num || out.has(num)) continue;
-      out.set(num, m[2].split(",").map((u) => u.trim()).filter(Boolean));
+    for (const key of expired) {
+      cache.delete(key);
     }
-    return out;
+    if (cache.size > DEFAULT_MAX_SIZE) {
+      const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts);
+      const toRemove = sorted.slice(0, cache.size - DEFAULT_MAX_SIZE);
+      for (const [key] of toRemove) {
+        cache.delete(key);
+      }
+    }
+    if (expired.length > 0) {
+      console.log(`[${tag}] Cache: ${expired.length} expir\xE9es supprim\xE9es, ${cache.size} entr\xE9es restantes`);
+    }
+    lastCleanup = now;
   }
-  function searchDirect(_0) {
-    return __async(this, arguments, function* (query, opts = {}) {
-      try {
-        const html = yield fetchFaText(`${FA_SITE}/index.php?do=search`, __spreadValues({
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": `${FA_SITE}/`
-          },
-          body: `do=search&subaction=search&story=${encodeURIComponent(query)}`,
-          timeout: PAGE_TIMEOUT
-        }, opts));
-        if (!html) return [];
-        const out = [];
-        const seen = /* @__PURE__ */ new Set();
-        const re = /href="https?:\/\/french-anime\.com\/animes-(vf|vostfr)\/(\d+)-([^"\/]+?)\.html"[^>]*(?:title="([^"]*)")?[^>]*>([^<]*)/gi;
-        let m;
-        while ((m = re.exec(html)) !== null) {
-          const cat = m[1].toLowerCase();
-          const id = m[2];
-          const slug = m[3];
-          const key = `${cat}/${slug}`;
-          if (seen.has(key) || isExcludedSlug(slug)) continue;
-          seen.add(key);
-          const label = (m[4] || m[5] || "").trim();
-          out.push({ slug, id, cat, label });
-        }
-        return out;
-      } catch (e) {
-        if (isAborted(opts.signal || null)) throw e;
-        if (e.blocked) throw e;
-        return [];
+  function createCache(namespace, tag, opts = {}) {
+    const logTag = tag || namespace.toUpperCase();
+    const prefix = `${namespace}_`;
+    const successTtl = opts.successTtl || DEFAULT_SUCCESS_TTL;
+    const failureTtl = opts.failureTtl || DEFAULT_FAILURE_TTL;
+    const maxSize = opts.maxSize || DEFAULT_MAX_SIZE;
+    function cacheKey(raw) {
+      return `${prefix}${String(raw).replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "")}`;
+    }
+    function cacheGet(key) {
+      const entry = cache.get(key);
+      if (!entry) return void 0;
+      const now = Date.now();
+      if (now - entry.ts >= entry.ttl) {
+        cache.delete(key);
+        return void 0;
       }
-    });
-  }
-  function fetchDirectArticle(_0) {
-    return __async(this, arguments, function* (url, opts = {}) {
-      try {
-        return yield fetchFaText(url, __spreadValues({ timeout: PAGE_TIMEOUT }, opts));
-      } catch (e) {
-        if (isAborted(opts.signal || null)) throw e;
-        if (e.blocked) throw e;
-        return null;
+      return entry.data;
+    }
+    function cacheSet(key, data, success = true) {
+      if (Date.now() - lastCleanup > CLEANUP_INTERVAL) {
+        cleanCache(logTag);
       }
-    });
-  }
-  function extractFromFrenchAnime(_0, _1, _2, _3) {
-    return __async(this, arguments, function* (titles, mediaType, season, episode, opts = {}) {
-      const signal = opts.signal || null;
-      const epNum = Math.max(1, parseInt(episode, 10) || 1);
-      const seasonNum = Math.max(1, parseInt(season, 10) || 1);
-      const isMovie = mediaType === "movie";
-      const targetSeason = isMovie ? 1 : seasonNum;
-      const queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
-      const cleanedQueries = [];
-      for (const q of queries) {
-        cleanedQueries.push(q);
-        const cleaned = cleanTitleForSlug(String(titles[0] || q)).replace(/-/g, " ");
-        if (cleaned && cleaned !== q.toLowerCase()) cleanedQueries.push(cleaned);
+      if (cache.size >= maxSize) {
+        const toRemove = Math.ceil(maxSize * 0.2);
+        const sorted = [...cache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, toRemove);
+        for (const [k] of sorted) cache.delete(k);
       }
-      const seenQuery = /* @__PURE__ */ new Set();
-      const allResults = [];
-      const seenSlugs = /* @__PURE__ */ new Set();
-      try {
-        for (const q of cleanedQueries) {
-          if (isAborted(signal)) return [];
-          const key = q.toLowerCase();
-          if (seenQuery.has(key)) continue;
-          seenQuery.add(key);
-          const batch = yield searchDirect(q, { signal });
-          for (const r of batch || []) {
-            if (!seenSlugs.has(r.cat + "/" + r.slug)) {
-              seenSlugs.add(r.cat + "/" + r.slug);
-              allResults.push(r);
-            }
-          }
-          if (allResults.length >= 6) break;
-        }
-      } catch (e) {
-        if (e.blocked) return null;
-        throw e;
-      }
-      if (!allResults.length) return [];
-      const langOf = (cat) => cat === "vf" ? "fr" : "ja";
-      const scored = [];
-      for (const r of allResults) {
-        const slugClean = r.slug.replace(/-(french|vf|vostfr|truefrench)$/i, "");
-        let best = 0;
-        for (const t of titles.slice(0, 5)) {
-          const s = titleScore(slugClean, String(t).trim());
-          if (s > best) best = s;
-        }
-        if (best < 0.5) continue;
-        const sSeason = slugSeason(r.slug);
-        if (!isMovie && targetSeason > 1 && sSeason !== targetSeason) continue;
-        if (!isMovie && targetSeason === 1 && sSeason !== null && sSeason !== 1) continue;
-        if (isMovie && sSeason !== null) continue;
-        scored.push(__spreadProps(__spreadValues({}, r), { score: best + (langOf(r.cat) === "fr" ? 0.05 : 0) }));
-      }
-      if (!scored.length) return [];
-      scored.sort((a, b) => b.score - a.score);
-      const streams = [];
-      const seenEmbeds = /* @__PURE__ */ new Set();
-      let langsResolved = 0;
-      for (const lang of ["fr", "ja"]) {
-        if (isAborted(signal)) break;
-        if (langsResolved >= MAX_LANGS) break;
-        const cat = lang === "fr" ? "vf" : "vostfr";
-        const langCands = scored.filter((c) => c.cat === cat).slice(0, 2);
-        for (const cand of langCands) {
-          if (isAborted(signal)) break;
-          let html = null;
-          try {
-            html = yield fetchDirectArticle(`${FA_SITE}/animes-${cat}/${cand.id}-${cand.slug}.html`, { signal });
-          } catch (e) {
-            if (e.blocked) return null;
-            continue;
-          }
-          if (!html) continue;
-          const eps = parseEpsBlocks(html);
-          let urls = eps.get(epNum);
-          if (!urls || !urls.length) continue;
-          let resolvedThisLang = 0;
-          for (const url of urls) {
-            if (resolvedThisLang >= MAX_EMBEDS_PER_LANG) break;
-            if (seenEmbeds.has(url) || isDeadUrl(url)) continue;
-            seenEmbeds.add(url);
-            const baseStream = {
-              name: "FrenchAnime",
-              title: `[${lang === "fr" ? "VF" : "VOSTFR"}] \xC9pisode ${epNum}`,
-              language: lang,
-              quality: "HD"
-            };
-            let st = null;
-            try {
-              const resolved = yield resolveStream(__spreadProps(__spreadValues({}, baseStream), { url }), 0);
-              if (!resolved || resolved.isDirect === false) continue;
-              if (!resolved.url || resolved.url.includes("[object")) continue;
-              st = resolved;
-            } catch (e) {
-              if (isAborted(signal)) throw e;
-              continue;
-            }
-            delete st.isDirect;
-            delete st.originalUrl;
-            streams.push(st);
-            resolvedThisLang++;
-          }
-          if (resolvedThisLang > 0) {
-            langsResolved++;
-            break;
+      cache.set(key, {
+        data,
+        ts: Date.now(),
+        ttl: success ? successTtl : failureTtl,
+        success
+      });
+    }
+    return function withCache2(_0, _1) {
+      return __async(this, arguments, function* (rawKey, fn, opts2 = {}) {
+        const key = cacheKey(rawKey);
+        if (!opts2.bypass) {
+          const cached = cacheGet(key);
+          if (cached !== void 0) {
+            console.log(`[${logTag}] Cache HIT: ${rawKey.slice(0, 60)}`);
+            return cached;
           }
         }
-      }
-      return streams;
-    });
-  }
-  function searchCandidates(_0) {
-    return __async(this, arguments, function* (query, opts = {}) {
-      const json = yield ajaxGet(`/ajax/search/suggest?keyword=${encodeURIComponent(query)}`, opts);
-      if (!json || !json.html || typeof json.html !== "string") return [];
-      const out = [];
-      const seen = /* @__PURE__ */ new Set();
-      const re = /href="https?:\/\/coflix\.wiki\/film\/([^"\/]+)\/ep-(\d+)"/g;
-      let m;
-      while ((m = re.exec(json.html)) !== null) {
-        const slug = m[1];
-        if (seen.has(slug)) continue;
-        if (isExcludedSlug(slug)) continue;
-        seen.add(slug);
-        const lang = /-vostfr$/i.test(slug) ? "ja" : /(-vf|-truefrench|-french)$/i.test(slug) ? "fr" : null;
-        out.push({ slug, epId: m[2], lang, isFilm: FILM_MARKER.test(slug) });
-      }
-      return out.slice(0, 8);
-    });
-  }
-  function listEpisodes(_0) {
-    return __async(this, arguments, function* (movieId, opts = {}) {
-      return withCache(`eps_${movieId}`, () => __async(null, null, function* () {
-        const json = yield ajaxGet(`/ajax/episode/list-episode?movieId=${encodeURIComponent(movieId)}`, opts);
-        if (!json || !json.html || typeof json.html !== "string") return [];
-        const eps = [];
-        const re = /data-num="(\d+)"[^>]*data-id="(\d+)"|data-id="(\d+)"[^>]*data-num="(\d+)"/g;
-        let m;
-        while ((m = re.exec(json.html)) !== null) {
-          const num = parseInt(m[1] || m[4], 10);
-          const epId = m[2] || m[3];
-          if (num && epId) eps.push({ num, epId });
-        }
-        const byNum = /* @__PURE__ */ new Map();
-        for (const e of eps) if (!byNum.has(e.num)) byNum.set(e.num, e);
-        return [...byNum.values()].sort((a, b) => a.num - b.num);
-      }), { successTtl: 12e4, failureTtl: 3e4 });
-    });
-  }
-  function getMovieId(_0) {
-    return __async(this, arguments, function* (slug, opts = {}) {
-      return withCache(`mid_${slug}`, () => __async(null, null, function* () {
-        const html = yield fetchTextSafe(`${SITE}/film/${slug}/`, __spreadProps(__spreadValues({}, opts), { timeout: PAGE_TIMEOUT }));
-        if (!html) return null;
-        const m = html.match(/id="watch-page"[^>]*data-id="(\d+)"/) || html.match(/data-id="(\d+)"/);
-        return m ? m[1] : null;
-      }), { successTtl: 3e5, failureTtl: 6e4 });
-    });
-  }
-  function getEpisodeEmbeds(_0, _1) {
-    return __async(this, arguments, function* (epId, fallbackLang, opts = {}) {
-      return withCache(`emb_${epId}`, () => __async(null, null, function* () {
-        const json = yield ajaxPost(
-          `/ajax/episode/player?episode_id=${encodeURIComponent(epId)}`,
-          `episode_id=${encodeURIComponent(epId)}`,
-          opts
-        );
-        if (!json || json.status === false || !Array.isArray(json.message)) return [];
-        const out = [];
-        for (const srv of json.message) {
-          let url = srv && srv.server_link;
-          if (url && typeof url === "object" && url.url) url = url.url;
-          if (!url || typeof url !== "string" || !url.startsWith("http")) continue;
-          if (isDeadUrl(url)) continue;
-          const v = String(srv.version || "").toLowerCase();
-          const lang = v.includes("vostfr") ? "ja" : v.includes("vf") || v.includes("french") || v.includes("true") ? "fr" : fallbackLang;
-          out.push({ url, lang });
-        }
-        return out;
-      }), { successTtl: 12e4, failureTtl: 3e4 });
-    });
-  }
-  function resolveEmbedToStream(embedUrl, baseStream, signal) {
-    return __async(this, null, function* () {
-      try {
-        const resolved = yield resolveStream(__spreadProps(__spreadValues({}, baseStream), { url: embedUrl }), 0);
-        if (!resolved || resolved.isDirect === false) return null;
-        if (!resolved.url || resolved.url.includes("[object")) return null;
-        return resolved;
-      } catch (e) {
-        if (isAborted(signal)) throw e;
-        return null;
-      }
-    });
-  }
-  function extractFromCoflix(_0, _1, _2, _3) {
-    return __async(this, arguments, function* (titles, mediaType, season, episode, opts = {}) {
-      const signal = opts.signal || null;
-      const type = mediaType === "movie" ? "movie" : "tv";
-      const epNum = Math.max(1, parseInt(episode, 10) || 1);
-      const seasonNum = Math.max(1, parseInt(season, 10) || 1);
-      const queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
-      let candidates = [];
-      const seenSlugs = /* @__PURE__ */ new Set();
-      for (const q of queries) {
-        if (isAborted(signal)) return [];
+        console.log(`[${logTag}] Cache MISS: ${rawKey.slice(0, 60)}`);
         try {
-          const batch = yield searchCandidates(q, { signal });
-          for (const c of batch || []) {
-            if (!seenSlugs.has(c.slug)) {
-              seenSlugs.add(c.slug);
-              candidates.push(c);
-            }
+          const result = yield fn();
+          const isSuccess = result != null;
+          cacheSet(key, result, isSuccess);
+          if (!isSuccess) {
+            console.log(`[${logTag}] Cache: negative result cached (30s TTL)`);
           }
+          return result;
+        } catch (error) {
+          console.warn(`[${logTag}] Cache: error, not caching: ${error == null ? void 0 : error.message}`);
+          throw error;
+        }
+      });
+    };
+  }
+  var DEFAULT_SUCCESS_TTL, DEFAULT_FAILURE_TTL, DEFAULT_MAX_SIZE, CLEANUP_INTERVAL, cache, lastCleanup;
+  var init_cache = __esm({
+    "src/utils/cache.js"() {
+      DEFAULT_SUCCESS_TTL = 3e5;
+      DEFAULT_FAILURE_TTL = 3e4;
+      DEFAULT_MAX_SIZE = 150;
+      CLEANUP_INTERVAL = 6e4;
+      cache = /* @__PURE__ */ new Map();
+      lastCleanup = Date.now();
+    }
+  });
+
+  // src/aniverse/extractor.js
+  function normalizeText(str) {
+    return String(str || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[''`’]/g, "'").replace(/[–—]/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function scoreCandidate(item, queryNorm) {
+    const candidates = [
+      normalizeText(item.title),
+      normalizeText(item.titleEnglish),
+      normalizeText(item.titleRomaji)
+    ].filter(Boolean);
+    let best = 0;
+    for (const n of candidates) {
+      if (!n) continue;
+      if (n === queryNorm) return 120;
+      if (n.startsWith(queryNorm + " ") || queryNorm.startsWith(n + " ")) best = Math.max(best, 95);
+      else if (n.includes(queryNorm) || queryNorm.includes(n)) best = Math.max(best, 75);
+      const qWords = queryNorm.split(/\s+/).filter((w) => w.length > 2);
+      const nWords = new Set(n.split(/\s+/));
+      const matched = qWords.filter((w) => nWords.has(w)).length;
+      if (qWords.length >= 2 && matched >= 2) {
+        best = Math.max(best, Math.round(matched / qWords.length * 60));
+      }
+    }
+    return best;
+  }
+  function searchCacheKey(titles) {
+    const seen = [];
+    for (const t of (titles || []).filter(Boolean)) {
+      const n = normalizeText(t);
+      if (n && !seen.includes(n)) seen.push(n);
+      if (seen.length >= 3) break;
+    }
+    return seen.join("|||");
+  }
+  function searchCandidates(titles, signal) {
+    return __async(this, null, function* () {
+      const queries = [];
+      for (const t of (titles || []).filter(Boolean)) {
+        const n = normalizeText(t);
+        if (n && !queries.includes(n)) queries.push(n);
+        if (queries.length >= 3) break;
+      }
+      const key = searchCacheKey(titles);
+      const fetchRaw = () => __async(null, null, function* () {
+        const seen = /* @__PURE__ */ new Map();
+        for (const q of queries) {
+          if (isAborted(signal)) break;
+          const data = yield fetchApi(`${API_BASE}/anime/search?q=${encodeURIComponent(q)}`, { signal });
+          const results = data && Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : null;
+          if (!results) continue;
+          for (const item of results) {
+            if (!item || !item.id) continue;
+            const s = scoreCandidate(item, q);
+            const prev = seen.get(item.id);
+            if (!prev || s > prev.score) seen.set(item.id, { item, score: s });
+          }
+          const bestSeen = [...seen.values()].sort((a, b) => b.score - a.score)[0];
+          if (bestSeen && bestSeen.score >= 120) break;
+        }
+        return [...seen.values()].sort((a, b) => b.score - a.score);
+      });
+      if (withCache) {
+        const cached = yield withCache(`search_${key}`, () => __async(null, null, function* () {
+          const r2 = yield fetchRaw();
+          return r2 && r2.length > 0 ? r2 : null;
+        }), { bypass: false });
+        if (cached && Array.isArray(cached)) return cached;
+        return fetchRaw();
+      }
+      const memKey = `raw_${key}`;
+      const mem = _cacheBypassFallback.get(memKey);
+      if (mem && Date.now() - mem.ts < EPISODES_CACHE_TTL) return mem.list;
+      const r = yield fetchRaw();
+      if (r && r.length > 0) _cacheBypassFallback.set(memKey, { list: r, ts: Date.now() });
+      return r;
+    });
+  }
+  function getEpisodeWindow(animeId, fromEp, count, signal) {
+    return __async(this, null, function* () {
+      const from = Math.max(1, parseInt(fromEp, 10) || 1);
+      const cnt = Math.max(1, parseInt(count, 10) || 1);
+      const key = `${animeId}:${from}:${cnt}`;
+      const cached = _episodesCache.get(key);
+      if (cached && Date.now() - cached.ts < EPISODES_CACHE_TTL) return cached.list;
+      const list = yield fetchApi(
+        `${API_BASE}/anime/episode/episodes?animeId=${encodeURIComponent(animeId)}&episodeNumber=${from}&limit=${cnt}`,
+        { signal }
+      );
+      const valid = Array.isArray(list) && list.length > 0 ? list : null;
+      if (valid) _episodesCache.set(key, { list: valid, ts: Date.now() });
+      return valid;
+    });
+  }
+  function validateEpisode(entry, episodeList, episode) {
+    const total = parseInt(entry.totalEpisodes, 10) || 0;
+    if (episodeList && episodeList.length > 0) {
+      const ep = episodeList.find((e) => parseInt(e.episodeNumber, 10) === episode);
+      if (ep) return { ok: true, episodeTitle: ep.titleFr || ep.episodeTitle || null };
+      return { ok: false };
+    }
+    if (total > 0 && episode > total + 2) return { ok: false };
+    return { ok: true, episodeTitle: null };
+  }
+  function fetchTmdbSeasonEpisodes(tmdbId, season, signal) {
+    return __async(this, null, function* () {
+      const base = `${TMDB_BASE}/tv/${tmdbId}/season/${season}`;
+      let eps = null;
+      const fr = yield fetchApi(`${base}?api_key=${TMDB_API_KEY2}&language=fr-FR`, { signal, timeout: 1e4 });
+      if (fr && Array.isArray(fr.episodes) && fr.episodes.length > 0) eps = fr.episodes;
+      if (!eps) {
+        const en = yield fetchApi(`${base}?api_key=${TMDB_API_KEY2}&language=en-US`, { signal, timeout: 1e4 });
+        if (en && Array.isArray(en.episodes) && en.episodes.length > 0) eps = en.episodes;
+      }
+      if (!eps) return null;
+      return eps.map((e) => ({ number: parseInt(e.episode_number, 10), name: String(e.name || "").trim() })).filter((e) => e.number > 0 && e.name);
+    });
+  }
+  function levenshteinSimilarity(a, b) {
+    if (a === b) return 1;
+    const m = a.length, n = b.length;
+    if (!m || !n) return 0;
+    let prev = new Array(n + 1);
+    let curr = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+      curr[0] = i;
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      }
+      const tmp = prev;
+      prev = curr;
+      curr = tmp;
+    }
+    return 1 - prev[n] / Math.max(m, n);
+  }
+  function extractPartNum(norm) {
+    const m = norm.match(/parti[ei]?\s*(\d+)/) || norm.match(/\bpart\s*(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function stripPartSuffix(norm) {
+    return norm.replace(/parti[ei]?\s*\d+|\bpart\s*\d+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function episodeTitleScore(tmdbName, aniverseTitle) {
+    const ntRaw = normalizeText(tmdbName);
+    if (!ntRaw || !aniverseTitle) return 0;
+    const ntPart = extractPartNum(ntRaw);
+    const nt = stripPartSuffix(ntRaw);
+    if (!nt) return 0;
+    let best = 0;
+    const segments = String(aniverseTitle).split(/\s*\/\s*/);
+    for (const seg of segments) {
+      const nsRaw = normalizeText(seg);
+      if (!nsRaw) continue;
+      const nsPart = extractPartNum(nsRaw);
+      if (ntPart != null && nsPart != null && ntPart !== nsPart) continue;
+      const ns = stripPartSuffix(nsRaw);
+      if (!ns) continue;
+      if (ns === nt || nsRaw === ntRaw) {
+        best = Math.max(best, 120);
+        continue;
+      }
+      if (ns.includes(nt) || nt.includes(ns)) {
+        best = Math.max(best, 95);
+        continue;
+      }
+      const a = new Set(nt.split(" ").filter((w) => w.length > 2));
+      const b = new Set(ns.split(" ").filter((w) => w.length > 2));
+      if (a.size && b.size) {
+        const inter = [...a].filter((w) => b.has(w)).length;
+        const uni = (/* @__PURE__ */ new Set([...a, ...b])).size;
+        const jac = uni ? inter / uni : 0;
+        if (jac >= 0.8) {
+          best = Math.max(best, 90);
+          continue;
+        }
+        if (jac >= 0.6) {
+          best = Math.max(best, 80);
+          continue;
+        }
+      }
+      let lcp = 0;
+      const maxLcp = Math.min(nt.length, ns.length);
+      while (lcp < maxLcp && nt[lcp] === ns[lcp]) lcp++;
+      if (lcp >= 12) {
+        best = Math.max(best, 88);
+        continue;
+      }
+      const lev = levenshteinSimilarity(nt, ns);
+      if (lev >= 0.55) {
+        best = Math.max(best, 85);
+        continue;
+      }
+    }
+    return best;
+  }
+  function typeAffinity(item, preferSpecial) {
+    const t = String(item.type || "");
+    if (preferSpecial) return /special|ova|ona/i.test(t) ? 1 : 0;
+    return /tv/i.test(t) ? 1 : 0;
+  }
+  function findBestTitleMatch(_0, _1, _2, _3, _4, _5) {
+    return __async(this, arguments, function* (candidates, tmdbName, preferSpecial, minScore, signal, startTime, opts = {}) {
+      const windowCenter = opts.windowCenter != null ? opts.windowCenter : null;
+      const windowSpan = opts.windowSpan || 0;
+      let best = null;
+      const scanList = candidates.filter((c) => !/movie/i.test(String(c.item.type || ""))).slice(0, 8);
+      for (const cand of scanList) {
+        if (isBudgetExhausted(startTime, BUDGET_MS) || isAborted(signal)) break;
+        const fromEp = windowCenter != null ? Math.max(1, windowCenter - windowSpan) : 1;
+        const count = windowCenter != null ? windowSpan * 2 + 2 : 150;
+        let list = null;
+        try {
+          list = yield getEpisodeWindow(cand.item.id, fromEp, count, signal);
         } catch (e) {
           if (isAborted(signal)) throw e;
+          continue;
         }
-        if (candidates.length >= 3) break;
-      }
-      if (!candidates.length) return [];
-      const scoreOf = (c) => {
-        const slugClean = c.slug.replace(/-(vf|vostfr|truefrench|french)$/i, "");
-        let best = 0;
-        for (const t of titles.slice(0, 5)) {
-          const s = titleScore(slugClean, String(t).trim());
-          if (s > best) best = s;
-        }
-        return best;
-      };
-      const scored = candidates.map((c) => __spreadProps(__spreadValues({}, c), { score: scoreOf(c) })).filter((c) => c.score >= 0.34).filter((c) => type === "movie" || !c.isFilm).sort((a, b) => b.score - a.score);
-      const streams = [];
-      const seenEmbeds = /* @__PURE__ */ new Set();
-      let langsResolved = 0;
-      for (const lang of ["fr", "ja"]) {
-        if (isAborted(signal)) break;
-        if (langsResolved >= MAX_LANGS) break;
-        const langCands = scored.filter((c) => c.lang === lang);
-        if (!langCands.length) continue;
-        for (const cand of langCands.slice(0, 3)) {
-          if (isAborted(signal)) break;
-          let embeds = [];
-          if (type === "movie" || !seasonNum) {
-            embeds = yield getEpisodeEmbeds(cand.epId, lang, { signal });
-          } else {
-            const movieId = yield getMovieId(cand.slug, { signal });
-            if (!movieId) continue;
-            const eps = yield listEpisodes(movieId, { signal });
-            const target = eps.find((e) => e.num === epNum);
-            if (!target) continue;
-            embeds = yield getEpisodeEmbeds(target.epId, lang, { signal });
-          }
-          let resolvedThisLang = 0;
-          for (const emb of embeds) {
-            if (resolvedThisLang >= MAX_EMBEDS_PER_LANG) break;
-            if (seenEmbeds.has(emb.url)) continue;
-            seenEmbeds.add(emb.url);
-            const baseStream = {
-              name: "FrenchAnime",
-              title: `[${lang === "fr" ? "VF" : "VOSTFR"}] \xC9pisode ${epNum}`,
-              language: lang,
-              quality: "HD"
+        if (!list) continue;
+        for (const epItem of list) {
+          const num = parseInt(epItem.episodeNumber, 10);
+          if (windowCenter != null && Math.abs(num - windowCenter) > windowSpan) continue;
+          const title = epItem.titleFr || epItem.episodeTitle || "";
+          if (!title) continue;
+          const sc = episodeTitleScore(tmdbName, title);
+          if (sc < minScore) continue;
+          const aff = typeAffinity(cand.item, preferSpecial);
+          if (!best || sc > best.score || sc === best.score && aff > best.typeAff) {
+            best = {
+              item: cand.item,
+              epNumber: parseInt(epItem.episodeNumber, 10),
+              epTitle: title,
+              score: sc,
+              typeAff: aff
             };
-            const st = yield resolveEmbedToStream(emb.url, baseStream, signal);
-            if (!st) continue;
-            delete st.isDirect;
-            delete st.originalUrl;
-            streams.push(st);
-            resolvedThisLang++;
-          }
-          if (resolvedThisLang > 0) {
-            langsResolved++;
-            break;
           }
         }
+      }
+      return best;
+    });
+  }
+  function resolveStreamByLang(animeId, episode, lang, signal) {
+    return __async(this, null, function* () {
+      const data = yield fetchApi(
+        `${API_BASE}/anime/stream/${encodeURIComponent(animeId)}/${episode}/${lang}`,
+        { signal, timeout: 15e3 }
+      );
+      if (!data || typeof data.source !== "string" || !data.source || !data.source.includes("/")) return null;
+      const auth = data.headers && typeof data.headers.Authorization === "string" ? data.headers.Authorization : null;
+      if (!auth) {
+        console.log(`[${PROVIDER}] Stream sans Authorization (CDN 401 garanti) \u2014 rejet\xE9`);
+        return null;
+      }
+      return {
+        source: data.source,
+        authHeader: auth,
+        tracks: Array.isArray(data.tracks) ? data.tracks : []
+      };
+    });
+  }
+  function resolveEntryStreams(_0, _1, _2) {
+    return __async(this, arguments, function* (item, epNumber, { epLabel, episodeTitle, signal }) {
+      const [subRes, dubRes] = yield Promise.allSettled([
+        resolveStreamByLang(item.id, epNumber, "sub", signal),
+        resolveStreamByLang(item.id, epNumber, "dub", signal)
+      ]);
+      const sub = subRes.status === "fulfilled" ? subRes.value : null;
+      const dub = dubRes.status === "fulfilled" ? dubRes.value : null;
+      if (!sub && !dub) {
+        console.log(`[${PROVIDER}] Ni VOSTFR ni VF dispo sur "${item.slug}" ep ${epNumber}`);
+        return [];
+      }
+      const buildStream = (res, langLabel, langCode) => ({
+        name: `${PROVIDER} (${langLabel})`,
+        title: [
+          `${PROVIDER} [${langLabel}]`,
+          epLabel,
+          item.title,
+          episodeTitle ? `\u2014 ${episodeTitle}` : null
+        ].filter(Boolean).join(" "),
+        url: res.source,
+        quality: "HLS",
+        language: langCode,
+        // Authorization Bearer OBLIGATOIRE : sans lui manifest/clé/segments = 401
+        headers: cdnHeaders(res.authHeader),
+        type: "hls"
+      });
+      const streams = [];
+      if (sub) {
+        const vtt = sub.tracks.find((t) => t && t.file && /captions|subtitles/i.test(t.kind || ""));
+        const stream = buildStream(sub, "VOSTFR", "ja");
+        if (vtt && vtt.file) {
+          stream.subtitles = [{
+            url: vtt.file,
+            language: "fr",
+            name: "Fran\xE7ais",
+            headers: cdnHeaders(sub.authHeader)
+          }];
+        }
+        streams.push(stream);
+        console.log(`[${PROVIDER}] VOSTFR OK: ${sub.source.slice(0, 70)}...`);
+      }
+      if (dub) {
+        streams.push(buildStream(dub, "VF", "fr"));
+        console.log(`[${PROVIDER}] VF OK: ${dub.source.slice(0, 70)}...`);
       }
       return streams;
     });
   }
   function extractStreams(_0, _1, _2, _3) {
-    return __async(this, arguments, function* (tmdbId, mediaType, season, episode, { signal } = {}) {
-      const type = normalizeMediaType(mediaType);
-      if (signal) setCurrentSignal(signal);
-      let titles = [];
-      try {
-        titles = yield getTmdbTitles(tmdbId, type, { season: parseInt(season, 10) || 1 });
-      } catch (e) {
-        if (isAborted(signal)) throw e;
+    return __async(this, arguments, function* (tmdbId, mediaType, season, episode, options = {}) {
+      const signal = (options == null ? void 0 : options.signal) || null;
+      if (isAborted(signal)) return [];
+      const startTime = Date.now();
+      const isMovie = mediaType === "movie";
+      const parsedSeason = parseInt(season, 10);
+      const s = isNaN(parsedSeason) || parsedSeason < 0 ? 1 : parsedSeason;
+      const ep = parseInt(episode, 10) || 1;
+      const isSpecials = !isMovie && s === 0;
+      const epLabel = isMovie ? "" : `S${s}E${ep}`;
+      const titles = yield getTmdbTitles(tmdbId, isMovie ? "movie" : "tv", { season });
+      if (!titles || titles.length === 0) {
+        console.log(`[${PROVIDER}] No TMDB titles for ${tmdbId}`);
+        return [];
       }
-      if (!titles || titles.length === 0) return [];
-      let direct = null;
-      try {
-        direct = yield extractFromFrenchAnime(titles, type, season, episode, { signal });
-      } catch (e) {
-        if (isAborted(signal)) throw e;
-        direct = null;
+      console.log(`[${PROVIDER}] Titles: ${titles.slice(0, 3).join(" | ")}`);
+      const candidates = yield searchCandidates(titles, signal);
+      if (candidates.length === 0) {
+        console.log(`[${PROVIDER}] No search results`);
+        return [];
       }
-      if (direct === null) {
-        console.log("[FrenchAnime] Challenge CF sur french-anime.com \u2192 fallback coflix.wiki");
-        return extractFromCoflix(titles, type, season, episode, { signal });
+      if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
+      let streams = [];
+      let numericRef = null;
+      if (!isSpecials) {
+        const MAX_CANDIDATES = 3;
+        for (const { item, score } of candidates.slice(0, MAX_CANDIDATES)) {
+          if (isBudgetExhausted(startTime, BUDGET_MS) || isAborted(signal)) break;
+          if (score < 60) break;
+          const itemType = String(item.type || "");
+          const isMovieEntry = /movie/i.test(itemType);
+          if (isMovie !== isMovieEntry && score < 120) continue;
+          let episodeList = null;
+          try {
+            episodeList = yield getEpisodeWindow(item.id, ep, 1, signal);
+          } catch (e) {
+            if (isAborted(signal)) throw e;
+          }
+          const validation = validateEpisode(item, episodeList, ep);
+          if (!validation.ok) {
+            console.log(`[${PROVIDER}] Ep ${ep} hors num\xE9rotation de "${item.slug}" (total=${item.totalEpisodes}) \u2014 candidat suivant`);
+            continue;
+          }
+          const built = yield resolveEntryStreams(item, ep, {
+            epLabel,
+            episodeTitle: validation.episodeTitle,
+            signal
+          });
+          if (built.length > 0) {
+            streams = built;
+            numericRef = { item, epNumber: ep, epTitle: validation.episodeTitle };
+            break;
+          }
+        }
       }
-      if (direct.length > 0) return direct;
-      return extractFromCoflix(titles, type, season, episode, { signal });
+      const needTitlePass = !isMovie && (isSpecials || streams.length === 0 || s >= 2);
+      if (needTitlePass && !isBudgetExhausted(startTime, BUDGET_MS) && !isAborted(signal)) {
+        const tmdbEps = yield fetchTmdbSeasonEpisodes(tmdbId, s, signal);
+        if (tmdbEps && tmdbEps.length > 0) {
+          let target = tmdbEps.find((e) => e.number === ep);
+          if (!target && ep >= 1 && ep <= tmdbEps.length) target = tmdbEps[ep - 1];
+          if (target && target.name) {
+            let windowCenter = null;
+            let windowSpan = 0;
+            let numericSuspect = false;
+            const tmdbAbs = target.number;
+            let cumulativeAbs = null;
+            if (!isSpecials && numericRef && titles._metadata && titles._metadata.seasonEpisodeCounts) {
+              const counts = titles._metadata.seasonEpisodeCounts;
+              const countsSeason = parseInt(counts[s], 10) || 0;
+              const total = parseInt(numericRef.item.totalEpisodes, 10) || 0;
+              if (countsSeason > 0 && total > countsSeason * 1.5 && total >= 50) {
+                let abs = ep;
+                for (let k = 1; k < s; k++) abs += parseInt(counts[k], 10) || 0;
+                cumulativeAbs = abs;
+                windowCenter = tmdbAbs != null && Math.abs(tmdbAbs - abs) <= 30 ? tmdbAbs : abs;
+                windowSpan = 30;
+                numericSuspect = windowCenter !== numericRef.epNumber;
+                if (numericSuspect) {
+                  console.log(
+                    `[${PROVIDER}] Num\xE9rotation absolue d\xE9tect\xE9e ("${numericRef.item.slug}", total=${total}) : S${s}E${ep} \u2192 absolu attendu ${windowCenter}, num\xE9rique=${numericRef.epNumber} \u2014 correction`
+                  );
+                }
+              }
+            }
+            const minScore = streams.length > 0 && !numericSuspect ? 95 : 85;
+            const match = yield findBestTitleMatch(
+              candidates,
+              target.name,
+              isSpecials,
+              minScore,
+              signal,
+              startTime,
+              windowCenter != null ? { windowCenter, windowSpan } : {}
+            );
+            if (match) {
+              const isDifferent = !numericRef || match.item.id !== numericRef.item.id || match.epNumber !== numericRef.epNumber;
+              if (streams.length === 0 || isDifferent) {
+                const built = yield resolveEntryStreams(match.item, match.epNumber, {
+                  epLabel,
+                  episodeTitle: match.epTitle,
+                  signal
+                });
+                if (built.length > 0) {
+                  console.log(
+                    `[${PROVIDER}] Mapping titre: TMDB S${s}E${ep} "${target.name}" \u2192 "${match.item.slug}" E${match.epNumber} (score ${match.score})`
+                  );
+                  streams = built;
+                } else if (numericSuspect) {
+                  streams = [];
+                }
+              }
+            } else if (numericSuspect) {
+              console.log(`[${PROVIDER}] \xC9pisode num\xE9rique suspect sans correction fiable \u2014 abandon (0 stream)`);
+              streams = [];
+            }
+          }
+        }
+      }
+      if (streams.length === 0) return [];
+      const resolved = [];
+      let index = 0;
+      for (const st of streams) {
+        try {
+          const r = yield resolveStream(st, index);
+          if (r && r.url) {
+            const _a = r, { isDirect, originalUrl } = _a, clean = __objRest(_a, ["isDirect", "originalUrl"]);
+            resolved.push(__spreadProps(__spreadValues(__spreadValues({}, st), clean), { provider: PROVIDER }));
+          }
+        } catch (e) {
+          if (isAborted(signal)) throw e;
+          console.log(`[${PROVIDER}] resolveStream failed: ${e && e.message} \u2014 serving raw URL`);
+          resolved.push(__spreadProps(__spreadValues({}, st), { provider: PROVIDER }));
+        }
+        index++;
+      }
+      return resolved;
     });
   }
-  var withCache, PAGE_TIMEOUT, MAX_SUGGEST_QUERIES, MAX_EMBEDS_PER_LANG, MAX_LANGS, DEAD_HOSTS, EXCLUDED_SLUGS, FILM_MARKER;
+  var PROVIDER, BUDGET_MS, API_BASE, TMDB_API_KEY2, TMDB_BASE, withCache, _cacheBypassFallback, _episodesCache, EPISODES_CACHE_TTL;
   var init_extractor = __esm({
-    "src/french-anime/extractor.js"() {
+    "src/aniverse/extractor.js"() {
       init_http();
       init_resolvers();
-      init_cache();
       init_metadata();
-      withCache = createCache("fra", "FrenchAnime");
-      PAGE_TIMEOUT = 12e3;
-      MAX_SUGGEST_QUERIES = 5;
-      MAX_EMBEDS_PER_LANG = 2;
-      MAX_LANGS = 2;
-      DEAD_HOSTS = ["kakaflix", "upstream.to"];
-      EXCLUDED_SLUGS = [
-        "steins-gate",
-        "the-new-gate",
-        "divine-gate",
-        "mister-gates",
-        "corruption-of-champions"
-      ];
-      FILM_MARKER = /(^|-)(le-film|film|movie|oav|ova|special)(-|$)/i;
+      init_cache();
+      PROVIDER = "Aniverse";
+      BUDGET_MS = 4e4;
+      API_BASE = "https://aniverse.fr/api";
+      TMDB_API_KEY2 = "8265bd1679663a7ea12ac168da84d2e8";
+      TMDB_BASE = "https://api.themoviedb.org/3";
+      withCache = typeof createCache === "function" ? createCache("anv", "Aniverse", { successTtl: 10 * 60 * 1e3, maxSize: 80 }) : null;
+      _cacheBypassFallback = /* @__PURE__ */ new Map();
+      _episodesCache = /* @__PURE__ */ new Map();
+      EPISODES_CACHE_TTL = 10 * 60 * 1e3;
     }
   });
 
-  // src/french-anime/index.js
+  // src/aniverse/index.js
   var require_index = __commonJS({
-    "src/french-anime/index.js"(exports, module) {
+    "src/aniverse/index.js"(exports, module) {
       init_extractor();
       init_resolvers();
-      module.exports = { getStreams: createProvider("FrenchAnime", extractStreams) };
+      module.exports = { getStreams: createProvider("Aniverse", extractStreams) };
     }
   });
   return require_index();

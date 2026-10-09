@@ -17,6 +17,19 @@ export function setCurrentSignal(signal) { _currentSignal = signal; }
 const DOMAIN = 'mugiwara-no-streaming.com';
 const RETRY_DELAYS = [1000, 3000, 5000];
 
+// ─── Circuit breaker Cloudflare ─────────────────────────────────────────────
+// Un blocage Cloudflare confirmé (403 + challenge détecté) est COURT TERME
+// pour tout le domaine : réessayer ×3 pour CHAQUE requête de recherche
+// (un provider peut en faire 20+) gaspille tout le budget 45 s sur des
+// réponses 403 identiques. Après le premier blocage confirmé, on échoue
+// directement pendant CIRCUIT_COOLDOWN ms.
+const CIRCUIT_COOLDOWN_MS = 60000;
+let _circuitOpenUntil = 0;
+
+function isCircuitOpen() {
+    return Date.now() < _circuitOpenUntil;
+}
+
 /**
  * Détecte si une réponse est un blocage Cloudflare.
  */
@@ -39,6 +52,11 @@ function isCloudflareBlock(text) {
 export async function fetchText(url, options = {}) {
     const signal = options.signal || _currentSignal;
     if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
+    // Circuit ouvert : le domaine est bloqué côté CF — pas de retry inutile.
+    if (isCircuitOpen()) {
+        throw new Error(`Cloudflare circuit open (domain blocked for ${Math.ceil((_circuitOpenUntil - Date.now()) / 1000)}s)`);
+    }
 
     const { headers: customHeaders, method, timeout, retries, ...rest } = options;
     const resolvedMethod = method || 'GET';
@@ -84,6 +102,12 @@ export async function fetchText(url, options = {}) {
                 const text = await res.text();
                 if (isCloudflareBlock(text)) {
                     console.log(`[Mugiwara] Cloudflare block (${status}), attempt ${attempt + 1}/${maxRetries + 1}`);
+                    // Blocage confirmé → ouvrir le circuit pour tout le domaine
+                    // : les requêtes suivantes échoueront sans retry.
+                    if (attempt === maxRetries || status === 403) {
+                        _circuitOpenUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+                        console.log(`[Mugiwara] Circuit breaker OPEN (${CIRCUIT_COOLDOWN_MS / 1000}s) — domaine bloqué CF`);
+                    }
                     lastError = new Error(`Cloudflare block (${status})`);
                     continue;
                 }
