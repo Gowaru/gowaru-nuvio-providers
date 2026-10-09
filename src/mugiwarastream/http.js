@@ -26,6 +26,23 @@ const RETRY_DELAYS = [1000, 3000, 5000];
 const CIRCUIT_COOLDOWN_MS = 60000;
 let _circuitOpenUntil = 0;
 
+// ─── Circuit API dédié ──────────────────────────────────────────────────────
+// Le WAF Cloudflare bloque /api/search en 403 déterministe (règle anti-abus)
+// alors que le HTML catalogue passe (200). Un 403 API ne doit donc JAMAIS
+// ouvrir le circuit domaine (sinon les sondes HTML du fallback Discovery
+// échouent instantanément pendant 60 s → 0 stream). Les 403 API ouvrent un
+// circuit qui ne bloque que les URLs /api/.
+const API_CIRCUIT_COOLDOWN_MS = 60000;
+let _apiCircuitOpenUntil = 0;
+
+function isApiUrl(url) {
+    return typeof url === 'string' && url.includes('/api/');
+}
+
+function isApiCircuitOpen() {
+    return Date.now() < _apiCircuitOpenUntil;
+}
+
 function isCircuitOpen() {
     return Date.now() < _circuitOpenUntil;
 }
@@ -54,13 +71,17 @@ export async function fetchText(url, options = {}) {
     if (isAborted(signal)) throw new Error('AbortError: Request aborted');
 
     // Circuit ouvert : le domaine est bloqué côté CF — pas de retry inutile.
-    if (isCircuitOpen()) {
+    // (Le circuit API ne bloque que les URLs /api/ : le HTML passe malgré le
+    // WAF sur /api/search.)
+    if (isCircuitOpen() || (isApiUrl(url) && isApiCircuitOpen())) {
         throw new Error(`Cloudflare circuit open (domain blocked for ${Math.ceil((_circuitOpenUntil - Date.now()) / 1000)}s)`);
     }
 
     const { headers: customHeaders, method, timeout, retries, ...rest } = options;
     const resolvedMethod = method || 'GET';
-    const maxRetries = retries ?? 2;
+    // 403 WAF sur /api/* déterministe (règle anti-abus) : aucun retry, le
+    // circuit API dédié absorbe les requêtes suivantes.
+    const maxRetries = retries ?? (isApiUrl(url) ? 0 : 2);
     const mergedHeaders = { ...HEADERS, ...(customHeaders || {}) };
 
     let lastError = null;
@@ -102,9 +123,13 @@ export async function fetchText(url, options = {}) {
                 const text = await res.text();
                 if (isCloudflareBlock(text)) {
                     console.log(`[Mugiwara] Cloudflare block (${status}), attempt ${attempt + 1}/${maxRetries + 1}`);
-                    // Blocage confirmé → ouvrir le circuit pour tout le domaine
-                    // : les requêtes suivantes échoueront sans retry.
-                    if (attempt === maxRetries || status === 403) {
+                    // Blocage confirmé → ouvrir le circuit. Sauf pour les URLs
+                    // /api/ (WAF anti-abus déterministe) : circuit API dédié,
+                    // le HTML catalogue reste interrogeable.
+                    if (isApiUrl(url)) {
+                        _apiCircuitOpenUntil = Date.now() + API_CIRCUIT_COOLDOWN_MS;
+                        console.log(`[Mugiwara] API circuit breaker OPEN (${API_CIRCUIT_COOLDOWN_MS / 1000}s) — HTML non affecté`);
+                    } else if (attempt === maxRetries || status === 403) {
                         _circuitOpenUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
                         console.log(`[Mugiwara] Circuit breaker OPEN (${CIRCUIT_COOLDOWN_MS / 1000}s) — domaine bloqué CF`);
                     }

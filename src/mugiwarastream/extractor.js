@@ -1,7 +1,7 @@
 import { fetchText, BASE, setCurrentSignal } from './http.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { resolveStream, safeJson, isAborted } from '../utils/resolvers.js';
-import { normalize, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
+import { normalize, toSlug, stripSeasonSuffix, hasForeignLeadingTokens, countExtraWords, GENERIC_TOKENS } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
 function extractPushContent(html) {
@@ -201,8 +201,10 @@ function extractEpisodeUrls(saison, lang) {
 
 const SOURCE_LABELS = ['Sibnet', 'Vidmoly', 'Sendvid', 'VK', 'Youtube', 'Other'];
 
-// Hosts connus morts — skip avant résolution (gain ~15-20s)
-const DEAD_HOSTS = ['sendvid.com', 'uqload.co', 'uqload.bz', 'uqload.to', 'oneupload.to'];
+// Hosts morts ou irrésolubles en fetch statique — skip avant résolution.
+// sendvid = 404 mort ; lpayer.embed4me.com = SPA React (URLs finales
+// construites côté client, inaccessibles sans navigateur).
+const DEAD_HOSTS = ['sendvid', 'embed4me', 'uqload.co', 'uqload.bz', 'uqload.to', 'oneupload.to'];
 function isDeadHost(url) {
     if (!url) return false;
     return DEAD_HOSTS.some(h => url.includes(h));
@@ -213,6 +215,8 @@ function detectHostLabel(url) {
     const lower = url.toLowerCase();
     if (lower.includes('sibnet')) return 'Sibnet';
     if (lower.includes('vidmoly') || lower.includes('voembed')) return 'Vidmoly';
+    if (lower.includes('ansembed')) return 'AnsEmbed';
+    if (lower.includes('embed4me') || lower.includes('lpayer')) return 'Embed4Me';
     if (lower.includes('sendvid')) return 'Sendvid';
     if (lower.includes('vk.com') || lower.includes('vkvideo')) return 'VK';
     if (lower.includes('youtube')) return 'YouTube';
@@ -250,8 +254,10 @@ async function resolveStreams(streams) {
         try {
             const r = await resolveStream(stream);
             if (r && r.url && r.isDirect) {
-                const { isDirect, originalUrl, ...clean } = r;
-                direct.push({ ...stream, ...clean, quality: r.quality || stream.quality });
+                // Ne PAS stripper isDirect : test_providers.js et les apps
+                // filtrent sur ce flag (isDirect:false/undefined = rejeté).
+                const { originalUrl, ...clean } = r;
+                direct.push({ ...stream, ...clean, isDirect: true, quality: r.quality || stream.quality });
             }
         } catch { /* skip failed candidate */ }
         // Early exit: 3 direct streams is enough
@@ -306,13 +312,78 @@ function extractFilmStreams(filmOptions) {
                 if (!Array.isArray(arr) || filmIdx >= arr.length) continue;
                 const url = arr[filmIdx];
                 if (!url || typeof url !== 'string') continue;
+                // Valider la présence d'une vraie URL (rejette "$undefined"
+                // et autres placeholders de la migration client-side 2026).
+                if (!/^https?:\/\//i.test(url) && !url.startsWith('//')) continue;
                 const sourceLabel = sourceIdx < labels.length ? labels[sourceIdx] : `Source ${sourceIdx + 1}`;
                 allFilmStreams.push(buildStreamEntry(url, sourceLabel, langLabel, filmName));
             }
         }
     }
     return allFilmStreams;
-}const MAX_SLUG_SEARCH = 5; // Max titres à chercher (gain ~15-20s)
+}// Match avec frontières de mots (chaînes normalisées, espaces simples) :
+// 'gate' ⊂ 'gates' rejeté, 'naruto' en tête de 'naruto shippuden' accepté.
+function includesWord(hay, needle) {
+    if (!hay || !needle) return false;
+    let pos = hay.indexOf(needle);
+    while (pos !== -1) {
+        const before = pos === 0 || hay[pos - 1] === ' ';
+        const after = pos + needle.length >= hay.length || hay[pos + needle.length] === ' ';
+        if (before && after) return true;
+        pos = hay.indexOf(needle, pos + 1);
+    }
+    return false;
+}
+
+// Mots communs requête/résultat : mots-outils filtrés (the/le/des… via
+// GENERIC_TOKENS), substring acceptée seulement pour les mots longs
+// (agglutination "lattaque"/"attaque"), mot exact exigé pour les courts
+// ('sen', 'and' ne matchent plus 'present'/'handyman').
+function countCommonWords(nr, nt) {
+    const nrWords = new Set(nr.split(/\s+/));
+    let n = 0;
+    for (const w of nt.split(/\s+/)) {
+        if (w.length <= 2 || GENERIC_TOKENS.has(w)) continue;
+        if (w.length >= 5 ? nr.includes(w) : nrWords.has(w)) n++;
+    }
+    return n;
+}
+
+// ─── Garde anti-faux-match (titre page vs titres TMDB) ──────────────────────
+// Le slug ne prouve rien (soft-404, homonymes, fuzzy serveur) : on valide le
+// TITRE RÉEL de la fiche (champ "anime" du animeServer, pas le slug) contre
+// les titres TMDB avec le scoring existant, SANS la branche lâche
+// countCommonWords (un 60/100 laisserait passer "Tojima Wants to Be a Kamen
+// Rider" pour "Kamen Rider"). Seuil 80 :
+//   "Shingeki no Kyojin" vs titres AOT → 100 (passe) ;
+//   "BLACK TORCH"/"GREAT PRETENDER" vs Kamen/Mazinger → 0 (rejet) ;
+//   "Tojima Wants to Be a Kamen Rider" vs "Kamen Rider" → 0 (tokens
+//   étrangers avant la requête → rejet).
+const TITLE_GUARD_THRESHOLD = 80;
+
+function scorePageTitle(pageName, title) {
+    const nt = normalize(title);
+    const nr = normalize(pageName);
+    if (!nt || !nr) return 0;
+    if (nr === nt) return 100;
+    if ((includesWord(nr, nt) || includesWord(nt, nr)) && !hasForeignLeadingTokens(nr, nt)) return 80;
+    return 0;
+}
+
+function maxPageTitleScore(pageName, titles) {
+    let best = 0;
+    for (const t of titles || []) {
+        if (typeof t !== 'string' || !t) continue;
+        const s = scorePageTitle(pageName, t);
+        if (s > best) {
+            best = s;
+            if (best >= 100) break;
+        }
+    }
+    return best;
+}
+
+const MAX_SLUG_SEARCH = 5; // Max titres à chercher (gain ~15-20s)
 
 async function findSlugs(titles) {
     const seenQueries = new Set();
@@ -353,12 +424,10 @@ async function findSlugs(titles) {
             if (nr === nt) score = 100;
             // Garde anti-homonymes (bug "Gate" → Steins;Gate) : un token
             // significatif AVANT la requête ("steins", "new"…) rejette le match.
-            else if ((nr.includes(nt) || nt.includes(nr)) && !hasForeignLeadingTokens(nr, nt)) score = 80;
+            else if ((includesWord(nr, nt) || includesWord(nt, nr)) && !hasForeignLeadingTokens(nr, nt)) score = 80;
             else if (r.matched && normalize(r.matched) === nt) score = 90;
             else if (r.anime) {
-                const ra = normalize(r.anime);
-                const commonWords = nt.split('-').filter(w => w.length > 2 && ra.includes(w)).length;
-                if (commonWords >= 2) score = 60;
+                if (countCommonWords(nr, nt) >= 2) score = 60;
             }
 
             if (score >= 60 && r.slug && !seenSlugs.has(r.slug)) {
@@ -382,6 +451,22 @@ async function findSlugs(titles) {
     allCandidates.sort((a, b) => b.score - a.score);
     console.log(`[Mugiwara] Found ${allCandidates.length} slug candidate(s): ${allCandidates.map(c => c.slug + '(' + c.score + ')').join(', ')}`);
     return allCandidates.map(c => c.slug);
+}
+
+// Titres d'épisodes FR (EPISODES_OPTIONS.names) avec alerte si l'index
+// calculé sort des bornes (désalignement saga/épisodes).
+function getEpisodeDisplayTitle(animeData, episodeIndex, fallback) {
+    const names = animeData && animeData.options && animeData.options.EPISODES_OPTIONS && animeData.options.EPISODES_OPTIONS.names;
+    if (Array.isArray(names) && names.length > 0) {
+        if (episodeIndex >= 0 && episodeIndex < names.length) {
+            const entry = names[episodeIndex];
+            const t = entry && (typeof entry === 'string' ? entry : entry.name || entry.title);
+            if (typeof t === 'string' && t.trim()) return t.trim();
+            return fallback;
+        }
+        console.log(`[Mugiwara] WARNING: episodeIndex ${episodeIndex} out of bounds (EPISODES_OPTIONS.names: ${names.length}) — fallback "${fallback}"`);
+    }
+    return fallback;
 }
 
 function collectStreamsForLang(saison, lang, episodeIndex, seasonName) {
@@ -424,6 +509,21 @@ async function findCachedSlugs(titles) {
     return null;
 }
 
+// Ids de pages …/episodes/<id> listés dans le HTML (saison1, saison2,
+// saison1-2 pour les sagas…). Sert aux sondes dynamiques.
+function extractSaisonPageIds(html) {
+    if (!html) return [];
+    const ids = [];
+    const seen = new Set();
+    const re = /saison\d[\w-]*/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const id = m[0].toLowerCase();
+        if (!seen.has(id)) { seen.add(id); ids.push(id); }
+    }
+    return ids;
+}
+
 async function getAnimeData(slug, mediaType) {
     const cacheKey = slug + ':' + mediaType;
     return animeDataCache(cacheKey, async () => {
@@ -441,9 +541,21 @@ async function getAnimeData(slug, mediaType) {
         // saison1 renvoie un vrai contenu SANS donnees animeServer.
         if (!pageHtml || pageHtml.length < 1000 || pageHtml.indexOf('animeServer') === -1) {
             if (mediaType !== 'movie') {
-                for (let s = 2; s <= 5; s++) {
+                // Sonde dynamique : segments exacts du sitemap d'abord
+                // (saisonN, oav, saison1hs…), puis ids listés sur la page
+                // saison1 (sagas…), repli saison2..5.
+                const smSegs = await getSitemapSegments(slug);
+                const listed = extractSaisonPageIds(pageHtml);
+                const probes = [];
+                const seenP = new Set(['saison1']);
+                for (const seg of smSegs.concat(listed)) {
+                    const id = String(seg).toLowerCase();
+                    if (!seenP.has(id)) { seenP.add(id); probes.push(id); }
+                }
+                if (probes.length === 0) probes.push('saison2', 'saison3', 'saison4', 'saison5');
+                for (const pid of probes.slice(0, 6)) {
                     try {
-                        const html = await fetchText(`${BASE}/catalogue/${slug}/episodes/saison${s}`);
+                        const html = await fetchText(`${BASE}/catalogue/${slug}/episodes/${pid}`);
                         if (html && html.indexOf('animeServer') !== -1) { pageHtml = html; break; }
                     } catch (_) {}
                 }
@@ -463,16 +575,23 @@ async function getAnimeData(slug, mediaType) {
  * FIX "0 stream sur les saisons ≥ 2" : sur le site, chaque saison vit sur sa
  * propre page (…/catalogue/<slug>/episodes/saisonN). La page saison1 liste
  * toutes les saisons mais souvent avec 0 épisode pour N ≥ 2 → on recharge les
- * données depuis la page dédiée à la saison demandée.
+ * données depuis la page dédiée. sagaId = id de saga listé sur la page
+ * saison1 (ex "2", "1-3"), PAS le numéro TMDB.
  */
-async function getSaisonPageData(slug, saisonNum) {
-    const cacheKey = slug + ':saison' + saisonNum;
+async function getSaisonPageData(slug, sagaId, isSegment) {
+    const raw = String(sagaId == null ? '' : sagaId).trim();
+    if (!raw) return null;
+    // isSegment = segment d'URL exact du sitemap ('saison2', 'oav'…),
+    // sinon id de saga ('2', '1-3') préfixé en 'saison…'.
+    const pageId = (isSegment || /^saison/i.test(raw)) ? raw.toLowerCase() : 'saison' + raw;
+    const cacheKey = slug + ':' + pageId;
     return animeDataCache(cacheKey, async () => {
         let pageHtml = null;
         try {
-            pageHtml = await fetchText(`${BASE}/catalogue/${slug}/episodes/saison${saisonNum}`);
+            pageHtml = await fetchText(`${BASE}/catalogue/${slug}/episodes/${pageId}`);
         } catch (_) {}
         if (!pageHtml || pageHtml.length < 1000) return null;
+        if (pageHtml.replace(/\\/g, '').includes('"animeServer":0')) return null; // soft-404
         const data = extractAnimeServerData(pageHtml);
         return data && data.options && data.options.saisons ? data : null;
     });
@@ -506,6 +625,8 @@ async function trySeriesStreams(slug, animeData, season, episodeNum, effectiveSe
 
     const { saison: matchedSaison, episodeIndex: epIndex } = matched;
     const seasonName = matchedSaison.name || 'Saison ' + matchedSaison.id;
+    // Vrais titres FR (EPISODES_OPTIONS.names) quand dispos, sinon nom de saga.
+    const displayTitle = getEpisodeDisplayTitle(animeData, epIndex, seasonName);
 
     const seenUrls = new Set();
     const allStreams = [];
@@ -522,10 +643,11 @@ async function trySeriesStreams(slug, animeData, season, episodeNum, effectiveSe
             continue;
         }
 
-        const streams = collectStreamsForLang(matchedSaison, lang, epIndex, seasonName);
+        const streams = collectStreamsForLang(matchedSaison, lang, epIndex, displayTitle);
         for (const s of streams) {
-            // Dédup par URL (VF/VOSTFR souvent les mêmes vidmoly URLs)
-            const urlKey = s.url.replace(/\?.*$/, ''); // strip query params
+            // Dédup par URL + langue (VF/VOSTFR partagent souvent la même
+            // URL vidmoly — les deux versions doivent coexister).
+            const urlKey = lang + '::' + s.url.replace(/\?.*$/, ''); // strip query params
             if (!seenUrls.has(urlKey)) {
                 seenUrls.add(urlKey);
                 allStreams.push(s);
@@ -538,6 +660,194 @@ async function trySeriesStreams(slug, animeData, season, episodeNum, effectiveSe
         return await resolveStreams(allStreams);
     }
     return null;
+}
+
+// Soft-404 catalogue : HTTP 200 ~82 Ko, animeServer: 0, mention « Aucun ».
+const SOFT404_MIN_VALID_SIZE = 85000;
+
+function isValidCataloguePage(html, data, mediaType) {
+    if (!html || !data || typeof data !== 'object') return false;
+    if (mediaType === 'movie') return !!(data.options && data.options.FILM_OPTIONS);
+    const saisons = data.options && data.options.saisons;
+    if (!Array.isArray(saisons) || saisons.length === 0) return false;
+    // Cas nominal : au moins une saga/saison avec des épisodes.
+    if (saisons.some(s => getEpisodeCount(s) > 0)) return true;
+    // Page listant des sagas sans bloc lang : n'accepter que si la page
+    // dépasse nettement le gabarit soft-404 (~82 Ko).
+    return html.length > SOFT404_MIN_VALID_SIZE;
+}
+
+// Slugs candidats depuis les titres TMDB (toSlug = tirets, pas d'espaces).
+function buildSlugCandidates(titles, alreadyHave) {
+    const have = new Set((alreadyHave || []).map(s => String(s).toLowerCase()));
+    const seen = new Set();
+    const out = [];
+    const push = (slug) => {
+        if (!slug || slug.length < 3) return;
+        const key = slug.toLowerCase();
+        if (seen.has(key) || have.has(key)) return;
+        seen.add(key);
+        out.push(slug);
+    };
+    const strTitles = titles.filter(t => t && typeof t === 'string');
+    // Passe 1 : titres exacts (le principal d'abord) ; passe 2 : variantes
+    // sans suffixe saison (évite que "x-saison-1" mange le quota avant
+    // "shingeki-no-kyojin").
+    for (const t of strTitles) {
+        push(toSlug(t));
+        if (out.length >= 8) break;
+    }
+    if (out.length < 8) {
+        for (const t of strTitles) {
+            const stripped = stripSeasonSuffix(t);
+            if (stripped && stripped !== t) push(toSlug(stripped));
+            if (out.length >= 8) break;
+        }
+    }
+    return out;
+}
+
+// Sonde …/catalogue/<slug>/… : ne retient que les pages valides
+// (rejette les soft-404 HTTP 200). Arrêt au premier valide côté appelant.
+async function probeSlugCandidate(slug, mediaType) {
+    const pageUrl = mediaType === 'movie'
+        ? `${BASE}/catalogue/${slug}/films`
+        : `${BASE}/catalogue/${slug}/episodes/saison1`;
+    let html = null;
+    try {
+        html = await fetchText(pageUrl);
+    } catch (_) { return false; }
+    if (!html || html.length < 1000) return false;
+    if (html.replace(/\\/g, '').includes('"animeServer":0')) {
+        console.log(`[Mugiwara] Slug ${slug}: soft-404 (animeServer: 0)`);
+        return false;
+    }
+    const data = extractAnimeServerData(html);
+    if (!isValidCataloguePage(html, data, mediaType)) {
+        console.log(`[Mugiwara] Slug ${slug}: page invalide/soft-404 (${html.length} o)`);
+        return false;
+    }
+    return true;
+}
+
+// ─── Discovery via sitemap.xml ──────────────────────────────────────────────
+// Le sitemap catalogue (XML statique ~450 Ko, non WAF) liste les slugs exacts
+// (…/catalogue/<slug>) + les pages saisons (…/episodes/saisonN|oav|1hs…) et
+// films. Indispensable pour les slugs non devinables par toSlug :
+// "L'Attaque des Titans" → lattaque-des-titans (article agglutiné),
+// "Demon Slayer" → demon-slayer-kimetsu-no-yaiba.
+let _sitemapPromise = null;
+
+async function getSitemapEntries() {
+    if (!_sitemapPromise) {
+        _sitemapPromise = (async () => {
+            let xml = null;
+            try {
+                xml = await fetchText(`${BASE}/sitemap.xml`);
+            } catch (_) { return null; }
+            // Garde anti-troncature (corps >1 Mo tronqués par le runtime) :
+            // la regex ne parse que des <loc> complets, dégradation gracieuse.
+            if (!xml || xml.length < 1000) return null;
+            const entries = [];
+            const re = /<loc>([^<]*)<\/loc>/gi;
+            let m;
+            while ((m = re.exec(xml)) !== null) {
+                const cm = m[1].trim().match(/\/catalogue\/([^\/\?#]+)(?:\/(episodes|films|scans)(?:\/([^\/\?#]+))?)?\/?$/);
+                if (!cm || !cm[1]) continue;
+                entries.push({ slug: decodeURIComponent(cm[1]).toLowerCase(), kind: cm[2] || 'base', page: cm[3] ? decodeURIComponent(cm[3]).toLowerCase() : null });
+            }
+            console.log(`[Mugiwara] Sitemap: ${entries.length} entrée(s) catalogue`);
+            return entries.length > 0 ? entries : null;
+        })();
+    }
+    return _sitemapPromise;
+}
+
+function findSitemapSlugs(entries, titles) {
+    const base = [];
+    const seenSlug = new Set();
+    for (const e of entries) {
+        if (e.kind && e.kind !== 'base') continue;
+        if (seenSlug.has(e.slug)) continue;
+        seenSlug.add(e.slug);
+        const nr = normalize(e.slug.replace(/-/g, ' '));
+        if (nr) base.push({ slug: e.slug, nr });
+    }
+    const seen = new Set();
+    const cands = [];
+    for (const t of titles) {
+        if (!t || typeof t !== 'string') continue;
+        const nt = normalize(t);
+        if (!nt) continue;
+        for (const b of base) {
+            if (seen.has(b.slug)) continue;
+            let score = 0;
+            if (b.nr === nt) score = 100;
+            else if (nt.length < 4) continue; // titres courts : égalité stricte only
+            else if ((includesWord(b.nr, nt) || includesWord(nt, b.nr)) && !hasForeignLeadingTokens(b.nr, nt)) score = 80;
+            else if (countCommonWords(b.nr, nt) >= 2) score = 60;
+            if (score >= 60) { seen.add(b.slug); cands.push({ slug: b.slug, score, extra: countExtraWords(b.nr, nt) }); }
+        }
+    }
+    // Tri : score, puis pénalité mots superflus (spin-off "junior-high"
+    // après la série mère), puis slug court. Cap anti-budget.
+    cands.sort((a, b) => b.score - a.score || a.extra - b.extra || a.slug.length - b.slug.length);
+    const capped = cands.slice(0, 15);
+    if (capped.length > 0) console.log(`[Mugiwara] Sitemap match: ${capped.map(c => c.slug + '(' + c.score + ')').join(', ')}${cands.length > capped.length ? ` (+${cands.length - capped.length} écartés)` : ''}`);
+    return capped.map(c => c.slug);
+}
+
+// Segments de pages …/episodes/<seg> listés au sitemap pour un slug
+// (ordre site : 'saison1', 'saison2', … 'oav', 'saison1hs'…).
+async function getSitemapSegments(slug) {
+    const entries = await getSitemapEntries();
+    if (!entries) return [];
+    const segs = [];
+    const seen = new Set();
+    for (const e of entries) {
+        if (e.slug !== slug || e.kind !== 'episodes' || !e.page) continue;
+        if (!seen.has(e.page)) { seen.add(e.page); segs.push(e.page); }
+    }
+    return segs;
+}
+
+// Slugs de sous-pages …/films/<filmSlug> listés au sitemap pour un slug
+// catalogue (ordre site). Ex : jujutsu-kaisen → ['jujutsu-kaisen-0'].
+async function getSitemapFilmSlugs(slug) {
+    const entries = await getSitemapEntries();
+    if (!entries) return [];
+    const out = [];
+    const seen = new Set();
+    for (const e of entries) {
+        if (e.slug !== slug || e.kind !== 'films' || !e.page) continue;
+        if (!seen.has(e.page)) { seen.add(e.page); out.push(e.page); }
+    }
+    return out;
+}
+
+// Candidats film-slug de repli (sitemap vide/incomplet) : noms de films de
+// l'index, slug catalogue lui-même (pages mono-film : films/<slug>),
+// puis toSlug des titres TMDB.
+function extractFilmSlugCandidates(slug, filmOptions, titles) {
+    const cands = [];
+    const seen = new Set();
+    const push = (s) => {
+        if (!s || s.length < 3) return;
+        const key = String(s).toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        cands.push(s);
+    };
+    const names = (filmOptions && filmOptions.names) || [];
+    for (const n of names) {
+        const nm = n && (typeof n === 'string' ? n : n.name);
+        if (nm) push(toSlug(nm));
+    }
+    push(slug);
+    for (const t of titles || []) {
+        if (typeof t === 'string' && t) push(toSlug(stripSeasonSuffix(t)));
+    }
+    return cands;
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episodeNum, options = {}) {
@@ -564,9 +874,38 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
         }
     }
 
-    // Fallback: slug direct depuis le premier titre
-    const directSlug = normalize(titles[0]);
-    if (directSlug && !slugs.includes(directSlug)) slugs.push(directSlug);
+    // Discovery sans API (2) : slugs exacts du sitemap.xml (non WAF).
+    // Ex : "L'Attaque des Titans" → lattaque-des-titans (article agglutiné,
+    // jamais devinable par toSlug).
+    try {
+        const entries = await getSitemapEntries();
+        if (entries) {
+            for (const s of findSitemapSlugs(entries, titles)) {
+                if (isAborted(signal)) return [];
+                if (!slugs.includes(s)) slugs.push(s);
+            }
+        }
+    } catch (_) {}
+
+    // Fallback sans API : slugs toSlug (tirets) depuis chaque titre TMDB
+    // (+ variante sans suffixe saison), sondés sur …/catalogue/<slug>/….
+    // Seules les pages valides sont retenues (soft-404 HTTP 200 rejetées).
+    // Arrêt au premier valide. L'appel /api/search reste premier (utile en
+    // résidentiel) avec son circuit-breaker.
+    // Dernier recours : le sitemap couvre déjà tout le catalogue.
+    const fallbackCandidates = slugs.length === 0 ? buildSlugCandidates(titles, slugs) : [];
+    for (const cand of fallbackCandidates) {
+        if (isAborted(signal)) return [];
+        let ok = false;
+        try {
+            ok = await probeSlugCandidate(cand, mediaType);
+        } catch (_) { ok = false; }
+        if (ok) {
+            console.log(`[Mugiwara] Slug direct valide: ${cand}`);
+            slugs.push(cand);
+            break;
+        }
+    }
 
     if (slugs.length === 0) {
         console.log(`[Mugiwara] No anime found for tmdbId ${tmdbId}`);
@@ -584,31 +923,105 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
             continue;
         }
 
+        // Garde anti-faux-match : le titre réel de la fiche doit matcher un
+        // titre TMDB (ex. "BLACK TORCH" servi pour "Kamen Rider" → 0, rejeté
+        // avant toute extraction d'épisodes). S'applique à TOUS les slugs
+        // retenus (search, sitemap, sondes).
+        const pageName = animeData && typeof animeData.anime === 'string' ? animeData.anime : '';
+        const pageScore = maxPageTitleScore(pageName, titles);
+        if (pageScore < TITLE_GUARD_THRESHOLD) {
+            console.log(`[Mugiwara] Slug ${slug} rejeté: titre page "${pageName || '(inconnu)'}" sans rapport (score ${pageScore})`);
+            continue;
+        }
+
         if (mediaType === 'movie') {
             const filmOptions = animeData.options && animeData.options.FILM_OPTIONS;
             if (!filmOptions) {
                 console.log(`[Mugiwara] No FILM_OPTIONS in extracted data`);
                 continue;
             }
-            const streams = extractFilmStreams(filmOptions);
-            if (streams.length > 0) {
-                console.log(`[Mugiwara] Found ${streams.length} film sources for ${slug}`);
-                return await resolveStreams(streams);
+            // Cas nominal : l'index …/films contient déjà des URLs.
+            const indexStreams = extractFilmStreams(filmOptions);
+            if (indexStreams.length > 0) {
+                console.log(`[Mugiwara] Found ${indexStreams.length} film sources for ${slug}`);
+                const resolved = await resolveStreams(indexStreams);
+                if (resolved.length > 0) return resolved;
+            }
+            // Migration site 2026 : l'index …/films a lang="$undefined", les
+            // URLs vivent sur les sous-pages …/films/<film-slug> (ex
+            // …/films/le-voyage-de-chihiro : FILM_OPTIONS.lang.vf/vostfr avec
+            // sibnet/ansembed). Slugs exacts du sitemap d'abord, puis
+            // candidats (noms, slug, titres TMDB). Arrêt au premier succès.
+            const filmSlugs = await getSitemapFilmSlugs(slug);
+            for (const c of extractFilmSlugCandidates(slug, filmOptions, titles)) {
+                if (!filmSlugs.includes(c)) filmSlugs.push(c);
+            }
+            for (const filmSlug of filmSlugs.slice(0, 6)) {
+                if (isAborted(signal)) return [];
+                let subHtml = null;
+                try {
+                    subHtml = await fetchText(`${BASE}/catalogue/${slug}/films/${filmSlug}`);
+                } catch (_) {}
+                if (!subHtml || subHtml.length < 1000) continue;
+                const subData = extractAnimeServerData(subHtml);
+                const subFilms = subData && subData.options && subData.options.FILM_OPTIONS;
+                if (!subFilms || typeof subFilms.lang !== 'object') continue;
+                // Garde anti-faux-match (films) : titre de la sous-page film
+                // vs titres TMDB (repli sur le titre de l'index, déjà validé,
+                // si la sous-page n'expose pas de champ "anime").
+                const subName = (subData && typeof subData.anime === 'string' && subData.anime) || pageName;
+                if (maxPageTitleScore(subName, titles) < TITLE_GUARD_THRESHOLD) {
+                    console.log(`[Mugiwara] Film ${slug}/films/${filmSlug} rejeté: titre page "${subName || '(inconnu)'}" sans rapport`);
+                    continue;
+                }
+                const streams = extractFilmStreams(subFilms);
+                if (streams.length === 0) continue;
+                console.log(`[Mugiwara] Found ${streams.length} film sources on ${slug}/films/${filmSlug}`);
+                const resolved = await resolveStreams(streams);
+                if (resolved.length > 0) return resolved;
             }
             continue;
         }
 
         // Essai 1 : données de la page par défaut (…/episodes/saison1)
+        // NB : [] (sources trouvées mais résolution vide) = échec → slug
+        // suivant, PAS un succès ([] est truthy en JS).
         const result = await trySeriesStreams(slug, animeData, season, episodeNum, effectiveSeason);
-        if (result) return result;
+        if (result && result.length > 0) return result;
+        if (result) console.log(`[Mugiwara] ${slug}: résolution vide, slug suivant`);
 
-        // Essai 2 : page dédiée à la saison demandée (saisons ≥ 2)
-        if (season >= 2) {
-            const pageData = await getSaisonPageData(slug, season);
-            if (pageData) {
-                console.log(`[Mugiwara] Retrying ${slug} with dedicated page saison${season}`);
-                const retry = await trySeriesStreams(slug, pageData, season, episodeNum, effectiveSeason);
-                if (retry) return retry;
+        // Essai 2 : pages dédiées (saisons ≥ 2, sagas One Piece…). On sonde
+        // les ids listés sur la page saison1 — id de saga matché en premier,
+        // pas le numéro TMDB — + les segments exacts du sitemap (saisonN,
+        // oav, saison1hs…), au lieu de saison2..5 en dur.
+        const listedSaisons = animeData.options && animeData.options.saisons;
+        if (listedSaisons && listedSaisons.length > 0) {
+            const seenP = new Set(['saison1']); // déjà chargée
+            const probes = [];
+            const addProbe = (sagaId, isSegment) => {
+                const raw = String(sagaId == null ? '' : sagaId).trim();
+                if (!raw) return;
+                const pageId = (isSegment || /^saison/i.test(raw)) ? raw.toLowerCase() : 'saison' + raw;
+                if (seenP.has(pageId)) return;
+                seenP.add(pageId);
+                probes.push({ sagaId: raw, isSegment: !!isSegment });
+            };
+            const matched0 = matchSaison(listedSaisons, effectiveSeason, episodeNum);
+            if (matched0 && matched0.saison && matched0.saison.id != null) addProbe(matched0.saison.id, false);
+            for (const seg of await getSitemapSegments(slug)) addProbe(seg, true);
+            for (const s of listedSaisons) {
+                if (s.notASeason || s.id == null) continue;
+                addProbe(s.id, false);
+            }
+            addProbe(season, false);
+            for (const p of probes.slice(0, 6)) {
+                if (isAborted(signal)) return [];
+                const pageData = await getSaisonPageData(slug, p.sagaId, p.isSegment);
+                if (pageData) {
+                    console.log(`[Mugiwara] Retrying ${slug} with dedicated page ${p.isSegment ? p.sagaId : 'saison' + p.sagaId}`);
+                    const retry = await trySeriesStreams(slug, pageData, season, episodeNum, effectiveSeason);
+                    if (retry && retry.length > 0) return retry;
+                }
             }
         }
     }
