@@ -1,6 +1,6 @@
 /**
  * voiranime-be - Built from src/voiranime-be/
- * Generated: 2026-10-09T18:27:37.716457664Z
+ * Generated: 2026-10-09T19:06:32.365792283Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -1606,7 +1606,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "7a410412" : "dev";
+      BUILD_HASH = true ? "8ba369d1" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
