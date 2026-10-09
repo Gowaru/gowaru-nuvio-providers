@@ -1,6 +1,6 @@
 /**
  * senanimes - Built from src/senanimes/
- * Generated: 2026-10-09T19:06:32.182792104Z
+ * Generated: 2026-10-09T20:23:38.75241871Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -1040,6 +1040,8 @@ var __provider = (() => {
         return EXPIRED_MARKERS.some((m) => low.includes(m));
       };
       const isRestrictedStub = (html) => html.length < 200 && /restricted for this domain/i.test(html);
+      let fetchedPages = 0;
+      let restrictedPages = 0;
       const refererChain = [
         `https://${uniqueDomains[0]}/`,
         // self (comportement historique, autres providers)
@@ -1062,7 +1064,12 @@ var __provider = (() => {
               console.warn(`[Resolver] uqload embed dead (expired/deleted): ${url.slice(0, 80)}`);
               return { url, isDead: true };
             }
-            if (isRestrictedStub(html) || !html.includes("p,a,c,k,e,d") && !html.includes("eval(function") && !extractFile(html)) continue;
+            fetchedPages++;
+            if (isRestrictedStub(html)) {
+              restrictedPages++;
+              continue;
+            }
+            if (!html.includes("p,a,c,k,e,d") && !html.includes("eval(function") && !extractFile(html)) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = extractFile(html);
             if (match) {
@@ -1072,6 +1079,10 @@ var __provider = (() => {
           } catch (e) {
           }
         }
+      }
+      if (fetchedPages > 0 && restrictedPages === fetchedPages) {
+        console.warn(`[Resolver] uqload embed dead (restricted on all referers): ${url.slice(0, 80)}`);
+        return { url, isDead: true };
       }
       return { url };
     });
@@ -1574,10 +1585,10 @@ var __provider = (() => {
       try {
         let result = null;
         if (urlLower.includes("sibnet.ru")) result = yield resolveSibnet(originalUrl);
-        else if (urlLower.includes("vidmoly.") || urlLower.includes("voembed.")) result = yield resolveVidmoly(originalUrl);
+        else if (urlLower.includes("vidmoly.") || urlLower.includes("voembed.") || urlLower.includes("ansembed.")) result = yield resolveVidmoly(originalUrl);
         else if (urlLower.includes(".mail.ru")) result = yield resolveMailRu(originalUrl);
         else if (urlLower.includes("uqload.") || urlLower.includes("oneupload.")) result = yield resolveUqload(originalUrl);
-        else if (urlLower.includes("voe") || urlLower.includes("weneverbeenfree") || urlLower.includes("maryspecialwatch") || urlLower.includes("charlestoughrace") || urlLower.includes("sandratableother")) result = yield resolveVoe(originalUrl);
+        else if (urlLower.includes("voe") || urlLower.includes("weneverbeenfree") || urlLower.includes("maryspecialwatch") || urlLower.includes("charlestoughrace") || urlLower.includes("sandratableother") || urlLower.includes("jeremyparticipantanything") || urlLower.includes("teresapoliticallearn")) result = yield resolveVoe(originalUrl);
         else if (urlLower.includes("streamtape.com") || urlLower.includes("stape")) result = yield resolveStreamtape(originalUrl);
         else if (urlLower.includes("dood") || urlLower.includes("ds2play") || urlLower.includes("bigwar5")) result = yield resolveDood(originalUrl);
         else if (urlLower.includes("moonplayer") || urlLower.includes("filemoon")) result = yield resolveMoon(originalUrl);
@@ -1627,6 +1638,19 @@ var __provider = (() => {
                 }
               }
             }
+            if (/<title>\s*watch/i.test(html) && html.includes("VOE")) {
+              const voeRes = yield resolveVoe(originalUrl);
+              if (voeRes && voeRes.url !== originalUrl && voeRes.url.startsWith("http") && !isKnownFakeDirectUrl(voeRes.url)) {
+                const finalVoeUrl = correctDeformedVideoUrl(voeRes.url);
+                return __spreadProps(__spreadValues({}, stream), {
+                  url: finalVoeUrl,
+                  headers: __spreadValues(__spreadValues({}, stream.headers), voeRes.headers || {}),
+                  quality: voeRes.quality || stream.quality,
+                  isDirect: true,
+                  originalUrl
+                });
+              }
+            }
             const iframeUrl = findBestVideoIframe(html, originalUrl);
             if (iframeUrl && !peeledUrls.has(iframeUrl)) {
               peeledUrls.add(iframeUrl);
@@ -1638,7 +1662,7 @@ var __provider = (() => {
               }
             }
             if (!skipDirectScan) {
-              const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
+              const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/) || html.match(/"hls2"\s*:\s*"(https?[^"]*?\.m3u8[^"]*)"/) || html.match(/'hls2'\s*:\s*'([^']*?\.m3u8[^']*)'/);
               if (strictUrl) {
                 let extractedUrl = strictUrl[1] || strictUrl[0];
                 if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
@@ -1693,7 +1717,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "8ba369d1" : "dev";
+      BUILD_HASH = true ? "799ecb95" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {

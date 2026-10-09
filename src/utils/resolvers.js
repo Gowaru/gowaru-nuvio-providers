@@ -1685,6 +1685,13 @@ export async function resolveUqload(url) {
     // On essaie dans cet ordre ; le stub "restricted" (~40 octets) est détecté
     // immédiatement pour ne pas dépacker inutilement.
     const isRestrictedStub = (html) => html.length < 200 && /restricted for this domain/i.test(html);
+    // Compteurs pour l'échec rapide : si TOUTES les pages lues n'étaient que le
+    // stub "restricted" (38 o, uqload.vc en hotlink-protection), on marque l'embed
+    // comme mort pour que resolveStream saute le generic fallback (re-fetch +
+    // peeling + regex lents pour rien). La chaîne de referers reste essayée en
+    // entier avant (un referer peut passer là où un autre est restreint).
+    let fetchedPages = 0;
+    let restrictedPages = 0;
     const refererChain = [
         `https://${uniqueDomains[0]}/`,   // self (comportement historique, autres providers)
         'https://lecteurvideo.com/',      // parent lecteurvideo (chaîne wookafr)
@@ -1714,7 +1721,9 @@ export async function resolveUqload(url) {
                     console.warn(`[Resolver] uqload embed dead (expired/deleted): ${url.slice(0, 80)}`);
                     return { url, isDead: true };
                 }
-                if (isRestrictedStub(html) || (!html.includes('p,a,c,k,e,d') && !html.includes('eval(function') && !extractFile(html))) continue;
+                fetchedPages++;
+                if (isRestrictedStub(html)) { restrictedPages++; continue; }
+                if ((!html.includes('p,a,c,k,e,d') && !html.includes('eval(function') && !extractFile(html))) continue;
                 if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
                 const match = extractFile(html);
                 if (match) {
@@ -1724,8 +1733,13 @@ export async function resolveUqload(url) {
             } catch (e) {}
         }
     }
-    // Tous les domaines/referers épuisés sans fichier trouvé → retourner
-    // l'embed tel quel (le generic fallback de resolveStream peut le traiter)
+    // Tous les domaines/referers épuisés sans fichier trouvé → si on n'a vu
+    // que des stubs "restricted", marquer mort (échec rapide, pas de fallback).
+    // Sinon retourner l'embed tel quel (le generic fallback peut le traiter).
+    if (fetchedPages > 0 && restrictedPages === fetchedPages) {
+        console.warn(`[Resolver] uqload embed dead (restricted on all referers): ${url.slice(0, 80)}`);
+        return { url, isDead: true };
+    }
     return { url };
 }
 
@@ -2488,10 +2502,10 @@ export async function resolveStream(stream, depth = 0) {
 
         // 2. Specific Host Resolvers
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
-        else if (urlLower.includes('vidmoly.') || urlLower.includes('voembed.')) result = await resolveVidmoly(originalUrl);
+        else if (urlLower.includes('vidmoly.') || urlLower.includes('voembed.') || urlLower.includes('ansembed.')) result = await resolveVidmoly(originalUrl);
         else if (urlLower.includes('.mail.ru')) result = await resolveMailRu(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
-        else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother')) result = await resolveVoe(originalUrl);
+        else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother') || urlLower.includes('jeremyparticipantanything') || urlLower.includes('teresapoliticallearn')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
         else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
@@ -2571,6 +2585,24 @@ export async function resolveStream(stream, depth = 0) {
                     }
                 }
 
+                // Repli contenu VOE : domaines tournants (pattern 3-mots aléatoires,
+                // ex. jeremyparticipantanything.com) non listés dans le routage URL.
+                // Titre page "Watch ... - VOE" → déléguer à resolveVoe.
+                if (/<title>\s*watch/i.test(html) && html.includes('VOE')) {
+                    const voeRes = await resolveVoe(originalUrl);
+                    if (voeRes && voeRes.url !== originalUrl && voeRes.url.startsWith('http') && !isKnownFakeDirectUrl(voeRes.url)) {
+                        const finalVoeUrl = correctDeformedVideoUrl(voeRes.url);
+                        return {
+                            ...stream,
+                            url: finalVoeUrl,
+                            headers: { ...stream.headers, ...(voeRes.headers || {}) },
+                            quality: voeRes.quality || stream.quality,
+                            isDirect: true,
+                            originalUrl: originalUrl
+                        };
+                    }
+                }
+
                 // ÉTAPE 1: Toujours essayer le peeling d'iframe en premier (plus fiable)
                 // Les iframes vidéo sont plus fiables que les regex qui peuvent matcher
                 // des URLs dans des pubs, analytics, ou JSON configs non-liés à la vidéo.
@@ -2603,7 +2635,9 @@ export async function resolveStream(stream, depth = 0) {
                     const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                                      html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                                      html.match(/'hls'\s*:\s*'([^']+)'/) ||
-                                     html.match(/"hls"\s*:\s*"([^"]+)"/);
+                                     html.match(/"hls"\s*:\s*"([^"]+)"/) ||
+                                     html.match(/"hls2"\s*:\s*"(https?[^"]*?\.m3u8[^"]*)"/) ||
+                                     html.match(/'hls2'\s*:\s*'([^']*?\.m3u8[^']*)'/);
 
                     if (strictUrl) {
                         let extractedUrl = strictUrl[1] || strictUrl[0];

@@ -1,6 +1,6 @@
 /**
  * mugiwarastream - Built from src/mugiwarastream/
- * Generated: 2026-10-09T19:06:31.965791906Z
+ * Generated: 2026-10-09T20:50:59.36105924Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -971,6 +971,8 @@ var __provider = (() => {
         return EXPIRED_MARKERS.some((m) => low.includes(m));
       };
       const isRestrictedStub = (html) => html.length < 200 && /restricted for this domain/i.test(html);
+      let fetchedPages = 0;
+      let restrictedPages = 0;
       const refererChain = [
         `https://${uniqueDomains[0]}/`,
         // self (comportement historique, autres providers)
@@ -993,7 +995,12 @@ var __provider = (() => {
               console.warn(`[Resolver] uqload embed dead (expired/deleted): ${url.slice(0, 80)}`);
               return { url, isDead: true };
             }
-            if (isRestrictedStub(html) || !html.includes("p,a,c,k,e,d") && !html.includes("eval(function") && !extractFile(html)) continue;
+            fetchedPages++;
+            if (isRestrictedStub(html)) {
+              restrictedPages++;
+              continue;
+            }
+            if (!html.includes("p,a,c,k,e,d") && !html.includes("eval(function") && !extractFile(html)) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = extractFile(html);
             if (match) {
@@ -1003,6 +1010,10 @@ var __provider = (() => {
           } catch (e) {
           }
         }
+      }
+      if (fetchedPages > 0 && restrictedPages === fetchedPages) {
+        console.warn(`[Resolver] uqload embed dead (restricted on all referers): ${url.slice(0, 80)}`);
+        return { url, isDead: true };
       }
       return { url };
     });
@@ -1505,10 +1516,10 @@ var __provider = (() => {
       try {
         let result = null;
         if (urlLower.includes("sibnet.ru")) result = yield resolveSibnet(originalUrl);
-        else if (urlLower.includes("vidmoly.") || urlLower.includes("voembed.")) result = yield resolveVidmoly(originalUrl);
+        else if (urlLower.includes("vidmoly.") || urlLower.includes("voembed.") || urlLower.includes("ansembed.")) result = yield resolveVidmoly(originalUrl);
         else if (urlLower.includes(".mail.ru")) result = yield resolveMailRu(originalUrl);
         else if (urlLower.includes("uqload.") || urlLower.includes("oneupload.")) result = yield resolveUqload(originalUrl);
-        else if (urlLower.includes("voe") || urlLower.includes("weneverbeenfree") || urlLower.includes("maryspecialwatch") || urlLower.includes("charlestoughrace") || urlLower.includes("sandratableother")) result = yield resolveVoe(originalUrl);
+        else if (urlLower.includes("voe") || urlLower.includes("weneverbeenfree") || urlLower.includes("maryspecialwatch") || urlLower.includes("charlestoughrace") || urlLower.includes("sandratableother") || urlLower.includes("jeremyparticipantanything") || urlLower.includes("teresapoliticallearn")) result = yield resolveVoe(originalUrl);
         else if (urlLower.includes("streamtape.com") || urlLower.includes("stape")) result = yield resolveStreamtape(originalUrl);
         else if (urlLower.includes("dood") || urlLower.includes("ds2play") || urlLower.includes("bigwar5")) result = yield resolveDood(originalUrl);
         else if (urlLower.includes("moonplayer") || urlLower.includes("filemoon")) result = yield resolveMoon(originalUrl);
@@ -1558,6 +1569,19 @@ var __provider = (() => {
                 }
               }
             }
+            if (/<title>\s*watch/i.test(html) && html.includes("VOE")) {
+              const voeRes = yield resolveVoe(originalUrl);
+              if (voeRes && voeRes.url !== originalUrl && voeRes.url.startsWith("http") && !isKnownFakeDirectUrl(voeRes.url)) {
+                const finalVoeUrl = correctDeformedVideoUrl(voeRes.url);
+                return __spreadProps(__spreadValues({}, stream), {
+                  url: finalVoeUrl,
+                  headers: __spreadValues(__spreadValues({}, stream.headers), voeRes.headers || {}),
+                  quality: voeRes.quality || stream.quality,
+                  isDirect: true,
+                  originalUrl
+                });
+              }
+            }
             const iframeUrl = findBestVideoIframe(html, originalUrl);
             if (iframeUrl && !peeledUrls.has(iframeUrl)) {
               peeledUrls.add(iframeUrl);
@@ -1569,7 +1593,7 @@ var __provider = (() => {
               }
             }
             if (!skipDirectScan) {
-              const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
+              const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/) || html.match(/"hls2"\s*:\s*"(https?[^"]*?\.m3u8[^"]*)"/) || html.match(/'hls2'\s*:\s*'([^']*?\.m3u8[^']*)'/);
               if (strictUrl) {
                 let extractedUrl = strictUrl[1] || strictUrl[0];
                 if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
@@ -1624,7 +1648,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "8ba369d1" : "dev";
+      BUILD_HASH = true ? "666304ec" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -1777,6 +1801,12 @@ var __provider = (() => {
   function setCurrentSignal(signal) {
     _currentSignal = signal;
   }
+  function isApiUrl(url) {
+    return typeof url === "string" && url.includes("/api/");
+  }
+  function isApiCircuitOpen() {
+    return Date.now() < _apiCircuitOpenUntil;
+  }
   function isCircuitOpen() {
     return Date.now() < _circuitOpenUntil;
   }
@@ -1789,12 +1819,12 @@ var __provider = (() => {
       var _b, _c, _d, _e, _f, _g, _h;
       const signal = options.signal || _currentSignal;
       if (isAborted(signal)) throw new Error("AbortError: Request aborted");
-      if (isCircuitOpen()) {
+      if (isCircuitOpen() || isApiUrl(url) && isApiCircuitOpen()) {
         throw new Error(`Cloudflare circuit open (domain blocked for ${Math.ceil((_circuitOpenUntil - Date.now()) / 1e3)}s)`);
       }
       const _a = options, { headers: customHeaders, method, timeout, retries } = _a, rest = __objRest(_a, ["headers", "method", "timeout", "retries"]);
       const resolvedMethod = method || "GET";
-      const maxRetries = retries != null ? retries : 2;
+      const maxRetries = retries != null ? retries : isApiUrl(url) ? 0 : 2;
       const mergedHeaders = __spreadValues(__spreadValues({}, HEADERS2), customHeaders || {});
       let lastError = null;
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -1828,7 +1858,10 @@ var __provider = (() => {
             const text = yield res.text();
             if (isCloudflareBlock(text)) {
               console.log(`[Mugiwara] Cloudflare block (${status}), attempt ${attempt + 1}/${maxRetries + 1}`);
-              if (attempt === maxRetries || status === 403) {
+              if (isApiUrl(url)) {
+                _apiCircuitOpenUntil = Date.now() + API_CIRCUIT_COOLDOWN_MS;
+                console.log(`[Mugiwara] API circuit breaker OPEN (${API_CIRCUIT_COOLDOWN_MS / 1e3}s) \u2014 HTML non affect\xE9`);
+              } else if (attempt === maxRetries || status === 403) {
                 _circuitOpenUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
                 console.log(`[Mugiwara] Circuit breaker OPEN (${CIRCUIT_COOLDOWN_MS / 1e3}s) \u2014 domaine bloqu\xE9 CF`);
               }
@@ -1863,7 +1896,7 @@ var __provider = (() => {
       throw lastError || new Error(`Failed after ${maxRetries + 1} attempts`);
     });
   }
-  var BASE_URL, BASE, HEADERS2, rateLimit, _currentSignal, DOMAIN, RETRY_DELAYS, CIRCUIT_COOLDOWN_MS, _circuitOpenUntil;
+  var BASE_URL, BASE, HEADERS2, rateLimit, _currentSignal, DOMAIN, RETRY_DELAYS, CIRCUIT_COOLDOWN_MS, _circuitOpenUntil, API_CIRCUIT_COOLDOWN_MS, _apiCircuitOpenUntil;
   var init_http = __esm({
     "src/mugiwarastream/http.js"() {
       init_resolvers();
@@ -1880,6 +1913,8 @@ var __provider = (() => {
       RETRY_DELAYS = [1e3, 3e3, 5e3];
       CIRCUIT_COOLDOWN_MS = 6e4;
       _circuitOpenUntil = 0;
+      API_CIRCUIT_COOLDOWN_MS = 6e4;
+      _apiCircuitOpenUntil = 0;
     }
   });
 
@@ -14027,8 +14062,22 @@ var __provider = (() => {
   });
 
   // src/utils/dle-extractor.js
+  function stripSeasonSuffix(title) {
+    if (!title) return title;
+    let cleaned = title.replace(/\s+(?:Season|Saison|Stagione|Temporada)\s+\d+\s*$/i, "").replace(/\s+S\d+\s*$/i, "");
+    return cleaned.trim() || title;
+  }
+  function toSlug(title) {
+    return (title || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?()\[\]\/–—"]/g, " ").replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  }
   function normalize(s) {
     return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?()\[\]\/-]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function countExtraWords(resultTitle, searchTitle) {
+    const qWords = new Set((searchTitle || "").split(/\s+/).filter((w) => w.length > 2));
+    return (resultTitle || "").split(/\s+/).filter(
+      (w) => w.length > 2 && !/^\d+$/.test(w) && !TITLE_NOISE_WORDS.has(w) && !qWords.has(w)
+    ).length;
   }
   function hasForeignLeadingTokens(resultTitle, searchTitle) {
     const nt = normalize(searchTitle);
@@ -14415,6 +14464,8 @@ var __provider = (() => {
     const lower = url.toLowerCase();
     if (lower.includes("sibnet")) return "Sibnet";
     if (lower.includes("vidmoly") || lower.includes("voembed")) return "Vidmoly";
+    if (lower.includes("ansembed")) return "AnsEmbed";
+    if (lower.includes("embed4me") || lower.includes("lpayer")) return "Embed4Me";
     if (lower.includes("sendvid")) return "Sendvid";
     if (lower.includes("vk.com") || lower.includes("vkvideo")) return "VK";
     if (lower.includes("youtube")) return "YouTube";
@@ -14444,8 +14495,8 @@ var __provider = (() => {
         try {
           const r = yield resolveStream(stream);
           if (r && r.url && r.isDirect) {
-            const _a = r, { isDirect, originalUrl } = _a, clean = __objRest(_a, ["isDirect", "originalUrl"]);
-            direct.push(__spreadProps(__spreadValues(__spreadValues({}, stream), clean), { quality: r.quality || stream.quality }));
+            const _a = r, { originalUrl } = _a, clean = __objRest(_a, ["originalUrl"]);
+            direct.push(__spreadProps(__spreadValues(__spreadValues({}, stream), clean), { isDirect: true, quality: r.quality || stream.quality }));
           }
         } catch (e) {
         }
@@ -14491,12 +14542,53 @@ var __provider = (() => {
           if (!Array.isArray(arr) || filmIdx >= arr.length) continue;
           const url = arr[filmIdx];
           if (!url || typeof url !== "string") continue;
+          if (!/^https?:\/\//i.test(url) && !url.startsWith("//")) continue;
           const sourceLabel = sourceIdx < labels.length ? labels[sourceIdx] : `Source ${sourceIdx + 1}`;
           allFilmStreams.push(buildStreamEntry(url, sourceLabel, langLabel, filmName));
         }
       }
     }
     return allFilmStreams;
+  }
+  function includesWord(hay, needle) {
+    if (!hay || !needle) return false;
+    let pos = hay.indexOf(needle);
+    while (pos !== -1) {
+      const before = pos === 0 || hay[pos - 1] === " ";
+      const after = pos + needle.length >= hay.length || hay[pos + needle.length] === " ";
+      if (before && after) return true;
+      pos = hay.indexOf(needle, pos + 1);
+    }
+    return false;
+  }
+  function countCommonWords(nr, nt) {
+    const nrWords = new Set(nr.split(/\s+/));
+    let n = 0;
+    for (const w of nt.split(/\s+/)) {
+      if (w.length <= 2 || GENERIC_TOKENS.has(w)) continue;
+      if (w.length >= 5 ? nr.includes(w) : nrWords.has(w)) n++;
+    }
+    return n;
+  }
+  function scorePageTitle(pageName, title) {
+    const nt = normalize(title);
+    const nr = normalize(pageName);
+    if (!nt || !nr) return 0;
+    if (nr === nt) return 100;
+    if ((includesWord(nr, nt) || includesWord(nt, nr)) && !hasForeignLeadingTokens(nr, nt)) return 80;
+    return 0;
+  }
+  function maxPageTitleScore(pageName, titles) {
+    let best = 0;
+    for (const t of titles || []) {
+      if (typeof t !== "string" || !t) continue;
+      const s = scorePageTitle(pageName, t);
+      if (s > best) {
+        best = s;
+        if (best >= 100) break;
+      }
+    }
+    return best;
   }
   function findSlugs(titles) {
     return __async(this, null, function* () {
@@ -14529,12 +14621,10 @@ var __provider = (() => {
           const nr = normalize(r.anime);
           let score = 0;
           if (nr === nt) score = 100;
-          else if ((nr.includes(nt) || nt.includes(nr)) && !hasForeignLeadingTokens(nr, nt)) score = 80;
+          else if ((includesWord(nr, nt) || includesWord(nt, nr)) && !hasForeignLeadingTokens(nr, nt)) score = 80;
           else if (r.matched && normalize(r.matched) === nt) score = 90;
           else if (r.anime) {
-            const ra = normalize(r.anime);
-            const commonWords = nt.split("-").filter((w) => w.length > 2 && ra.includes(w)).length;
-            if (commonWords >= 2) score = 60;
+            if (countCommonWords(nr, nt) >= 2) score = 60;
           }
           if (score >= 60 && r.slug && !seenSlugs.has(r.slug)) {
             seenSlugs.add(r.slug);
@@ -14551,6 +14641,19 @@ var __provider = (() => {
       console.log(`[Mugiwara] Found ${allCandidates.length} slug candidate(s): ${allCandidates.map((c) => c.slug + "(" + c.score + ")").join(", ")}`);
       return allCandidates.map((c) => c.slug);
     });
+  }
+  function getEpisodeDisplayTitle(animeData, episodeIndex, fallback) {
+    const names = animeData && animeData.options && animeData.options.EPISODES_OPTIONS && animeData.options.EPISODES_OPTIONS.names;
+    if (Array.isArray(names) && names.length > 0) {
+      if (episodeIndex >= 0 && episodeIndex < names.length) {
+        const entry = names[episodeIndex];
+        const t = entry && (typeof entry === "string" ? entry : entry.name || entry.title);
+        if (typeof t === "string" && t.trim()) return t.trim();
+        return fallback;
+      }
+      console.log(`[Mugiwara] WARNING: episodeIndex ${episodeIndex} out of bounds (EPISODES_OPTIONS.names: ${names.length}) \u2014 fallback "${fallback}"`);
+    }
+    return fallback;
   }
   function collectStreamsForLang(saison, lang, episodeIndex, seasonName) {
     const episodeUrls = extractEpisodeUrls(saison, lang);
@@ -14584,6 +14687,21 @@ var __provider = (() => {
       return null;
     });
   }
+  function extractSaisonPageIds(html) {
+    if (!html) return [];
+    const ids = [];
+    const seen = /* @__PURE__ */ new Set();
+    const re = /saison\d[\w-]*/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const id = m[0].toLowerCase();
+      if (!seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
   function getAnimeData(slug, mediaType) {
     return __async(this, null, function* () {
       const cacheKey = slug + ":" + mediaType;
@@ -14596,9 +14714,21 @@ var __provider = (() => {
         }
         if (!pageHtml || pageHtml.length < 1e3 || pageHtml.indexOf("animeServer") === -1) {
           if (mediaType !== "movie") {
-            for (let s = 2; s <= 5; s++) {
+            const smSegs = yield getSitemapSegments(slug);
+            const listed = extractSaisonPageIds(pageHtml);
+            const probes = [];
+            const seenP = /* @__PURE__ */ new Set(["saison1"]);
+            for (const seg of smSegs.concat(listed)) {
+              const id = String(seg).toLowerCase();
+              if (!seenP.has(id)) {
+                seenP.add(id);
+                probes.push(id);
+              }
+            }
+            if (probes.length === 0) probes.push("saison2", "saison3", "saison4", "saison5");
+            for (const pid of probes.slice(0, 6)) {
               try {
-                const html = yield fetchText(`${BASE}/catalogue/${slug}/episodes/saison${s}`);
+                const html = yield fetchText(`${BASE}/catalogue/${slug}/episodes/${pid}`);
                 if (html && html.indexOf("animeServer") !== -1) {
                   pageHtml = html;
                   break;
@@ -14616,16 +14746,20 @@ var __provider = (() => {
       }));
     });
   }
-  function getSaisonPageData(slug, saisonNum) {
+  function getSaisonPageData(slug, sagaId, isSegment) {
     return __async(this, null, function* () {
-      const cacheKey = slug + ":saison" + saisonNum;
+      const raw = String(sagaId == null ? "" : sagaId).trim();
+      if (!raw) return null;
+      const pageId = isSegment || /^saison/i.test(raw) ? raw.toLowerCase() : "saison" + raw;
+      const cacheKey = slug + ":" + pageId;
       return animeDataCache(cacheKey, () => __async(null, null, function* () {
         let pageHtml = null;
         try {
-          pageHtml = yield fetchText(`${BASE}/catalogue/${slug}/episodes/saison${saisonNum}`);
+          pageHtml = yield fetchText(`${BASE}/catalogue/${slug}/episodes/${pageId}`);
         } catch (_) {
         }
         if (!pageHtml || pageHtml.length < 1e3) return null;
+        if (pageHtml.replace(/\\/g, "").includes('"animeServer":0')) return null;
         const data = extractAnimeServerData(pageHtml);
         return data && data.options && data.options.saisons ? data : null;
       }));
@@ -14650,6 +14784,7 @@ var __provider = (() => {
       }
       const { saison: matchedSaison, episodeIndex: epIndex } = matched;
       const seasonName = matchedSaison.name || "Saison " + matchedSaison.id;
+      const displayTitle = getEpisodeDisplayTitle(animeData, epIndex, seasonName);
       const seenUrls = /* @__PURE__ */ new Set();
       const allStreams = [];
       for (const lang of langs) {
@@ -14662,9 +14797,9 @@ var __provider = (() => {
           console.log(`[Mugiwara] ${lang} only has ${langEpCount} episodes, S${season}E${episodeNum} out of range`);
           continue;
         }
-        const streams = collectStreamsForLang(matchedSaison, lang, epIndex, seasonName);
+        const streams = collectStreamsForLang(matchedSaison, lang, epIndex, displayTitle);
         for (const s of streams) {
-          const urlKey = s.url.replace(/\?.*$/, "");
+          const urlKey = lang + "::" + s.url.replace(/\?.*$/, "");
           if (!seenUrls.has(urlKey)) {
             seenUrls.add(urlKey);
             allStreams.push(s);
@@ -14677,6 +14812,174 @@ var __provider = (() => {
       }
       return null;
     });
+  }
+  function isValidCataloguePage(html, data, mediaType) {
+    if (!html || !data || typeof data !== "object") return false;
+    if (mediaType === "movie") return !!(data.options && data.options.FILM_OPTIONS);
+    const saisons = data.options && data.options.saisons;
+    if (!Array.isArray(saisons) || saisons.length === 0) return false;
+    if (saisons.some((s) => getEpisodeCount(s) > 0)) return true;
+    return html.length > SOFT404_MIN_VALID_SIZE;
+  }
+  function buildSlugCandidates(titles, alreadyHave) {
+    const have = new Set((alreadyHave || []).map((s) => String(s).toLowerCase()));
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    const push = (slug) => {
+      if (!slug || slug.length < 3) return;
+      const key = slug.toLowerCase();
+      if (seen.has(key) || have.has(key)) return;
+      seen.add(key);
+      out.push(slug);
+    };
+    const strTitles = titles.filter((t) => t && typeof t === "string");
+    for (const t of strTitles) {
+      push(toSlug(t));
+      if (out.length >= 8) break;
+    }
+    if (out.length < 8) {
+      for (const t of strTitles) {
+        const stripped = stripSeasonSuffix(t);
+        if (stripped && stripped !== t) push(toSlug(stripped));
+        if (out.length >= 8) break;
+      }
+    }
+    return out;
+  }
+  function probeSlugCandidate(slug, mediaType) {
+    return __async(this, null, function* () {
+      const pageUrl = mediaType === "movie" ? `${BASE}/catalogue/${slug}/films` : `${BASE}/catalogue/${slug}/episodes/saison1`;
+      let html = null;
+      try {
+        html = yield fetchText(pageUrl);
+      } catch (_) {
+        return false;
+      }
+      if (!html || html.length < 1e3) return false;
+      if (html.replace(/\\/g, "").includes('"animeServer":0')) {
+        console.log(`[Mugiwara] Slug ${slug}: soft-404 (animeServer: 0)`);
+        return false;
+      }
+      const data = extractAnimeServerData(html);
+      if (!isValidCataloguePage(html, data, mediaType)) {
+        console.log(`[Mugiwara] Slug ${slug}: page invalide/soft-404 (${html.length} o)`);
+        return false;
+      }
+      return true;
+    });
+  }
+  function getSitemapEntries() {
+    return __async(this, null, function* () {
+      if (!_sitemapPromise) {
+        _sitemapPromise = (() => __async(null, null, function* () {
+          let xml = null;
+          try {
+            xml = yield fetchText(`${BASE}/sitemap.xml`);
+          } catch (_) {
+            return null;
+          }
+          if (!xml || xml.length < 1e3) return null;
+          const entries = [];
+          const re = /<loc>([^<]*)<\/loc>/gi;
+          let m;
+          while ((m = re.exec(xml)) !== null) {
+            const cm = m[1].trim().match(/\/catalogue\/([^\/\?#]+)(?:\/(episodes|films|scans)(?:\/([^\/\?#]+))?)?\/?$/);
+            if (!cm || !cm[1]) continue;
+            entries.push({ slug: decodeURIComponent(cm[1]).toLowerCase(), kind: cm[2] || "base", page: cm[3] ? decodeURIComponent(cm[3]).toLowerCase() : null });
+          }
+          console.log(`[Mugiwara] Sitemap: ${entries.length} entr\xE9e(s) catalogue`);
+          return entries.length > 0 ? entries : null;
+        }))();
+      }
+      return _sitemapPromise;
+    });
+  }
+  function findSitemapSlugs(entries, titles) {
+    const base = [];
+    const seenSlug = /* @__PURE__ */ new Set();
+    for (const e of entries) {
+      if (e.kind && e.kind !== "base") continue;
+      if (seenSlug.has(e.slug)) continue;
+      seenSlug.add(e.slug);
+      const nr = normalize(e.slug.replace(/-/g, " "));
+      if (nr) base.push({ slug: e.slug, nr });
+    }
+    const seen = /* @__PURE__ */ new Set();
+    const cands = [];
+    for (const t of titles) {
+      if (!t || typeof t !== "string") continue;
+      const nt = normalize(t);
+      if (!nt) continue;
+      for (const b of base) {
+        if (seen.has(b.slug)) continue;
+        let score = 0;
+        if (b.nr === nt) score = 100;
+        else if (nt.length < 4) continue;
+        else if ((includesWord(b.nr, nt) || includesWord(nt, b.nr)) && !hasForeignLeadingTokens(b.nr, nt)) score = 80;
+        else if (countCommonWords(b.nr, nt) >= 2) score = 60;
+        if (score >= 60) {
+          seen.add(b.slug);
+          cands.push({ slug: b.slug, score, extra: countExtraWords(b.nr, nt) });
+        }
+      }
+    }
+    cands.sort((a, b) => b.score - a.score || a.extra - b.extra || a.slug.length - b.slug.length);
+    const capped = cands.slice(0, 15);
+    if (capped.length > 0) console.log(`[Mugiwara] Sitemap match: ${capped.map((c) => c.slug + "(" + c.score + ")").join(", ")}${cands.length > capped.length ? ` (+${cands.length - capped.length} \xE9cart\xE9s)` : ""}`);
+    return capped.map((c) => c.slug);
+  }
+  function getSitemapSegments(slug) {
+    return __async(this, null, function* () {
+      const entries = yield getSitemapEntries();
+      if (!entries) return [];
+      const segs = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const e of entries) {
+        if (e.slug !== slug || e.kind !== "episodes" || !e.page) continue;
+        if (!seen.has(e.page)) {
+          seen.add(e.page);
+          segs.push(e.page);
+        }
+      }
+      return segs;
+    });
+  }
+  function getSitemapFilmSlugs(slug) {
+    return __async(this, null, function* () {
+      const entries = yield getSitemapEntries();
+      if (!entries) return [];
+      const out = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const e of entries) {
+        if (e.slug !== slug || e.kind !== "films" || !e.page) continue;
+        if (!seen.has(e.page)) {
+          seen.add(e.page);
+          out.push(e.page);
+        }
+      }
+      return out;
+    });
+  }
+  function extractFilmSlugCandidates(slug, filmOptions, titles) {
+    const cands = [];
+    const seen = /* @__PURE__ */ new Set();
+    const push = (s) => {
+      if (!s || s.length < 3) return;
+      const key = String(s).toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      cands.push(s);
+    };
+    const names = filmOptions && filmOptions.names || [];
+    for (const n of names) {
+      const nm = n && (typeof n === "string" ? n : n.name);
+      if (nm) push(toSlug(nm));
+    }
+    push(slug);
+    for (const t of titles || []) {
+      if (typeof t === "string" && t) push(toSlug(stripSeasonSuffix(t)));
+    }
+    return cands;
   }
   function extractStreams(_0, _1, _2, _3) {
     return __async(this, arguments, function* (tmdbId, mediaType, season, episodeNum, options = {}) {
@@ -14697,8 +15000,31 @@ var __provider = (() => {
           for (const s of directSearch) slugs.push(s);
         }
       }
-      const directSlug = normalize(titles[0]);
-      if (directSlug && !slugs.includes(directSlug)) slugs.push(directSlug);
+      try {
+        const entries = yield getSitemapEntries();
+        if (entries) {
+          for (const s of findSitemapSlugs(entries, titles)) {
+            if (isAborted(signal)) return [];
+            if (!slugs.includes(s)) slugs.push(s);
+          }
+        }
+      } catch (_) {
+      }
+      const fallbackCandidates = slugs.length === 0 ? buildSlugCandidates(titles, slugs) : [];
+      for (const cand of fallbackCandidates) {
+        if (isAborted(signal)) return [];
+        let ok = false;
+        try {
+          ok = yield probeSlugCandidate(cand, mediaType);
+        } catch (_) {
+          ok = false;
+        }
+        if (ok) {
+          console.log(`[Mugiwara] Slug direct valide: ${cand}`);
+          slugs.push(cand);
+          break;
+        }
+      }
       if (slugs.length === 0) {
         console.log(`[Mugiwara] No anime found for tmdbId ${tmdbId}`);
         return [];
@@ -14711,27 +15037,83 @@ var __provider = (() => {
           console.log(`[Mugiwara] Could not extract anime data for ${slug}`);
           continue;
         }
+        const pageName = animeData && typeof animeData.anime === "string" ? animeData.anime : "";
+        const pageScore = maxPageTitleScore(pageName, titles);
+        if (pageScore < TITLE_GUARD_THRESHOLD) {
+          console.log(`[Mugiwara] Slug ${slug} rejet\xE9: titre page "${pageName || "(inconnu)"}" sans rapport (score ${pageScore})`);
+          continue;
+        }
         if (mediaType === "movie") {
           const filmOptions = animeData.options && animeData.options.FILM_OPTIONS;
           if (!filmOptions) {
             console.log(`[Mugiwara] No FILM_OPTIONS in extracted data`);
             continue;
           }
-          const streams = extractFilmStreams(filmOptions);
-          if (streams.length > 0) {
-            console.log(`[Mugiwara] Found ${streams.length} film sources for ${slug}`);
-            return yield resolveStreams(streams);
+          const indexStreams = extractFilmStreams(filmOptions);
+          if (indexStreams.length > 0) {
+            console.log(`[Mugiwara] Found ${indexStreams.length} film sources for ${slug}`);
+            const resolved = yield resolveStreams(indexStreams);
+            if (resolved.length > 0) return resolved;
+          }
+          const filmSlugs = yield getSitemapFilmSlugs(slug);
+          for (const c of extractFilmSlugCandidates(slug, filmOptions, titles)) {
+            if (!filmSlugs.includes(c)) filmSlugs.push(c);
+          }
+          for (const filmSlug of filmSlugs.slice(0, 6)) {
+            if (isAborted(signal)) return [];
+            let subHtml = null;
+            try {
+              subHtml = yield fetchText(`${BASE}/catalogue/${slug}/films/${filmSlug}`);
+            } catch (_) {
+            }
+            if (!subHtml || subHtml.length < 1e3) continue;
+            const subData = extractAnimeServerData(subHtml);
+            const subFilms = subData && subData.options && subData.options.FILM_OPTIONS;
+            if (!subFilms || typeof subFilms.lang !== "object") continue;
+            const subName = subData && typeof subData.anime === "string" && subData.anime || pageName;
+            if (maxPageTitleScore(subName, titles) < TITLE_GUARD_THRESHOLD) {
+              console.log(`[Mugiwara] Film ${slug}/films/${filmSlug} rejet\xE9: titre page "${subName || "(inconnu)"}" sans rapport`);
+              continue;
+            }
+            const streams = extractFilmStreams(subFilms);
+            if (streams.length === 0) continue;
+            console.log(`[Mugiwara] Found ${streams.length} film sources on ${slug}/films/${filmSlug}`);
+            const resolved = yield resolveStreams(streams);
+            if (resolved.length > 0) return resolved;
           }
           continue;
         }
         const result = yield trySeriesStreams(slug, animeData, season, episodeNum, effectiveSeason);
-        if (result) return result;
-        if (season >= 2) {
-          const pageData = yield getSaisonPageData(slug, season);
-          if (pageData) {
-            console.log(`[Mugiwara] Retrying ${slug} with dedicated page saison${season}`);
-            const retry = yield trySeriesStreams(slug, pageData, season, episodeNum, effectiveSeason);
-            if (retry) return retry;
+        if (result && result.length > 0) return result;
+        if (result) console.log(`[Mugiwara] ${slug}: r\xE9solution vide, slug suivant`);
+        const listedSaisons = animeData.options && animeData.options.saisons;
+        if (listedSaisons && listedSaisons.length > 0) {
+          const seenP = /* @__PURE__ */ new Set(["saison1"]);
+          const probes = [];
+          const addProbe = (sagaId, isSegment) => {
+            const raw = String(sagaId == null ? "" : sagaId).trim();
+            if (!raw) return;
+            const pageId = isSegment || /^saison/i.test(raw) ? raw.toLowerCase() : "saison" + raw;
+            if (seenP.has(pageId)) return;
+            seenP.add(pageId);
+            probes.push({ sagaId: raw, isSegment: !!isSegment });
+          };
+          const matched0 = matchSaison(listedSaisons, effectiveSeason, episodeNum);
+          if (matched0 && matched0.saison && matched0.saison.id != null) addProbe(matched0.saison.id, false);
+          for (const seg of yield getSitemapSegments(slug)) addProbe(seg, true);
+          for (const s of listedSaisons) {
+            if (s.notASeason || s.id == null) continue;
+            addProbe(s.id, false);
+          }
+          addProbe(season, false);
+          for (const p of probes.slice(0, 6)) {
+            if (isAborted(signal)) return [];
+            const pageData = yield getSaisonPageData(slug, p.sagaId, p.isSegment);
+            if (pageData) {
+              console.log(`[Mugiwara] Retrying ${slug} with dedicated page ${p.isSegment ? p.sagaId : "saison" + p.sagaId}`);
+              const retry = yield trySeriesStreams(slug, pageData, season, episodeNum, effectiveSeason);
+              if (retry && retry.length > 0) return retry;
+            }
           }
         }
       }
@@ -14739,7 +15121,7 @@ var __provider = (() => {
       return [];
     });
   }
-  var SOURCE_LABELS, DEAD_HOSTS, MAX_SLUG_SEARCH, slugCache, animeDataCache;
+  var SOURCE_LABELS, DEAD_HOSTS, TITLE_GUARD_THRESHOLD, MAX_SLUG_SEARCH, slugCache, animeDataCache, SOFT404_MIN_VALID_SIZE, _sitemapPromise;
   var init_extractor = __esm({
     "src/mugiwarastream/extractor.js"() {
       init_http();
@@ -14748,10 +15130,13 @@ var __provider = (() => {
       init_dle_extractor();
       init_cache();
       SOURCE_LABELS = ["Sibnet", "Vidmoly", "Sendvid", "VK", "Youtube", "Other"];
-      DEAD_HOSTS = ["sendvid.com", "uqload.co", "uqload.bz", "uqload.to", "oneupload.to"];
+      DEAD_HOSTS = ["sendvid", "embed4me", "uqload.co", "uqload.bz", "uqload.to", "oneupload.to"];
+      TITLE_GUARD_THRESHOLD = 80;
       MAX_SLUG_SEARCH = 5;
       slugCache = createCache("mg_slug", "MugiwaraSlug", { successTtl: 10 * 6e4, maxSize: 200 });
       animeDataCache = createCache("mg_data", "MugiwaraData", { successTtl: 15 * 6e4, maxSize: 100 });
+      SOFT404_MIN_VALID_SIZE = 85e3;
+      _sitemapPromise = null;
     }
   });
 

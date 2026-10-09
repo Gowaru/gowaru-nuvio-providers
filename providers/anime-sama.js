@@ -1,6 +1,6 @@
 /**
  * anime-sama - Built from src/anime-sama/
- * Generated: 2026-10-09T19:06:30.920790766Z
+ * Generated: 2026-10-09T20:50:59.440059361Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -985,6 +985,8 @@ var __provider = (() => {
         return EXPIRED_MARKERS.some((m) => low.includes(m));
       };
       const isRestrictedStub = (html) => html.length < 200 && /restricted for this domain/i.test(html);
+      let fetchedPages = 0;
+      let restrictedPages = 0;
       const refererChain = [
         `https://${uniqueDomains[0]}/`,
         // self (comportement historique, autres providers)
@@ -1007,7 +1009,12 @@ var __provider = (() => {
               console.warn(`[Resolver] uqload embed dead (expired/deleted): ${url.slice(0, 80)}`);
               return { url, isDead: true };
             }
-            if (isRestrictedStub(html) || !html.includes("p,a,c,k,e,d") && !html.includes("eval(function") && !extractFile(html)) continue;
+            fetchedPages++;
+            if (isRestrictedStub(html)) {
+              restrictedPages++;
+              continue;
+            }
+            if (!html.includes("p,a,c,k,e,d") && !html.includes("eval(function") && !extractFile(html)) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = extractFile(html);
             if (match) {
@@ -1017,6 +1024,10 @@ var __provider = (() => {
           } catch (e) {
           }
         }
+      }
+      if (fetchedPages > 0 && restrictedPages === fetchedPages) {
+        console.warn(`[Resolver] uqload embed dead (restricted on all referers): ${url.slice(0, 80)}`);
+        return { url, isDead: true };
       }
       return { url };
     });
@@ -1519,10 +1530,10 @@ var __provider = (() => {
       try {
         let result = null;
         if (urlLower.includes("sibnet.ru")) result = yield resolveSibnet(originalUrl);
-        else if (urlLower.includes("vidmoly.") || urlLower.includes("voembed.")) result = yield resolveVidmoly(originalUrl);
+        else if (urlLower.includes("vidmoly.") || urlLower.includes("voembed.") || urlLower.includes("ansembed.")) result = yield resolveVidmoly(originalUrl);
         else if (urlLower.includes(".mail.ru")) result = yield resolveMailRu(originalUrl);
         else if (urlLower.includes("uqload.") || urlLower.includes("oneupload.")) result = yield resolveUqload(originalUrl);
-        else if (urlLower.includes("voe") || urlLower.includes("weneverbeenfree") || urlLower.includes("maryspecialwatch") || urlLower.includes("charlestoughrace") || urlLower.includes("sandratableother")) result = yield resolveVoe(originalUrl);
+        else if (urlLower.includes("voe") || urlLower.includes("weneverbeenfree") || urlLower.includes("maryspecialwatch") || urlLower.includes("charlestoughrace") || urlLower.includes("sandratableother") || urlLower.includes("jeremyparticipantanything") || urlLower.includes("teresapoliticallearn")) result = yield resolveVoe(originalUrl);
         else if (urlLower.includes("streamtape.com") || urlLower.includes("stape")) result = yield resolveStreamtape(originalUrl);
         else if (urlLower.includes("dood") || urlLower.includes("ds2play") || urlLower.includes("bigwar5")) result = yield resolveDood(originalUrl);
         else if (urlLower.includes("moonplayer") || urlLower.includes("filemoon")) result = yield resolveMoon(originalUrl);
@@ -1572,6 +1583,19 @@ var __provider = (() => {
                 }
               }
             }
+            if (/<title>\s*watch/i.test(html) && html.includes("VOE")) {
+              const voeRes = yield resolveVoe(originalUrl);
+              if (voeRes && voeRes.url !== originalUrl && voeRes.url.startsWith("http") && !isKnownFakeDirectUrl(voeRes.url)) {
+                const finalVoeUrl = correctDeformedVideoUrl(voeRes.url);
+                return __spreadProps(__spreadValues({}, stream), {
+                  url: finalVoeUrl,
+                  headers: __spreadValues(__spreadValues({}, stream.headers), voeRes.headers || {}),
+                  quality: voeRes.quality || stream.quality,
+                  isDirect: true,
+                  originalUrl
+                });
+              }
+            }
             const iframeUrl = findBestVideoIframe(html, originalUrl);
             if (iframeUrl && !peeledUrls.has(iframeUrl)) {
               peeledUrls.add(iframeUrl);
@@ -1583,7 +1607,7 @@ var __provider = (() => {
               }
             }
             if (!skipDirectScan) {
-              const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/);
+              const strictUrl = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/'hls'\s*:\s*'([^']+)'/) || html.match(/"hls"\s*:\s*"([^"]+)"/) || html.match(/"hls2"\s*:\s*"(https?[^"]*?\.m3u8[^"]*)"/) || html.match(/'hls2'\s*:\s*'([^']*?\.m3u8[^']*)'/);
               if (strictUrl) {
                 let extractedUrl = strictUrl[1] || strictUrl[0];
                 if (extractedUrl.startsWith("//")) extractedUrl = "https:" + extractedUrl;
@@ -1638,7 +1662,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "8ba369d1" : "dev";
+      BUILD_HASH = true ? "666304ec" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -14297,16 +14321,86 @@ var __provider = (() => {
     }
     return score;
   }
+  function includesWordStrict(hay, needle) {
+    if (!hay || !needle) return false;
+    let pos = hay.indexOf(needle);
+    while (pos !== -1) {
+      const before = pos === 0 || hay[pos - 1] === " ";
+      const after = pos + needle.length >= hay.length || hay[pos + needle.length] === " ";
+      if (before && after) return true;
+      pos = hay.indexOf(needle, pos + 1);
+    }
+    return false;
+  }
+  function scorePageTitle(pageName, title) {
+    const nt = normalize(title);
+    const nr = normalize(pageName);
+    if (!nt || !nr) return 0;
+    if (nr === nt) return 100;
+    if ((includesWordStrict(nr, nt) || includesWordStrict(nt, nr)) && !hasForeignLeadingTokens(nr, nt)) return 80;
+    return 0;
+  }
+  function maxPageTitleScore(pageName, titles) {
+    let best = 0;
+    for (const t of titles || []) {
+      if (typeof t !== "string" || !t) continue;
+      const s = scorePageTitle(pageName, t);
+      if (s > best) {
+        best = s;
+        if (best >= 100) break;
+      }
+    }
+    return best;
+  }
+  function fetchCatalogueTitle(slug) {
+    return __async(this, null, function* () {
+      let html = null;
+      try {
+        html = yield fetchText(`${BASE_URL}/catalogue/${slug}/`);
+      } catch (_) {
+        return null;
+      }
+      if (!html || html.length < 500 || /acc[eè]s\s+introuvable/i.test(html)) return null;
+      try {
+        const $ = import_cheerio_without_node_native2.default.load(html);
+        const h1 = $("h1").first().text().trim();
+        if (h1) return h1;
+        const t = $("title").first().text().trim();
+        if (t) return t.split("|")[0].trim();
+      } catch (_) {
+      }
+      return null;
+    });
+  }
+  function passesTitleGuard(slug, titles, signal, startTime) {
+    return __async(this, null, function* () {
+      if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return false;
+      const name = yield fetchCatalogueTitle(slug);
+      if (!name) {
+        console.log(`[Anime-Sama] Slug ${slug} rejet\xE9: page catalogue sans titre (404/soft-404)`);
+        return false;
+      }
+      const score = maxPageTitleScore(name, titles);
+      if (score < TITLE_GUARD_THRESHOLD) {
+        console.log(`[Anime-Sama] Slug ${slug} rejet\xE9: titre page "${name}" sans rapport (score ${score})`);
+        return false;
+      }
+      console.log(`[Anime-Sama] Slug ${slug}: titre page "${name}" valid\xE9 (score ${score})`);
+      return true;
+    });
+  }
   function getPlayerName(varName, url) {
-    if (url.includes("sibnet")) return "Sibnet";
-    if (url.includes("vidmoly")) return "Vidmoly";
-    if (url.includes("sendvid")) return "Sendvid";
-    if (url.includes("voe")) return "Voe";
-    if (url.includes("stape") || url.includes("streamtape")) return "Streamtape";
-    if (url.includes("dood")) return "Doodstream";
-    if (url.includes("uqload") || url.includes("oneupload")) return "Uqload";
-    if (url.includes("ansembed")) return "AnsEmbed";
-    if (url.includes("embed4me")) return "Embed4Me";
+    const u = (url || "").toLowerCase();
+    if (u.includes("sibnet")) return "Sibnet";
+    if (u.includes("vidmoly")) return "Vidmoly";
+    if (u.includes("voe") || u.includes("jeremy") || u.includes("teresa")) return "Voe";
+    if (u.includes("smoothpre")) return "Smoothpre";
+    if (u.includes("sendvid")) return "Sendvid";
+    if (u.includes("stape") || u.includes("streamtape")) return "Streamtape";
+    if (u.includes("dood")) return "Doodstream";
+    if (u.includes("uqload") || u.includes("oneupload")) return "Uqload";
+    if (u.includes("ansembed")) return "AnsEmbed";
+    if (u.includes("embed4me")) return "Embed4Me";
     return "Player";
   }
   function parseUrls(jsContent) {
@@ -14331,17 +14425,96 @@ var __provider = (() => {
       }
     });
   }
+  function hostScore(url) {
+    const u = url || "";
+    for (const [re, score] of HOST_PRIORITY) {
+      if (re.test(u)) return score;
+    }
+    return 4;
+  }
+  function isValidEpisodesJs(content) {
+    if (!content || typeof content !== "string") return false;
+    if (/acc[eè]s\s+introuvable/i.test(content)) return false;
+    if (/<html/i.test(content)) return false;
+    return /var\s+eps/i.test(content);
+  }
+  function isValidFilmJs(content) {
+    if (!content || typeof content !== "string") return false;
+    if (/acc[eè]s\s+introuvable/i.test(content)) return false;
+    if (/<html/i.test(content)) return false;
+    return parseUrls(content).length > 0 || /iframe|player|embed|https?:\/\//i.test(content);
+  }
+  function isFrenchTitle(t) {
+    const n = (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return /\b(le|la|les|de|des|du|un|une|et|au|aux|dans|pour|avec|sans|sous|sur|par|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|je|tu|il|elle|nous|vous|ils|elles|qui|que|est|sont|film|nom|noms)\b/.test(n);
+  }
+  function isShortTitle(t) {
+    const words = (t || "").split(/[^A-Za-z0-9]+/).filter(Boolean);
+    return words.length >= 1 && words.length <= 3;
+  }
+  function orderVerificationTitles(titles, searchTitles, mediaType) {
+    const baseSeen = /* @__PURE__ */ new Set();
+    const base = [];
+    const pushBase = (t) => {
+      if (!t) return;
+      const b = stripSeasonSuffix(t);
+      const key = b.toLowerCase();
+      if (!b || baseSeen.has(key)) return;
+      baseSeen.add(key);
+      base.push(b);
+    };
+    if (mediaType === "movie") {
+      for (const t of searchTitles) pushBase(t);
+    }
+    const frTitles = [];
+    const shortTitles = [];
+    const restTitles = [];
+    for (const t of titles) {
+      const b = stripSeasonSuffix(t);
+      const key = (b || "").toLowerCase();
+      if (!b || baseSeen.has(key)) continue;
+      baseSeen.add(key);
+      if (isFrenchTitle(b)) frTitles.push(b);
+      else if (isShortTitle(b)) shortTitles.push(b);
+      else restTitles.push(b);
+    }
+    return base.concat(frTitles, shortTitles, restTitles);
+  }
+  function verifySlugTv(slug, season, signal, startTime) {
+    return __async(this, null, function* () {
+      for (const lang of ["vostfr", "vf"]) {
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return null;
+        const js = yield fetchJs(slug, `saison${season}`, lang);
+        if (isValidEpisodesJs(js)) return slug;
+      }
+      return null;
+    });
+  }
+  function verifySlugMovie(slug, signal, startTime) {
+    return __async(this, null, function* () {
+      for (const seasonPath of ["film", "film2"]) {
+        for (const lang of ["vostfr", "vf"]) {
+          if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return null;
+          const js = yield fetchJs(slug, seasonPath, lang);
+          if (isValidFilmJs(js)) return slug;
+        }
+      }
+      return null;
+    });
+  }
   function buildStreams(parsed, lang, episode, idx) {
     return __async(this, null, function* () {
       const TARGET_DIRECT = 2;
       const playable = [];
       const startTime = Date.now();
       const BUDGET_MS2 = 12e3;
-      for (const { varName, urls } of parsed) {
+      const ordered = parsed.slice().sort((a, b) => hostScore(a.urls[idx] || "") - hostScore(b.urls[idx] || ""));
+      for (const { varName, urls } of ordered) {
         if (playable.length >= TARGET_DIRECT) break;
         if (Date.now() - startTime > BUDGET_MS2) break;
         const playerUrl = urls[idx];
         if (!playerUrl || !playerUrl.startsWith("http")) continue;
+        if (DEAD_HOSTS.test(playerUrl)) continue;
         const epLabel = episode ? `Ep ${episode} - ` : "";
         try {
           const stream = yield withTimeout(
@@ -14445,7 +14618,9 @@ var __provider = (() => {
           if (seriesTitle.length >= 3 && !searchTitles.includes(seriesTitle)) searchTitles.unshift(seriesTitle);
         }
       }
+      const testedSlugs = /* @__PURE__ */ new Set();
       if (mediaType !== "movie" && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        testedSlugs.add(slug);
         for (const lang of languages) {
           if (streams.length >= TARGET_STREAMS) break;
           const result = yield fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes);
@@ -14454,6 +14629,7 @@ var __provider = (() => {
       }
       if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const seasonSlug = `${slug}-saison-${effectiveSeason}`;
+        testedSlugs.add(seasonSlug);
         for (const lang of languages) {
           if (streams.length >= TARGET_STREAMS) break;
           const result = yield fetchAndGetUrl(seasonSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
@@ -14462,14 +14638,15 @@ var __provider = (() => {
       }
       if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const numSlug = `${slug}-${effectiveSeason}`;
+        testedSlugs.add(numSlug);
         for (const lang of languages) {
           if (streams.length >= TARGET_STREAMS) break;
           const result = yield fetchAndGetUrl(numSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
           streams.push(...result);
         }
       }
+      const foundSlugs = [];
       if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const foundSlugs = [];
         for (const t of searchTitles) {
           const slugs = yield searchSlugsScored(t);
           for (const s of slugs) {
@@ -14478,14 +14655,39 @@ var __provider = (() => {
           }
           if (foundSlugs.length >= MAX_FALLBACK_SLUGS) break;
         }
-        const checkedSlugs = /* @__PURE__ */ new Set([slug]);
         for (const fSlug of foundSlugs) {
-          if (checkedSlugs.has(fSlug)) continue;
-          checkedSlugs.add(fSlug);
+          if (testedSlugs.has(fSlug)) continue;
+          testedSlugs.add(fSlug);
           if (streams.length >= TARGET_STREAMS) break;
+          if (!(yield passesTitleGuard(fSlug, titles, signal, startTime))) continue;
           for (const lang of languages) {
             if (streams.length >= TARGET_STREAMS) break;
             const result = yield fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
+            streams.push(...result);
+          }
+        }
+      }
+      if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        const seen = new Set(testedSlugs);
+        const candidates = [];
+        for (const b of orderVerificationTitles(titles, searchTitles, mediaType)) {
+          if (candidates.length >= MAX_VERIFIED_SLUGS) break;
+          const s = toSlug(b);
+          if (s && !seen.has(s)) {
+            seen.add(s);
+            candidates.push(s);
+          }
+        }
+        for (const cSlug of candidates) {
+          if (streams.length >= TARGET_STREAMS) break;
+          if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+          const verified = mediaType === "movie" ? yield verifySlugMovie(cSlug, signal, startTime) : yield verifySlugTv(cSlug, effectiveSeason, signal, startTime);
+          if (!verified) continue;
+          if (!(yield passesTitleGuard(cSlug, titles, signal, startTime))) continue;
+          console.log(`[Anime-Sama] Verified slug: ${cSlug}`);
+          for (const lang of languages) {
+            if (streams.length >= TARGET_STREAMS) break;
+            const result = yield fetchAndGetUrl(cSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
             streams.push(...result);
           }
         }
@@ -14495,7 +14697,7 @@ var __provider = (() => {
       return sortStreamsByLanguage(validStreams);
     });
   }
-  var import_cheerio_without_node_native2, BASE_URL, MAX_FALLBACK_TITLES, MAX_FALLBACK_SLUGS, BUDGET_MS;
+  var import_cheerio_without_node_native2, BASE_URL, MAX_FALLBACK_TITLES, MAX_FALLBACK_SLUGS, MAX_VERIFIED_SLUGS, BUDGET_MS, TITLE_GUARD_THRESHOLD, DEAD_HOSTS, HOST_PRIORITY;
   var init_extractor = __esm({
     "src/anime-sama/extractor.js"() {
       init_http();
@@ -14507,7 +14709,16 @@ var __provider = (() => {
       BASE_URL = "https://anime-sama.to";
       MAX_FALLBACK_TITLES = 5;
       MAX_FALLBACK_SLUGS = 2;
+      MAX_VERIFIED_SLUGS = 12;
       BUDGET_MS = 4e4;
+      TITLE_GUARD_THRESHOLD = 80;
+      DEAD_HOSTS = /embed4me|sendvid/i;
+      HOST_PRIORITY = [
+        [/sibnet/i, 0],
+        [/uqload|oneupload/i, 1],
+        [/vidmoly|ansembed/i, 2],
+        [/voe|jeremy|teresa|smoothpre/i, 3]
+      ];
     }
   });
 

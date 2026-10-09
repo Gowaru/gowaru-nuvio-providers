@@ -1,6 +1,6 @@
 /**
  * franime - Built from src/franime/
- * Generated: 2026-10-09T19:06:31.693791644Z
+ * Generated: 2026-10-09T20:23:38.431418389Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -697,7 +697,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "8ba369d1" : "dev";
+      BUILD_HASH = true ? "799ecb95" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
