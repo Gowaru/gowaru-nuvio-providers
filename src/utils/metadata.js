@@ -6,7 +6,33 @@
 const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
 
-import { safeFetch } from './resolvers.js';
+import { safeFetch, sleep } from './resolvers.js';
+
+/**
+ * Fetch TMDB avec timeout court + 1 retry, plafonné par le budget restant.
+ * Symptôme corrigé : un TMDB lent/timeout (sans timeout explicite, safeFetch
+ * attend le read-timeout réseau ~30s sur l'app) vidait les titres → le provider
+ * abandonnait silencieusement (0 titres → 0 streams → "Retrieving…" vide).
+ *
+ * ⚠️ Budget : sur NuvioTV, fetch est un bridge SYNCHRONE (OkHttp execute) →
+ * Promise.all s'exécute séquentiellement. 3 endpoints × 2 tentatives × 30s
+ * dépasserait le budget 45s tout seul — d'où le plafond deadline ici.
+ *
+ * @param {string} url
+ * @param {number} attempts - nombre de tentatives (défaut 2)
+ * @param {number} deadline - timestamp Date.now() au-delà duquel on abandonne
+ */
+async function fetchTmdb(url, attempts = 2, deadline = 0) {
+    for (let i = 0; i < attempts; i++) {
+        if (deadline && Date.now() >= deadline) return null;
+        const remaining = deadline ? deadline - Date.now() : 0;
+        const timeout = Math.min(8000, Math.max(2000, remaining));
+        const res = await safeFetch(url, { timeout });
+        if (res && res.ok) return res;
+        if (i < attempts - 1) await sleep(400);
+    }
+    return null;
+}
 
 /**
  * Cache dédié aux métadonnées TMDB avec TTL long (5 minutes).
@@ -209,10 +235,16 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
         const altUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/alternative_titles?api_key=${TMDB_API_KEY}`;
         const transUrl = `${TMDB_API_BASE}/${type}/${tmdbId}/translations?api_key=${TMDB_API_KEY}`;
 
-        const [mainRes, altRes, transRes] = await Promise.all([
-            safeFetch(mainUrl),
-            safeFetch(altUrl),
-            safeFetch(transUrl)
+        // Budget metadata serré : les 3 endpoints sont appelés SÉQUENTIELLEMENT
+        // sur NuvioTV (fetch synchrone) — au-delà de ~20s ici, le provider
+        // n'a plus le temps de scraper → on livre ce qu'on a.
+        const deadline = Date.now() + 20000;
+        // mainRes d'abord (priorité) : titres EN/original + métadonnées + saisons
+        const mainRes = await fetchTmdb(mainUrl, 2, deadline);
+        // alt/trans = enrichissements : 1 seule tentative chacun, best-effort
+        const [altRes, transRes] = await Promise.all([
+            fetchTmdb(altUrl, 1, deadline),
+            fetchTmdb(transUrl, 1, deadline)
         ]);
 
         if (mainRes) {
@@ -326,8 +358,13 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
         uniqueTitles._metadata = metadata;
     }
 
-    // Mettre en cache pour les prochaines requêtes (TTL 5 min)
-    metadataCacheSet(cacheKey, uniqueTitles);
+    // Mettre en cache pour les prochaines requêtes (TTL 5 min).
+    // ⚠️ Ne JAMAIS cacher un résultat vide dû à une erreur réseau : un simple
+    // blip TMDB empoisonnerait le cache 5 min → 0 streams même quand le
+    // réseau revient (symptôme "Retrieving… vide" persistant).
+    if (uniqueTitles.length > 0 || metadata) {
+        metadataCacheSet(cacheKey, uniqueTitles);
+    }
 
     console.log(`[Metadata] Titles for ${tmdbId}: ${uniqueTitles.join(' | ')}`);
     return uniqueTitles;

@@ -1,7 +1,14 @@
 /**
  * HTTP Utilities for Papadustream
- * - Multi-domain fallback (papadustream.club → papadustream.fr → papadustream.net)
+ * - Multi-domain fallback (papadustream.club → www → papadustreami.living)
  * - Rate limiting intégré
+ *
+ * Domaines (vérifiés en live 10/2026) :
+ * - papadustream.club / www.papadustream.club : actifs, catalogue complet, 200 OK
+ * - papadustreami.living : miroir derrière un CHALLENGE Cloudflare JS (403,
+ *   cf-mitigated: challenge) — inaccessible au runtime QuickJS (pas d'exécution
+ *   JS). Conservé en dernier recours : si le challenge se lève côté CF pour
+ *   certaines IPs, le fallback s'active automatiquement.
  */
 
 import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
@@ -11,11 +18,13 @@ const rateLimit = createProviderRateLimiter();
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-// Domaines Papadustream actifs — .fr et .net n'ont PAS de contenu HLS
-// Seul .club fonctionne réellement. Fallback rapide si .club timeout.
-const DOMAINS = ['papadustream.club'];
+// Ordre : .club d'abord (actif), www (redirige propre), .living en dernier.
+// Seul .club/www servent réellement le contenu HLS aujourd'hui.
+const DOMAINS = ['papadustream.club', 'www.papadustream.club', 'papadustreami.living'];
 
 export const BASE_URL = 'https://papadustream.club';
+// Les playlists HLS émises redirigent (301) vers www : émettre directement
+// sur www évite une redirection par requête player.
 export const BASE_URL_WWW = 'https://www.papadustream.club';
 export const GLOBAL_TIMEOUT_MS = 10000;
 
@@ -51,6 +60,20 @@ function buildUrl(domain, originalUrl) {
 }
 
 /**
+ * Détecte une page challenge Cloudflare (403 cf-mitigated, body Turnstile).
+ * Ce type de réponse ne passera jamais au retry : on passe au domaine suivant.
+ */
+function isCloudflareChallenge(res, body) {
+    if (res.status !== 403) return false;
+    try {
+        const mitigated = res.headers && typeof res.headers.get === 'function'
+            ? res.headers.get('cf-mitigated') : null;
+        if (mitigated && String(mitigated).toLowerCase() === 'challenge') return true;
+    } catch (e) {}
+    return typeof body === 'string' && body.includes('challenge-platform');
+}
+
+/**
  * Tente de récupérer du contenu sur un domaine spécifique.
  */
 async function fetchFromDomain(domain, originalUrl, options = {}) {
@@ -81,6 +104,16 @@ async function fetchFromDomain(domain, originalUrl, options = {}) {
 
             if (!res.ok) {
                 if (res.status === 404) return null;
+
+                // Challenge Cloudflare : inutile de retry ni des autres essais
+                // sur ce domaine — on rend la main pour passer au suivant.
+                let body = null;
+                try { body = await res.text(); } catch (e) {}
+                if (isCloudflareChallenge(res, body)) {
+                    console.log(`[Papadustream] Cloudflare challenge on ${domain} — skipping`);
+                    return null;
+                }
+
                 console.log(`[Papadustream] HTTP ${res.status} on ${domain}`);
                 if (attempt < (options.retries ?? 1)) await sleep(RETRY_DELAYS[attempt] || 1000);
                 continue;

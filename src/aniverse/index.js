@@ -1,4 +1,4 @@
 import { extractStreams } from './extractor.js';
 import { createProvider } from '../utils/resolvers.js';
 
-module.exports = { getStreams: createProvider('Fluneo', extractStreams) };
+module.exports = { getStreams: createProvider('Aniverse', extractStreams) };

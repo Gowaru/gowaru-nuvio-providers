@@ -13,7 +13,7 @@ const providers = [
     'animevostfr', 'anime-sama', 'animesama-co', 'animesultra', 'animoflix',
     'french-anime', 'frenchstream', 'french-manga', 'movix', 'mugiwarastream',
     'dulourd', 'wookafr', 'flemmix', 'coflix', 'anime-ultime', 'waveanime',
-    'papadustream', 'nakios', 'streamzo', 'otakufr'
+    'papadustream', 'nakios', 'streamzo', 'otakufr', 'aniverse'
 ];
 
 const testCases = [

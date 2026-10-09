@@ -28,6 +28,44 @@ export const MAX_STREAMS_PER_PROVIDER = 80;
 const MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024; // 1 MB
 
 /**
+ * Suffixe que NuvioTV/NuvioMobile appendent au body quand il dépasse la
+ * limite runtime de 1 MB. Détectable côté plugin pour refuser un corps
+ * tronqué au lieu de le parser silencieusement (HTML partiel → matching
+ * faux). Les JSON tronqués restent livrés : garde-fous dédiés côté
+ * consommateur (json() throw → null, parseMaybeTruncatedJson).
+ */
+export const RUNTIME_TRUNCATION_SUFFIX = '\n...[truncated]';
+
+/**
+ * Vérifie si un corps de réponse a été tronqué par le runtime (suffixe
+ * "\n...[truncated]") — à appeler avant cheerio.load sur des pages HTML.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isTruncatedBody(text) {
+    return typeof text === 'string' && text.endsWith(RUNTIME_TRUNCATION_SUFFIX);
+}
+
+/**
+ * Détermine si une réponse est du HTML (content-type, ou sniffing quand
+ * absent). Sert à décider si une troncature doit refuser le corps.
+ */
+function responseLooksHtml(response, bodyText) {
+    let ctype = '';
+    try {
+        ctype = (response && response.headers && typeof response.headers.get === 'function')
+            ? (response.headers.get('content-type') || '')
+            : '';
+    } catch (e) { ctype = ''; }
+    if (/html/i.test(ctype)) return true;
+    // Sniffing si pas de content-type, ou type vague pouvant cacher du HTML
+    // (text/plain — certains sites servent leurs pages ainsi).
+    const sniffable = !ctype || /text\/plain/i.test(ctype);
+    if (!sniffable) return false; // type explicite non-HTML (json, mpegurl, js…)
+    return /^\s*<(!doctype|html|\?xml|head|body)/i.test(bodyText || '');
+}
+
+/**
  * Hash de build court, injecté par build.js au moment du bundling
  * (define esbuild : __NUVIO_BUILD_HASH__ → "abc12345").
  * Permet de vérifier en logs quelle version du bundle tourne réellement
@@ -993,6 +1031,11 @@ async function expandSingleStreamQualities(stream, options = {}) {
     }
 
     const manifest = await res.text();
+    // Manifest tronqué (suffixe runtime ou >1 MB) : les variantes de fin sont
+    // perdues — exploser produirait une liste fausse. On sert l'URL originale.
+    if (res.truncated || isTruncatedBody(manifest)) {
+        return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD'), type: 'hls' }];
+    }
     if (!/#EXT-X-STREAM-INF/i.test(manifest)) {
         return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD'), type: 'hls' }];
     }
@@ -1175,6 +1218,11 @@ export async function expandStreamQualities(streams, options = {}) {
     return sorted;
 }
 
+// Timeout par défaut appliqué quand l'appelant n'en fournit pas. Sur NuvioTV,
+// AbortSignal.timeout n'existe pas (polyfill minimal) → sans défaut, un fetch
+// mort attend le read-timeout réseau (~30 s) et épuise le budget provider.
+export const DEFAULT_FETCH_TIMEOUT = 15000;
+
 export async function safeFetch(url, options = {}) {
     const start = Date.now();
     const SLOW_THRESHOLD = 15000;
@@ -1205,13 +1253,15 @@ export async function safeFetch(url, options = {}) {
                 ok: cached.ok,
                 status: cached.status,
                 url: cached.finalUrl || url,
-                headers: cached.headers || {}
+                headers: cached.headers || {},
+                truncated: false
             };
         }
     }
 
     try {
         const { timeout, signal: externalSignal, ...rest } = options;
+        const effectiveTimeout = timeout > 0 ? timeout : DEFAULT_FETCH_TIMEOUT;
         
         if (isAborted(externalSignal)) {
             return null;
@@ -1223,10 +1273,12 @@ export async function safeFetch(url, options = {}) {
             redirect: 'follow'
         };
 
+        const hasNativeTimeout = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'undefined';
+
         // Construire le signal combiné : timeout + signal externe
-        if (timeout > 0 && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'undefined') {
+        if (effectiveTimeout > 0 && hasNativeTimeout) {
             // Node.js: AbortSignal.timeout natif
-            const timeoutSignal = AbortSignal.timeout(timeout);
+            const timeoutSignal = AbortSignal.timeout(effectiveTimeout);
             if (externalSignal) {
                 // Avec les deux signaux, on crée un AbortController qui relaye
                 const controller = createAbortController();
@@ -1245,10 +1297,16 @@ export async function safeFetch(url, options = {}) {
                 fetchOpts.signal = timeoutSignal;
             }
         } else if (externalSignal) {
-            // Pas de timeout, juste un signal externe
+            // Pas de timeout natif disponible, juste un signal externe
             fetchOpts.signal = externalSignal;
         }
 
+        // ⚠️ Pas de fallback timeout manuel ici : sur NuvioTV, fetch est un
+        // bridge SYNCHRONE (__native_fetch → OkHttp execute) — un race avec
+        // sleep busy-wait ne peut pas interrompre l'appel et ferait tourner
+        // le microtask drain pendant tout le timeout après coup (CPU TV).
+        // Le garde-fou sur cette plateforme = budget/isBudgetExhausted côté
+        // providers + timeout OkHttp 30s côté natif.
         const response = await fetch(url, fetchOpts);
         const elapsed = Date.now() - start;
         if (elapsed > SLOW_THRESHOLD) {
@@ -1258,12 +1316,19 @@ export async function safeFetch(url, options = {}) {
 
         const status = response.status;
         let bodyText = '';
+        let truncated = false;
         try {
             // Lecture avec garde taille : si la réponse dépasse 1 MB,
             // on tronque pour éviter d'exploser la mémoire QuickJS.
-            // (NuvioTV/NuvioMobile imposent 1 MB côté natif)
+            // (NuvioTV/NuvioMobile imposent 1 MB côté natif et appendent
+            // "\n...[truncated]" — détecté AVANT toute re-troncature pour
+            // préserver le suffixe.)
             const rawText = await response.text();
-            if (rawText && rawText.length > MAX_SAFE_FETCH_BODY_BYTES) {
+            if (rawText && rawText.endsWith(RUNTIME_TRUNCATION_SUFFIX)) {
+                truncated = true;
+                bodyText = rawText;
+            } else if (rawText && rawText.length > MAX_SAFE_FETCH_BODY_BYTES) {
+                truncated = true;
                 console.warn(`[safeFetch] Response truncated (${rawText.length} bytes > ${MAX_SAFE_FETCH_BODY_BYTES}): ${(url || '').slice(0, 100)}`);
                 bodyText = rawText.slice(0, MAX_SAFE_FETCH_BODY_BYTES);
             } else {
@@ -1273,8 +1338,18 @@ export async function safeFetch(url, options = {}) {
             bodyText = '';
         }
 
-        // Cache les réponses GET réussies (status 2xx) pour éviter les doublons
-        if (method === 'GET' && status >= 200 && status < 300) {
+        // HTML tronqué → échec honnête (return null) : parser un préfixe
+        // produirait des sélections cheerio silencieusement fausses. Les
+        // JSON tronqués restent livrés (json() throw → null chez les
+        // appelants ; parseMaybeTruncatedJson les récupère dans dle-extractor).
+        if (truncated && responseLooksHtml(response, bodyText)) {
+            console.warn(`[safeFetch] HTML body truncated → refusing partial parse: ${(url || '').slice(0, 100)}`);
+            return null;
+        }
+
+        // Cache uniquement les réponses GET réussies (2xx) ET complètes :
+        // une réponse tronquée ne doit jamais empoisonner le cache de requête.
+        if (method === 'GET' && status >= 200 && status < 300 && !truncated) {
             setCachedFetch(cacheKey, {
                 bodyText,
                 ok: true,
@@ -1292,7 +1367,8 @@ export async function safeFetch(url, options = {}) {
             ok: response.ok,
             status,
             url: response.url,
-            headers: response.headers
+            headers: response.headers,
+            truncated
         };
     } catch (e) {
         const elapsed = Date.now() - start;
