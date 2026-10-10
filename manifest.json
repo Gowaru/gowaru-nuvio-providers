@@ -1,6 +1,6 @@
 {
   "name": "Gowaru's Repo",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "scrapers": [
     {
       "id": "anime-ultime",
@@ -291,7 +291,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (recherche exacte par tag TMDB, réglages langue/hosts — Mobile uniquement).",
-      "version": "2.0.22",
+      "version": "2.0.23",
       "hasSettings": true,
       "author": "Gowaru",
       "supportedTypes": [
@@ -654,7 +654,7 @@
       "id": "wookafr",
       "name": "Wookafr",
       "description": "Films et séries en streaming VF/VOSTFR sur Wookafr (multi-serveurs via lecteurvideo, uqload, vidmoly…).",
-      "version": "1.0.14",
+      "version": "1.0.15",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -772,7 +772,7 @@
       "id": "voirdrama",
       "name": "Voirdrama",
       "description": "Dramas VF et VOSTFR en streaming sur voirdrama.to (lecteurs VidMoly, mail.ru, VOE).",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

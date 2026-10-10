@@ -131,6 +131,35 @@ function titleScore(candidate, query) {
 
 // ─── Page série ─────────────────────────────────────────────────────────────
 /**
+ * Numérotation continue VF S2+ : mesure le nb d'épisodes SE LA série VOSTFR
+ * préfixée (saison `seasonNum` - 1) pour calculer l'offset d'épisode absolu.
+ * Si la série VOSTFR S(N-1) a 16 eps, la VF de S2 de la série racine commence
+ * à l'épisode 17. Si la série VOSTFR S(N-1) n'éxiste pas, on retombe sur la
+ * série VOSTFR racine et on compte tous ses épisodes (moindre risque).
+ * @returns {number} offset (>= 0)
+ */
+async function computeSeasonOffset(baseTitle, seasonNum, signal) {
+    const wanted = cleanTitleForSlug(baseTitle);
+    // Offset S2 = nb d'eps S1. Essayé sur les slug VOSTFR dédiés S(N-1) puis racine.
+    const prevSeasonSlugs = [
+        `${wanted}-${seasonNum - 1}`,
+        wanted,
+    ];
+    for (const slug of prevSeasonSlugs) {
+        const eps = await extractEpisodeList(`${SITE}/drama/${slug}/`, { signal });
+        if (eps.length > 0) {
+            // Numérotation continue ? Si le min > 1, déduire le min (= start - 1).
+            const nums = eps.map(e => e.num);
+            const min = Math.min(...nums);
+            if (min > 1) return min - 1;   // Serie deja en numérotation absolue
+            // Sinon, saison restarté à 1 → offset = nb total des épisodes
+            return eps.length;
+        }
+    }
+    return 0;
+}
+
+/**
  * Extrait les épisodes d'une page série : hrefs réels sous /drama/{slug}/.
  * Gère les listes paginées via l'AJAX Madara (action=madara_load_more).
  * @returns {Array<{num:number, url:string}>} triés par numéro croissant
@@ -318,10 +347,27 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
             .slice(0, 3);
         if (!scored.length) continue;
 
-        // VOSTFR : slugs standards ; VF : uniquement slugs suffixés -vf
-        const slugCands = buildSlugCandidates(titles[0], lang, titles, seasonNum)
+        // VOSTFR : slugs standards ; VF : uniquement slugs suffixés -vf.
+        // FIX 2026-10 (VF manquante S2+) : quand la VOSTFR de la saison N est
+        // une série dédiée (the-glory-2) mais que la page the-glory-2-vf
+        // n'existe pas (404), la VF de cette saison vit dans la série VF
+        // racine (the-glory-vf) avec une numérotation CONTINUE (S1 = eps
+        // 1-16, S2 = eps 17+). On ajoute donc le slug -vf racine aux
+        // candidats VF de saison > 1, et on mappe l'épisode demandé sur le
+        // numéro absolu (offset = nb d'épisodes des saisons précédentes,
+        // mesuré sur la VOSTFR de la saison). Jamais de repli si le numéro
+        // absolu n'existe pas → pas de faux contenu.
+        let slugCands = buildSlugCandidates(titles[0], lang, titles, seasonNum)
             .filter((s) => (lang === 'fr' ? s.endsWith('-vf') : true))
             .slice(0, 5);
+        // EXTENSION VF S2+ : ajouter la série VF RACINE (sans suffixe saison)
+        // si une série -vf de la saison demandée n'existe pas forcément — la
+        // VF y est alors numérotée en continu (ex: The Glory S2 → eps 17+ de
+        // the-glory-vf). Déduplicquée; le mapping absolu se fait dans la boucle.
+        if (lang === 'fr' && seasonNum > 1) {
+            const rootVf = `${cleanTitleForSlug(titles[0])}-vf`;
+            if (!slugCands.includes(rootVf)) slugCands.push(rootVf);
+        }
 
         for (const slug of slugCands) {
             if (isAborted(signal)) break;
@@ -331,7 +377,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
 
             // Épisode demandé (le site peut être en retard → pas de repli
             // silencieux sur un autre numéro : jamais de faux contenu).
-            const target = episodes.find((e) => e.num === epNum);
+            // EXTENSION VF S2+ (numérotation continue) : si le numéro direct
+            // n'existe pas sur la série -vf de la saison (ou si le slug S2-vf
+            // n'existe pas → on a probed la série VF RACINE), mapper onto le
+            // numéro absolu = offset saison + numéro demandé.
+            let target = episodes.find((e) => e.num === epNum);
+            if (!target && lang === 'fr' && seasonNum > 1) {
+                const offset = await computeSeasonOffset(titles[0], seasonNum, signal);
+                const absNum = offset + epNum;
+                const shifted = episodes.find((e) => e.num === absNum);
+                if (shifted && shifted.num === absNum) {
+                    console.log(`[Voirdrama] VF S${seasonNum} numérotation continue: S${seasonNum}E${epNum} → ep absolu ${absNum} (${slug})`);
+                    target = shifted;
+                }
+            }
             if (!target) continue;
 
             // Page épisode → lecteurs

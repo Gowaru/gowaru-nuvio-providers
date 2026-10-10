@@ -66,12 +66,21 @@ function bestMatch(items, title) {
 function parseSearchResults(html) {
   const $ = cheerio.load(html)
   const results = []
+  // Structure réelle vérifiée en live (2026-10) :
+  //   <article class="moviecard …">
+  //     <a href=".../streaming/series/…/"><img alt="Titre" …lazy></a>
+  //     <h2><span class="text-muted">(année)</span><span class="text-dark">Titre</span></h2>
+  //   Titre : priorité span.text-dark du h2 (propre, sans année) ; fallback alt img.
+  //   ⚠ img alt VIDE quand le thème lazyload ne l'a pas rempli — d'où
+  //     l'extraction par les deux voies.
   $('article.moviecard').each((_, el) => {
     const $card = $(el)
-    const link = $card.find('figure a[href]').first().attr('href')
-    let title = ($card.find('figure img').first().attr('alt') || '').trim()
+    const link = $card.find('a[href*="/streaming/"]').first().attr('href')
+    let title = ($card.find('h2 .text-dark').first().text() || '').trim()
+    if (!title) title = ($card.find('h2 h6, h2').first().text() || '').trim()
+    if (!title) title = ($card.find('img').first().attr('alt') || '').trim()
     if (link && title) {
-      const isSeries = link.includes('/streaming/series/')
+      const isSeries = link.includes('/series/')
       results.push({ url: link, title, isSeries })
     }
   })
@@ -214,9 +223,15 @@ export function parseLecteurVideoServers(embedHtml) {
       if (!KNOWN.some(k => lower.includes(k))) continue
       if (/\.(png|jpe?g|gif|webp|css|js)(\?|$)/i.test(lower)) continue
       // Priorité serveur : les embeds rapides d'abord (résolus en direct par
-      // resolveStream via leurs résolveurs spécifiques uqload/vidmoly/veev…)
+      // resolveStream via leurs résolveurs spécifiques uqload/vidmoly/veev…).
+      // FIX 2026-10 : xtremestream = 1er host VF de l'embed lecteurvideo
+      // (~60-70% des liens, section OD_FR «XTREME» showVideo prio 2) et
+      // résoluble → 10 AVANT uqload (souvent expiré). L'ancien tri mettait
+      // xtremestream (non listé) à priority 50 = APRÈS tous les hosts morts
+      // → épuisement budget → "les VF n'apparaissent pas".
       let priority = 50
-      if (lower.includes('uqload')) priority = 10
+      if (lower.includes('xtremestream')) priority = 5
+      else if (lower.includes('uqload')) priority = 10
       else if (lower.includes('vidmoly')) priority = 12
       else if (lower.includes('veev.')) priority = 15
       else if (lower.includes('waaw.')) priority = 16
