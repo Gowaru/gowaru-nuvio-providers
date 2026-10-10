@@ -1,6 +1,6 @@
 /**
  * jetanimes - Built from src/jetanimes/
- * Generated: 2026-10-10T10:54:58.866698833Z
+ * Generated: 2026-10-10T13:19:15.289355161Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -134,6 +134,7 @@ var __provider = (() => {
     sleep: () => sleep,
     sortStreamsByLanguage: () => sortStreamsByLanguage,
     unpack: () => unpack,
+    verifyPlayableUrl: () => verifyPlayableUrl,
     withTimeout: () => withTimeout
   });
   function isTruncatedBody(text) {
@@ -1156,8 +1157,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
-        const tldVariants = ["to", "net", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.biz/";
+        const tldVariants = ["biz", "net", "ru", "is", "to"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -1170,12 +1171,20 @@ var __provider = (() => {
             const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
+            const serveRefOf = (r, fallbackRef) => {
+              var _a2;
+              const finalDomain = r && r.url && ((_a2 = r.url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a2[1]) || "";
+              return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+            };
             let html = yield res.text();
             const hasJsRedirect = /window\.location\.replace/.test(html);
             if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+            if (match) {
+              const serveRef = serveRefOf(res, ref);
+              return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+            }
             const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) || html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
             if (jsRedirect && jsRedirect[1] !== fetchUrl) {
               res = yield safeFetch(jsRedirect[1], { headers: { "Referer": ref, "Origin": ref } });
@@ -1183,7 +1192,10 @@ var __provider = (() => {
                 html = yield res.text();
                 if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
                 const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match2) {
+                  const serveRef = serveRefOf(res, ref);
+                  return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
               }
             }
           } catch (e) {
@@ -1762,6 +1774,72 @@ var __provider = (() => {
     }
     return correctedUrl;
   }
+  function getResponseHeader(headers, name) {
+    try {
+      if (!headers) return "";
+      if (typeof headers.get === "function") {
+        return headers.get(name) || headers.get(String(name).toLowerCase()) || "";
+      }
+      const lower = String(name).toLowerCase();
+      const keys = Object.keys(headers);
+      for (let i = 0; i < keys.length; i++) {
+        if (keys[i].toLowerCase() === lower) return String(headers[keys[i]] || "");
+      }
+    } catch (e) {
+    }
+    return "";
+  }
+  function isProbeHlsUrl(url) {
+    const u = String(url || "").toLowerCase();
+    return u.includes(".m3u8") || u.includes("/hls2/") || u.includes("/hls/");
+  }
+  function verifyPlayableUrl(_0) {
+    return __async(this, arguments, function* (url, headers = {}, opts = {}) {
+      try {
+        if (!url || typeof url !== "string" || !/^https?:\/\//i.test(url)) return "unknown";
+        const timeoutMs = opts && opts.timeoutMs > 0 ? opts.timeoutMs : 6e3;
+        const reqHeaders = __spreadValues({}, headers || {});
+        if (isProbeHlsUrl(url)) {
+          let res2 = null;
+          try {
+            res2 = yield safeFetch(url, { headers: reqHeaders, timeout: timeoutMs });
+          } catch (e) {
+            return "unknown";
+          }
+          if (!res2) return "unknown";
+          const status2 = res2.status;
+          if (status2 === 403 || status2 === 404 || status2 === 410) return "dead";
+          if (!res2.ok || status2 < 200 || status2 >= 300) return "unknown";
+          let body = "";
+          try {
+            body = yield res2.text();
+          } catch (e) {
+            return "unknown";
+          }
+          if (typeof body === "string" && body.includes("#EXTM3U")) return "ok";
+          const ctype2 = getResponseHeader(res2.headers, "content-type");
+          if (/m3u8|mpegurl/i.test(ctype2)) return "ok";
+          if (typeof body === "string" && /^\s*<(!doctype|html|head|body)/i.test(body)) return "dead";
+          return "unknown";
+        }
+        let res = null;
+        try {
+          res = yield safeFetch(url, { method: "HEAD", headers: reqHeaders, timeout: timeoutMs });
+        } catch (e) {
+          return "unknown";
+        }
+        if (!res) return "unknown";
+        const status = res.status;
+        if (status === 403 || status === 404 || status === 410) return "dead";
+        if (!res.ok || status < 200 || status >= 300) return "unknown";
+        const ctype = getResponseHeader(res.headers, "content-type");
+        if (/^video\//i.test(ctype)) return "ok";
+        return "unknown";
+      } catch (e) {
+        return "unknown";
+      }
+    });
+  }
   function findBestVideoIframe(html, pageUrl) {
     var _a;
     const iframeRegex = /<iframe\s+[^>]*src=["']([^"']+)["']/gi;
@@ -1816,8 +1894,10 @@ var __provider = (() => {
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
         else if (urlLower.includes("fsvid.") || urlLower.includes("vidzy.")) result = yield resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
-        else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-        // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+        else if (urlLower.includes("luluvid.") || urlLower.includes("lulust.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+        // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+        // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+        // refuse ; les providers filtrent ces URLs en aval)
         urlLower.includes("livavid.") || urlLower.includes("lulavid.") || urlLower.includes("livastream.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("lecteurvideo.")) result = yield resolveLecteurVideo(originalUrl);
@@ -1937,7 +2017,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "f20986e9" : "dev";
+      BUILD_HASH = true ? "e78b9d2c" : "dev";
       BUILD_ID = BUILD_HASH;
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
@@ -2036,6 +2116,10 @@ var __provider = (() => {
       NEVER_CORRECT_DOMAINS = [
         "voembed.net",
         // famille VidMoly (m3u8 en clair) — PAS voe
+        "vidmoly.biz",
+        // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+        "vidmoly.net",
+        // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
         "gn1r5n.org",
         // embed "myTV" de VoirAnime
         "streamhide.to"

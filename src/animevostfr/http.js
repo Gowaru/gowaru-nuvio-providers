@@ -6,7 +6,7 @@
 import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
-const DOMAIN = 'v2.animevostfr.org';
+const DOMAIN = 'animevostfr.org';
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",

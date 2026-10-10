@@ -1,6 +1,6 @@
 /**
  * voiranime-be - Built from src/voiranime-be/
- * Generated: 2026-10-10T10:54:59.299699245Z
+ * Generated: 2026-10-10T13:19:16.304356253Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
@@ -861,8 +861,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
-        const tldVariants = ["to", "net", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.biz/";
+        const tldVariants = ["biz", "net", "ru", "is", "to"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -875,12 +875,20 @@ var __provider = (() => {
             const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
+            const serveRefOf = (r, fallbackRef) => {
+              var _a2;
+              const finalDomain = r && r.url && ((_a2 = r.url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a2[1]) || "";
+              return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+            };
             let html = yield res.text();
             const hasJsRedirect = /window\.location\.replace/.test(html);
             if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+            if (match) {
+              const serveRef = serveRefOf(res, ref);
+              return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+            }
             const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) || html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
             if (jsRedirect && jsRedirect[1] !== fetchUrl) {
               res = yield safeFetch(jsRedirect[1], { headers: { "Referer": ref, "Origin": ref } });
@@ -888,7 +896,10 @@ var __provider = (() => {
                 html = yield res.text();
                 if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
                 const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match2) {
+                  const serveRef = serveRefOf(res, ref);
+                  return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
               }
             }
           } catch (e) {
@@ -1521,8 +1532,10 @@ var __provider = (() => {
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
         else if (urlLower.includes("fsvid.") || urlLower.includes("vidzy.")) result = yield resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
-        else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-        // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+        else if (urlLower.includes("luluvid.") || urlLower.includes("lulust.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+        // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+        // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+        // refuse ; les providers filtrent ces URLs en aval)
         urlLower.includes("livavid.") || urlLower.includes("lulavid.") || urlLower.includes("livastream.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("lecteurvideo.")) result = yield resolveLecteurVideo(originalUrl);
@@ -1642,7 +1655,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "f20986e9" : "dev";
+      BUILD_HASH = true ? "e78b9d2c" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -1737,6 +1750,10 @@ var __provider = (() => {
       NEVER_CORRECT_DOMAINS = [
         "voembed.net",
         // famille VidMoly (m3u8 en clair) — PAS voe
+        "vidmoly.biz",
+        // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+        "vidmoly.net",
+        // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
         "gn1r5n.org",
         // embed "myTV" de VoirAnime
         "streamhide.to"
@@ -1813,13 +1830,36 @@ var __provider = (() => {
       return yield res.text();
     });
   }
-  var _currentSignal, rateLimit, DOMAIN, HEADERS2;
+  function fetchPage(_0) {
+    return __async(this, arguments, function* (url, options = {}) {
+      const signal = options.signal || _currentSignal;
+      if (isAborted(signal)) throw new Error("AbortError: Request aborted");
+      const _a = options, { headers: customHeaders } = _a, rest = __objRest(_a, ["headers"]);
+      yield rateLimit(DOMAIN);
+      const res = yield safeFetch(url, __spreadProps(__spreadValues({}, rest), {
+        headers: __spreadValues(__spreadValues({}, HEADERS2), customHeaders || {}),
+        signal
+      }));
+      if (!res || !res.ok) {
+        const status = res && typeof res.status === "number" ? res.status : "no-response";
+        throw new Error(`HTTP error ${status} for ${url}`);
+      }
+      return { html: yield res.text(), finalUrl: res.url || url };
+    });
+  }
+  function isHomepageUrl(u) {
+    if (!u || typeof u !== "string") return false;
+    const norm = u.split("#")[0].split("?")[0].replace(/\/+$/, "");
+    return norm === SITE || norm === "http://voiranime.be";
+  }
+  var _currentSignal, rateLimit, DOMAIN, SITE, HEADERS2;
   var init_http = __esm({
     "src/voiranime-be/http.js"() {
       init_resolvers();
       _currentSignal = null;
       rateLimit = createProviderRateLimiter(350, 0.3);
       DOMAIN = "voiranime.be";
+      SITE = "https://voiranime.be";
       HEADERS2 = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -2363,13 +2403,49 @@ var __provider = (() => {
     }
     return out;
   }
+  function parseFilmPath(path) {
+    let p = String(path || "").replace(/\/$/, "");
+    if (!p) return null;
+    let lang = null;
+    const lm = /-(vf|vostfr)$/.exec(p);
+    if (lm) {
+      lang = lm[1];
+      p = p.slice(0, lm.index);
+    }
+    if (!p) return null;
+    const pre = /^(film|oav)-(vf|vostfr)-?(.*)$/.exec(p);
+    if (pre) {
+      if (!pre[3]) return null;
+      return { base: pre[3], lang: lang || pre[2] };
+    }
+    const suf = /^(.*)-(film|oav)\d*$/.exec(p);
+    if (suf && suf[1]) return { base: suf[1], lang: lang || "vostfr" };
+    if (lang) return { base: p, lang };
+    return null;
+  }
+  function isEpisodePath(path) {
+    return /^(.+?)(?:-episode-|-)(\d{1,4})-(vf|vostfr)(?:-\d+)?\/?$/.test(path);
+  }
+  function parseFilmUrls(xml) {
+    const out = [];
+    if (!xml || typeof xml !== "string") return out;
+    const re = /<loc>(https?:\/\/voiranime\.be\/([^<]+))<\/loc>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+      if (isEpisodePath(m[2])) continue;
+      const film = parseFilmPath(m[2]);
+      if (film) out.push({ base: film.base, lang: film.lang, url: m[1] });
+    }
+    return out;
+  }
   function fetchInventory(signal) {
     return __async(this, null, function* () {
-      return withCache("inv", () => __async(null, null, function* () {
-        const map = /* @__PURE__ */ new Map();
+      return withCache("inv2", () => __async(null, null, function* () {
+        const episodes = /* @__PURE__ */ new Map();
+        const films = [];
         let count = 6;
         try {
-          const idx = yield fetchText(SITEMAP_INDEX, { signal, timeout: 15e3 });
+          const idx = yield fetchText(SITEMAP_INDEX, { signal, timeout: SITEMAP_TIMEOUT });
           const locs = (idx.match(/<loc>[^<]+<\/loc>/g) || []).map((l) => l.replace(/<\/?loc>/g, "")).filter((u) => /post-sitemap\d*\.xml$/.test(u));
           if (locs.length > 0) count = locs.length;
         } catch (e) {
@@ -2378,39 +2454,94 @@ var __provider = (() => {
         for (let i = 1; i <= count; i++) {
           if (isAborted(signal)) break;
           try {
-            const xml = yield fetchText(SITEMAP_POST(i === 1 ? "" : String(i)), { signal, timeout: 15e3 });
+            const xml = yield fetchText(SITEMAP_POST(i === 1 ? "" : String(i)), { signal, timeout: SITEMAP_TIMEOUT });
             for (const inv of parseEpisodeUrls(xml)) {
-              if (!map.has(inv.base)) map.set(inv.base, /* @__PURE__ */ new Map());
-              const byNum = map.get(inv.base);
-              if (!byNum.has(inv.num)) byNum.set(inv.num, inv.url);
+              if (!episodes.has(inv.base)) episodes.set(inv.base, /* @__PURE__ */ new Map());
+              const byNum = episodes.get(inv.base);
+              if (!byNum.has(inv.num)) byNum.set(inv.num, {});
+              const slot = byNum.get(inv.num);
+              if (!slot[inv.lang]) slot[inv.lang] = inv.url;
+            }
+            for (const f of parseFilmUrls(xml)) {
+              if (!films.some((e) => e.url === f.url)) films.push(f);
             }
           } catch (e) {
             if (isAborted(signal)) throw e;
           }
         }
-        return map;
+        return { episodes, films };
       }), { successTtl: 3e5, failureTtl: 6e4 });
     });
   }
-  function searchSeriesSlugs(word, signal) {
+  function inventorySeasonBases(episodes, querySlug, seasonNum) {
+    const out = [];
+    if (!episodes || !querySlug) return out;
+    for (const base of episodes.keys()) {
+      const m = /^(.*)-(?:saison|season)-(\d{1,2})$/.exec(base) || /^(.*)-s(\d{1,2})$/.exec(base) || /^(.*)-(\d{1,4})$/.exec(base);
+      if (!m) continue;
+      const stem = m[1];
+      if (parseInt(m[2], 10) !== seasonNum) continue;
+      if (!stem || stem.length < 3) continue;
+      if (stem === querySlug) {
+        out.push(base);
+        continue;
+      }
+      if (slugTokens(stem).length >= 2 && isOrderedPrefix(stem, querySlug)) out.push(base);
+    }
+    return out;
+  }
+  function extractArticles(html) {
+    const m = String(html || "").match(/<article[\s\S]*?<\/article>/gi);
+    return m || [];
+  }
+  function searchSeriesSlugs(queries, signal) {
     return __async(this, null, function* () {
-      return withCache(`search_${word}`, () => __async(null, null, function* () {
-        try {
-          const html = yield fetchText(`${SITE}/?s=${encodeURIComponent(word)}`, { signal, timeout: 15e3 });
-          if (!html) return [];
-          const out = [];
-          const re = /href="https?:\/\/voiranime\.be\/series\/([^/"]+)\//g;
-          let m;
-          while ((m = re.exec(html)) !== null) {
-            if (!out.includes(m[1])) out.push(m[1]);
+      const list = Array.isArray(queries) ? queries : [queries];
+      for (const q of list) {
+        if (!q) continue;
+        const key = `search_${q}`;
+        const slugs = yield withCache(key, () => __async(null, null, function* () {
+          try {
+            const html = yield fetchText(`${SITE2}/?s=${encodeURIComponent(q)}`, { signal, timeout: SEARCH_TIMEOUT });
+            if (!html) return [];
+            const articles = extractArticles(html);
+            if (!articles.length) return [];
+            const out = [];
+            for (const a of articles) {
+              const re = /href="https?:\/\/voiranime\.be\/series\/([^/"]+)\//g;
+              let m;
+              while ((m = re.exec(a)) !== null) {
+                if (!out.includes(m[1])) out.push(m[1]);
+              }
+              if (out.length >= 10) break;
+            }
+            return out.slice(0, 10);
+          } catch (e) {
+            if (isAborted(signal)) throw e;
+            return [];
           }
-          return out.slice(0, 10);
-        } catch (e) {
-          if (isAborted(signal)) throw e;
-          return [];
-        }
-      }), { successTtl: 12e4, failureTtl: 3e4 });
+        }), { successTtl: 12e4, failureTtl: 3e4 });
+        if (slugs && slugs.length) return slugs;
+      }
+      return [];
     });
+  }
+  function pickFiche(fiches, querySlug, seasonNum) {
+    let ficheSlug = null;
+    let bestScore = FICHE_MIN_SCORE;
+    for (const f of fiches) {
+      const sc = matchScore(f, querySlug);
+      if (sc <= 0) continue;
+      let adj = sc;
+      const mk = seasonMarker(f);
+      if (mk) adj += mk.num === seasonNum ? 25 : -20;
+      else if (seasonNum !== 1) adj -= 5;
+      if (adj > bestScore) {
+        bestScore = adj;
+        ficheSlug = f;
+      }
+    }
+    return ficheSlug;
   }
   function extractEmbedUrl(html) {
     if (!html) return null;
@@ -2426,28 +2557,38 @@ var __provider = (() => {
     const n = String(num);
     const nn = num < 10 ? `0${num}` : String(num);
     return [
-      `${SITE}/${base}-episode-${n}-${l}/`,
-      `${SITE}/${base}-${n}-${l}/`,
-      `${SITE}/${base}-episode-${nn}-${l}/`,
-      `${SITE}/${base}-${nn}-${l}/`
+      `${SITE2}/${base}-episode-${n}-${l}/`,
+      `${SITE2}/${base}-${n}-${l}/`,
+      `${SITE2}/${base}-episode-${nn}-${l}/`,
+      `${SITE2}/${base}-${nn}-${l}/`
     ];
   }
-  function resolveEpisodePage(url, baseStream, signal) {
+  function resolveEpisodePage(url, baseStream, signal, startTime) {
     return __async(this, null, function* () {
       try {
-        const html = yield fetchText(url, { signal, timeout: 15e3 });
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return { status: "budget" };
+        const { html, finalUrl } = yield fetchPage(url, { signal, timeout: EPISODE_FETCH_TIMEOUT });
+        if (!html) return { status: "miss" };
+        if (isHomepageUrl(finalUrl || url)) return { status: "homepage" };
         const embed = extractEmbedUrl(html);
-        if (!embed) return null;
-        if (isAborted(signal)) return null;
-        const resolved = yield resolveStream(__spreadProps(__spreadValues({}, baseStream), { url: embed }), 0);
-        if (!resolved || !resolved.url || resolved.isDirect === false) return null;
-        if (resolved.url.includes("[object")) return null;
-        return resolved;
+        if (!embed) return { status: "miss" };
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return { status: "budget" };
+        const resolved = yield withTimeout(
+          resolveStream(__spreadProps(__spreadValues({}, baseStream), { url: embed }), 0),
+          EMBED_RESOLVE_TIMEOUT,
+          "voiranime-be embed"
+        );
+        if (!resolved || !resolved.url || resolved.isDirect === false) return { status: "miss" };
+        if (resolved.url.includes("[object")) return { status: "miss" };
+        return { status: "ok", resolved };
       } catch (e) {
         if (isAborted(signal)) throw e;
-        return null;
+        return { status: "miss" };
       }
     });
+  }
+  function langLabel(lang) {
+    return lang === "vf" ? "VF" : "VOSTFR";
   }
   function extractStreams(_0, _1, _2, _3) {
     return __async(this, arguments, function* (tmdbId, mediaType, season, episode, options = {}) {
@@ -2455,58 +2596,62 @@ var __provider = (() => {
       if (isAborted(signal)) return [];
       setCurrentSignal(signal);
       const startTime = Date.now();
-      if (mediaType === "movie") return [];
+      const inventory = yield fetchInventory(signal);
+      if (!inventory.episodes.size && !inventory.films.length || isAborted(signal)) return [];
+      if (mediaType === "movie") {
+        return extractMovie(tmdbId, inventory, signal, startTime);
+      }
       const epNum = Math.max(1, parseInt(episode, 10) || 1);
       const seasonNum = Math.max(1, parseInt(season, 10) || 1);
       const titles = yield getTmdbTitles(tmdbId, "tv", { season: seasonNum });
       if (!titles || titles.length === 0) return [];
-      const inventory = yield fetchInventory(signal);
-      if (!inventory.size || isAborted(signal)) return [];
       const primary = String(titles._metadata && titles._metadata.name || titles[0] || "");
       const querySlug = normSlug(primary.split(" (")[0]);
       if (!querySlug) return [];
       let ficheSlug = null;
-      const searchWord = querySlug.split("-").find((w) => w.length >= 4) || querySlug;
       if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const fiches = yield searchSeriesSlugs(searchWord, signal);
-        let bestScore = 0;
-        for (const f of fiches) {
-          const sc = matchScore(f, querySlug);
-          let adj = sc;
-          const mk = seasonMarker(f);
-          if (mk) adj += mk.num === seasonNum ? 25 : -20;
-          else if (seasonNum !== 1) adj -= 5;
-          if (adj > bestScore) {
-            bestScore = adj;
-            ficheSlug = f;
-          }
+        const fullQuery = primary.split(" (")[0].replace(/[–—]/g, " ").replace(/[''`]/g, "'").replace(/[()[\]{}:;,!?]/g, " ").replace(/\s+/g, " ").trim();
+        const fallbackWord = querySlug.split("-").find((w) => w.length >= 4) || querySlug;
+        const queries = [];
+        for (const q of [fullQuery, fallbackWord]) {
+          if (q && !queries.some((e) => e.toLowerCase() === q.toLowerCase())) queries.push(q);
         }
+        const fiches = yield searchSeriesSlugs(queries, signal);
+        ficheSlug = pickFiche(fiches, querySlug, seasonNum);
       }
       const baseOrder = [];
       const pushBase = (b) => {
         if (b && !baseOrder.includes(b)) baseOrder.push(b);
       };
-      for (const src of [ficheSlug, querySlug]) {
-        if (!src) continue;
-        for (const v of baseVariants(src, seasonNum)) pushBase(v);
+      if (ficheSlug) {
+        for (const v of baseVariants(ficheSlug, seasonNum)) pushBase(v);
       }
-      const baseStream = {
-        name: "VoiranimeBE",
-        language: normalizeLanguageCode("VOSTFR") || "ja",
-        quality: "HD"
-      };
+      for (const b of inventorySeasonBases(inventory.episodes, querySlug, seasonNum)) pushBase(b);
+      for (const v of baseVariants(querySlug, seasonNum)) pushBase(v);
+      let homepageStreak = 0;
       for (const base of baseOrder) {
         if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
-        const byNum = inventory.get(base);
-        let url = byNum ? byNum.get(epNum) : null;
-        const probes = url ? [url] : episodeUrlCandidates(base, epNum, "vostfr");
-        for (const u of probes) {
-          const resolved = yield resolveEpisodePage(u, baseStream, signal);
-          if (resolved) {
-            delete resolved.isDirect;
-            delete resolved.originalUrl;
-            resolved.title = `${primary} S${seasonNum}E${epNum} [VOSTFR]`;
-            return [resolved];
+        const byNum = inventory.episodes.get(base);
+        const known = byNum ? byNum.get(epNum) : null;
+        for (const lang of LANGS) {
+          const urls = known && known[lang] ? [known[lang]] : episodeUrlCandidates(base, epNum, lang);
+          for (const u of urls) {
+            const r = yield resolveEpisodePage(u, {
+              name: "VoiranimeBE",
+              language: normalizeLanguageCode(langLabel(lang)) || "ja",
+              quality: "HD"
+            }, signal, startTime);
+            if (r.status === "ok") {
+              const resolved = r.resolved;
+              delete resolved.originalUrl;
+              resolved.title = `${primary} S${seasonNum}E${epNum} [${langLabel(lang)}]`;
+              return [resolved];
+            }
+            if (r.status === "homepage") {
+              if (!ficheSlug && ++homepageStreak >= HOMEPAGE_ABANDON_STREAK) return [];
+            } else if (r.status === "budget" || isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) {
+              break;
+            }
           }
           if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
         }
@@ -2514,7 +2659,39 @@ var __provider = (() => {
       return [];
     });
   }
-  var withCache, SITE, BUDGET_MS, SITEMAP_INDEX, SITEMAP_POST;
+  function extractMovie(tmdbId, inventory, signal, startTime) {
+    return __async(this, null, function* () {
+      const titles = yield getTmdbTitles(tmdbId, "movie", {});
+      if (!titles || titles.length === 0) return [];
+      const primary = String(titles._metadata && titles._metadata.name || titles[0] || "");
+      const querySlug = normSlug(primary.split(" (")[0]);
+      if (!querySlug) return [];
+      const scored = [];
+      for (const f of inventory.films) {
+        const sc = matchScore(f.base, querySlug);
+        if (sc < 100) continue;
+        scored.push(__spreadProps(__spreadValues({}, f), { sc }));
+      }
+      scored.sort((a, b) => b.sc - a.sc || (a.lang === "vostfr" ? 0 : 1) - (b.lang === "vostfr" ? 0 : 1));
+      for (const cand of scored.slice(0, 4)) {
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+        const r = yield resolveEpisodePage(cand.url, {
+          name: "VoiranimeBE",
+          language: normalizeLanguageCode(langLabel(cand.lang)) || "ja",
+          quality: "HD"
+        }, signal, startTime);
+        if (r.status === "ok") {
+          const resolved = r.resolved;
+          delete resolved.originalUrl;
+          resolved.title = `${primary} [${langLabel(cand.lang)}]`;
+          return [resolved];
+        }
+        if (r.status === "budget") break;
+      }
+      return [];
+    });
+  }
+  var withCache, SITE2, BUDGET_MS, SITEMAP_TIMEOUT, SEARCH_TIMEOUT, EPISODE_FETCH_TIMEOUT, EMBED_RESOLVE_TIMEOUT, LANGS, HOMEPAGE_ABANDON_STREAK, FICHE_MIN_SCORE, SITEMAP_INDEX, SITEMAP_POST;
   var init_extractor = __esm({
     "src/voiranime-be/extractor.js"() {
       init_http();
@@ -2522,10 +2699,17 @@ var __provider = (() => {
       init_metadata();
       init_cache();
       withCache = createCache("vbe", "VoiranimeBE");
-      SITE = "https://voiranime.be";
+      SITE2 = "https://voiranime.be";
       BUDGET_MS = 45e3;
-      SITEMAP_INDEX = `${SITE}/sitemap_index.xml`;
-      SITEMAP_POST = (i) => `${SITE}/post-sitemap${i || ""}.xml`;
+      SITEMAP_TIMEOUT = 15e3;
+      SEARCH_TIMEOUT = 15e3;
+      EPISODE_FETCH_TIMEOUT = 12e3;
+      EMBED_RESOLVE_TIMEOUT = 2e4;
+      LANGS = ["vostfr", "vf"];
+      HOMEPAGE_ABANDON_STREAK = 3;
+      FICHE_MIN_SCORE = 40;
+      SITEMAP_INDEX = `${SITE2}/sitemap_index.xml`;
+      SITEMAP_POST = (i) => `${SITE2}/post-sitemap${i || ""}.xml`;
     }
   });
 

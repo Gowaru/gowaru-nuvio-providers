@@ -1,6 +1,6 @@
 /**
  * animevostfr - Built from src/animevostfr/
- * Generated: 2026-10-10T10:54:58.261698137Z
+ * Generated: 2026-10-10T13:19:14.264354173Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -1912,23 +1912,23 @@ var __provider = (() => {
         this._tagStack.push(element);
       };
       DomHandler.prototype.ontext = function(data) {
-        var normalize = this._options.normalizeWhitespace || this._options.ignoreWhitespace;
+        var normalize2 = this._options.normalizeWhitespace || this._options.ignoreWhitespace;
         var lastTag;
         if (!this._tagStack.length && this.dom.length && (lastTag = this.dom[this.dom.length - 1]).type === ElementType.Text) {
-          if (normalize) {
+          if (normalize2) {
             lastTag.data = (lastTag.data + data).replace(re_whitespace, " ");
           } else {
             lastTag.data += data;
           }
         } else {
           if (this._tagStack.length && (lastTag = this._tagStack[this._tagStack.length - 1]) && (lastTag = lastTag.children[lastTag.children.length - 1]) && lastTag.type === ElementType.Text) {
-            if (normalize) {
+            if (normalize2) {
               lastTag.data = (lastTag.data + data).replace(re_whitespace, " ");
             } else {
               lastTag.data += data;
             }
           } else {
-            if (normalize) {
+            if (normalize2) {
               data = data.replace(re_whitespace, " ");
             }
             var element = this._createDomElement({
@@ -12677,8 +12677,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
-        const tldVariants = ["to", "net", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.biz/";
+        const tldVariants = ["biz", "net", "ru", "is", "to"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -12691,12 +12691,20 @@ var __provider = (() => {
             const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
+            const serveRefOf = (r, fallbackRef) => {
+              var _a2;
+              const finalDomain = r && r.url && ((_a2 = r.url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a2[1]) || "";
+              return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+            };
             let html = yield res.text();
             const hasJsRedirect = /window\.location\.replace/.test(html);
             if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+            if (match) {
+              const serveRef = serveRefOf(res, ref);
+              return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+            }
             const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) || html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
             if (jsRedirect && jsRedirect[1] !== fetchUrl) {
               res = yield safeFetch(jsRedirect[1], { headers: { "Referer": ref, "Origin": ref } });
@@ -12704,7 +12712,10 @@ var __provider = (() => {
                 html = yield res.text();
                 if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
                 const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match2) {
+                  const serveRef = serveRefOf(res, ref);
+                  return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
               }
             }
           } catch (e) {
@@ -13337,8 +13348,10 @@ var __provider = (() => {
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
         else if (urlLower.includes("fsvid.") || urlLower.includes("vidzy.")) result = yield resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
-        else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-        // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+        else if (urlLower.includes("luluvid.") || urlLower.includes("lulust.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+        // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+        // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+        // refuse ; les providers filtrent ces URLs en aval)
         urlLower.includes("livavid.") || urlLower.includes("lulavid.") || urlLower.includes("livastream.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("lecteurvideo.")) result = yield resolveLecteurVideo(originalUrl);
@@ -13458,7 +13471,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "f20986e9" : "dev";
+      BUILD_HASH = true ? "e78b9d2c" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -13553,6 +13566,10 @@ var __provider = (() => {
       NEVER_CORRECT_DOMAINS = [
         "voembed.net",
         // famille VidMoly (m3u8 en clair) — PAS voe
+        "vidmoly.biz",
+        // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+        "vidmoly.net",
+        // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
         "gn1r5n.org",
         // embed "myTV" de VoirAnime
         "streamhide.to"
@@ -13734,11 +13751,37 @@ var __provider = (() => {
     let cleaned = title.replace(/\s+(?:Season|Saison|Stagione|Temporada)\s+\d+\s*$/i, "").replace(/\s+S\d+\s*$/i, "");
     return cleaned.trim() || title;
   }
+  function normalize(s) {
+    return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[':!.,?()\[\]\/-]/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  }
   function countExtraWords(resultTitle, searchTitle) {
     const qWords = new Set((searchTitle || "").split(/\s+/).filter((w) => w.length > 2));
     return (resultTitle || "").split(/\s+/).filter(
       (w) => w.length > 2 && !/^\d+$/.test(w) && !TITLE_NOISE_WORDS.has(w) && !qWords.has(w)
     ).length;
+  }
+  function hasForeignLeadingTokens(resultTitle, searchTitle) {
+    const nt = normalize(searchTitle);
+    const nr = normalize(resultTitle);
+    if (!nt || !nr || nr === nt) return false;
+    const isTokStart = (s, i) => i === 0 || s.charCodeAt(i - 1) === 32;
+    const isTokEnd = (s, i) => i >= s.length || s.charCodeAt(i) === 32;
+    const isGeneric = (w) => w.length > 2 && !/^\d+$/.test(w) && !GENERIC_TOKENS.has(w);
+    let pos = nr.indexOf(nt);
+    if (pos !== -1) {
+      if (!(isTokStart(nr, pos) && isTokEnd(nr, pos + nt.length))) return true;
+      const leading = nr.slice(0, pos).trim().split(/\s+/).filter(Boolean);
+      if (leading.length > 0 && leading[leading.length - 1] === "no") return false;
+      return leading.some(isGeneric);
+    }
+    pos = nt.indexOf(nr);
+    if (pos !== -1) {
+      if (pos === 0 && isTokEnd(nt, pos + nr.length)) return false;
+      const leadQ = nt.slice(0, pos).trim().split(/\s+/).filter(Boolean);
+      if (leadQ.length > 0 && leadQ[leadQ.length - 1] === "no") return false;
+      return true;
+    }
+    return false;
   }
   function resolveTargetEpisodes(_0, _1, _2, _3) {
     return __async(this, arguments, function* (tmdbId, mediaType, season, episode, opts = {}) {
@@ -13917,7 +13960,7 @@ var __provider = (() => {
     "src/animevostfr/http.js"() {
       init_resolvers();
       rateLimit = createProviderRateLimiter();
-      DOMAIN = "v2.animevostfr.org";
+      DOMAIN = "animevostfr.org";
       HEADERS2 = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -14290,6 +14333,34 @@ var __provider = (() => {
   });
 
   // src/animevostfr/extractor.js
+  function scoreAgainstQuery(candidateTitle, queryTitle) {
+    const n = normalizeTitle(candidateTitle);
+    const simplifiedTitle = normalizeTitle(queryTitle);
+    const titleWords = simplifiedTitle.split(/\s+/).filter((w) => w.length > 2);
+    let score = 0;
+    if (n === simplifiedTitle) {
+      score = 200;
+    } else if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
+      score = 100;
+      const extra = countExtraWords(n, simplifiedTitle);
+      if (extra > 0) score -= Math.min(extra * 25, 60);
+    } else {
+      for (const w of titleWords) {
+        if (n.includes(w)) score += 20;
+      }
+      const lenRatio = Math.min(n.length, simplifiedTitle.length) / Math.max(n.length, simplifiedTitle.length);
+      score = Math.round(score * lenRatio);
+    }
+    return score;
+  }
+  function fetchPageCached(url) {
+    return __async(this, null, function* () {
+      if (_pageCache.has(url)) return _pageCache.get(url);
+      const html = yield fetchText(url, { timeout: SEARCH_TIMEOUT });
+      _pageCache.set(url, html || "");
+      return html || "";
+    });
+  }
   function searchAnime(title) {
     return __async(this, null, function* () {
       try {
@@ -14330,30 +14401,17 @@ var __provider = (() => {
           return true;
         });
         console.log(`[AnimeVOSTFR] Search results for "${title}": ${unique.length}`);
-        const normalize = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['\u2018\u2019:!.,?"]/g, "").replace(/\b(?:the|an?)\s+/g, "").replace(/\s+/g, " ").trim();
-        const simplifiedTitle = normalize(title);
-        const titleWords = simplifiedTitle.split(/\s+/).filter((w) => w.length > 2);
-        const scored = unique.map((r) => {
-          const n = normalize(r.title);
-          let score = 0;
-          if (n === simplifiedTitle) {
-            score = 200;
-          } else if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
-            score = 100;
-            const extra = countExtraWords(n, simplifiedTitle);
-            if (extra > 0) score -= Math.min(extra * 25, 60);
-          } else {
-            for (const w of titleWords) {
-              if (n.includes(w)) score += 20;
-            }
-            const lenRatio = Math.min(n.length, simplifiedTitle.length) / Math.max(n.length, simplifiedTitle.length);
-            score = Math.round(score * lenRatio);
-          }
-          return __spreadProps(__spreadValues({}, r), { score });
-        });
+        const scored = unique.map((r) => __spreadProps(__spreadValues({}, r), { score: scoreAgainstQuery(r.title, title) }));
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];
         const bestScore = best ? best.score : 0;
+        if (bestScore >= 200) {
+          for (const r of scored) {
+            const slug = (r.url || "").toLowerCase();
+            if (EDITION_SLUG_TOKENS.some((t) => slug.includes(t))) r.score -= 80;
+          }
+          scored.sort((a, b) => b.score - a.score);
+        }
         let matches;
         if (best && bestScore >= 25) {
           const threshold = Math.max(20, bestScore * 0.5);
@@ -14372,7 +14430,7 @@ var __provider = (() => {
   function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
     return __async(this, null, function* () {
       try {
-        const html = yield fetchText(seriesUrl, { timeout: SEARCH_TIMEOUT });
+        const html = yield fetchPageCached(seriesUrl);
         const $ = import_cheerio_without_node_native2.default.load(html);
         const episodeLinks = [];
         $('a[href*="/episode/"]').each((i, el) => {
@@ -14381,6 +14439,8 @@ var __provider = (() => {
           episodeLinks.push({ url: h, text: t });
         });
         console.log(`[AnimeVOSTFR] Found ${episodeLinks.length} episode links`);
+        const ficheHasSeasonToken = /saison[\s_-]*\d+|season[\s_-]*\d+|-\d+-episode-/i.test(seriesUrl || "");
+        const seasonGuardOn = !isAbsolute || !ficheHasSeasonToken;
         if (season == null || episode == null) {
           if (episodeLinks.length > 0) {
             console.log(`[AnimeVOSTFR] Movie mode: using episode URL ${episodeLinks[0].url}`);
@@ -14407,7 +14467,7 @@ var __provider = (() => {
         const matchEpisode = (links, pattern) => {
           return links.find((l) => {
             if (!pattern.test(l.url)) return false;
-            if (!isAbsolute && season != null && Number(season) > 1) {
+            if (seasonGuardOn && season != null && Number(season) > 1) {
               const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
               if (!seasonMatch || parseInt(seasonMatch[1]) !== Number(season)) {
                 return false;
@@ -14439,7 +14499,7 @@ var __provider = (() => {
         const matchByText = (links, pattern) => {
           return links.find((l) => {
             if (!pattern.test(l.text)) return false;
-            if (!isAbsolute && season != null && Number(season) > 1) {
+            if (seasonGuardOn && season != null && Number(season) > 1) {
               const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
               if (!seasonMatch || parseInt(seasonMatch[1]) !== Number(season)) {
                 return false;
@@ -14469,6 +14529,9 @@ var __provider = (() => {
       }
     });
   }
+  function decodeEscapedHtml(s) {
+    return (s || "").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#0?39;/gi, "'").replace(/&amp;/gi, "&").replace(/&#0?38;/gi, "&");
+  }
   function extractPlayersFromEpisode(episodeUrl) {
     return __async(this, null, function* () {
       const streams = [];
@@ -14492,6 +14555,17 @@ var __provider = (() => {
           } else if (lazyDiv.length && lazyDiv.attr("data-src")) {
             src = lazyDiv.attr("data-src");
           }
+          if (!src) {
+            const rawInner = $(el).html() || $(el).text() || "";
+            if (rawInner.indexOf("trembed") !== -1) {
+              const decoded = decodeEscapedHtml(rawInner);
+              const m = decoded.match(/https?:\/\/[^"'\s<>]*trembed[^"'\s<>]*/i);
+              if (m) {
+                src = m[0];
+                console.log(`[AnimeVOSTFR] Escaped trembed iframe decoded in tab "${serverName}"`);
+              }
+            }
+          }
           if (src) trembedEntries.push({ src, serverName });
         });
         if (trembedEntries.length === 0) {
@@ -14501,7 +14575,7 @@ var __provider = (() => {
           });
         }
         console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
-        const DIRECT_HOSTS = ["vidmoly", "sibnet", "luluvid", "uqload", "myvi", "mytv", "dood", "ds2play", "hgcloud", "stape", "streamtape"];
+        const DIRECT_HOSTS = ["sibnet", "luluvid", "uqload", "myvi", "mytv", "dood", "ds2play", "hgcloud", "stape", "streamtape"];
         let directCount = 0;
         for (const entry of trembedEntries) {
           try {
@@ -14519,7 +14593,7 @@ var __provider = (() => {
             if (playerSrc && playerSrc.startsWith("http")) {
               const playerName = getPlayerName(playerSrc);
               const pLower = playerSrc.toLowerCase();
-              if (pLower.includes("sendvid.com") || pLower.includes("vidstream.pro")) {
+              if (pLower.includes("sendvid.com") || pLower.includes("vidstream.pro") || pLower.includes("vidmoly") || pLower.includes("upstream")) {
                 console.log(`[AnimeVOSTFR] Skip host mort (${playerName}): ${playerSrc.slice(0, 60)}`);
                 continue;
               }
@@ -14555,12 +14629,20 @@ var __provider = (() => {
     });
   }
   function detectLang(url, title) {
-    const u = url.toLowerCase();
+    const u = (url || "").toLowerCase();
+    const slugMatch = u.match(/\/(?:animes|film)\/([^/?#]+)/);
+    const slug = slugMatch ? slugMatch[1] : "";
+    const hasVf = /(?:^|-)vf(?:-|$)/.test(slug);
+    const hasVostfr = /(?:^|-)vostfr(?:-|$)/.test(slug);
+    if (hasVostfr && !hasVf) return "VOSTFR";
+    if (hasVf && !hasVostfr) return "VF";
     const t = (title || "").toLowerCase();
-    if (/\/animes\/[^/]*-vostfr(?:\/|$)/.test(u) || /\bvostfr\b/.test(t)) return "VOSTFR";
-    if (/\/animes\/[^/]*-vf(?:\/|$)/.test(u) || /\bvf\b/.test(t)) return "VF";
-    if (/\/animes\/[^/]*-vo(?:\/|$)/.test(u) || /\bvo\b/.test(t)) return "VO";
-    return "VOSTFR";
+    if (/\bvostfr\b/.test(t)) return "VOSTFR";
+    if (/\bvf\b/.test(t)) return "VF";
+    const hasVoSlug = /(?:^|-)vo(?:-|$)/.test(slug);
+    if (hasVoSlug && !hasVf && !hasVostfr) return "VO";
+    if (/\bvo\b/.test(t)) return "VO";
+    return null;
   }
   function getPlayerName(url) {
     if (url.includes("sibnet")) return "Sibnet";
@@ -14573,9 +14655,49 @@ var __provider = (() => {
     if (url.includes("dood") || url.includes("ds2play")) return "Doodstream";
     if (url.includes("myvi") || url.includes("mytv")) return "MyVi";
     if (url.includes("sendvid")) return "Sendvid";
+    if (url.includes("upstream")) return "Upstream";
     if (url.includes("stape") || url.includes("streamtape")) return "Streamtape";
     if (url.includes("moon")) return "Moon";
     return "Player";
+  }
+  function verifySheetTitle(sheetUrl, tmdbTitles) {
+    return __async(this, null, function* () {
+      let html = "";
+      try {
+        html = yield fetchPageCached(sheetUrl);
+      } catch (e) {
+        console.log(`[AnimeVOSTFR] Guard: fiche illisible (${e.message}) \u2014 gard\xE9e par prudence`);
+        return true;
+      }
+      if (!html) {
+        console.log(`[AnimeVOSTFR] Guard: fiche vide \u2014 gard\xE9e par prudence`);
+        return true;
+      }
+      let sheetTitle = "";
+      try {
+        const $ = import_cheerio_without_node_native2.default.load(html);
+        sheetTitle = $("h1").first().text().trim() || $("title").first().text().trim() || "";
+      } catch (e) {
+        return true;
+      }
+      if (!sheetTitle) {
+        console.log(`[AnimeVOSTFR] Guard: pas de titre de fiche \u2014 gard\xE9e par prudence`);
+        return true;
+      }
+      let best = 0;
+      let pass = false;
+      for (const q of tmdbTitles) {
+        const s = scoreAgainstQuery(sheetTitle, q);
+        if (s > best) best = s;
+        if (s >= SHEET_GUARD_THRESHOLD && !hasForeignLeadingTokens(sheetTitle, q)) pass = true;
+      }
+      if (!pass) {
+        console.log(`[AnimeVOSTFR] Guard: fiche rejet\xE9e "${sheetTitle}" (meilleur score ${best}) \u2014 ${sheetUrl}`);
+        return false;
+      }
+      console.log(`[AnimeVOSTFR] Guard: fiche accept\xE9e "${sheetTitle}" (score ${best})`);
+      return true;
+    });
   }
   function extractStreams(_0, _1, _2, _3) {
     return __async(this, arguments, function* (tmdbId, mediaType, season, episode, options = {}) {
@@ -14595,7 +14717,17 @@ var __provider = (() => {
       const searchSeason = mediaType === "movie" && season == null ? 1 : Number(effectiveSeason);
       const searchEpisode = mediaType === "movie" && episode == null ? 1 : Number(episode);
       const isMoviePath = mediaType === "movie" && season == null && episode == null;
-      const baseTitles = titlesOrdered.slice(0, 3);
+      const baseTitles = titlesOrdered.slice(0, isMoviePath ? 6 : 3);
+      const mustTry = [];
+      const englishTitle = (titles[0] || "").trim();
+      if (englishTitle) mustTry.push(englishTitle);
+      const strippedMain = stripSeasonSuffix(titlesOrdered[0] || "");
+      if (strippedMain && strippedMain !== titlesOrdered[0]) mustTry.push(strippedMain);
+      for (const m of mustTry) {
+        const key = m.toLowerCase().trim();
+        if (!baseTitles.some((b) => (b || "").toLowerCase().trim() === key)) baseTitles.push(m);
+      }
+      console.log(`[AnimeVOSTFR] Titres essay\xE9s (${baseTitles.length}): ${baseTitles.join(" | ")}`);
       const shortTitles = [];
       for (const t of baseTitles) {
         const cleanT = stripSeasonSuffix(t);
@@ -14603,7 +14735,6 @@ var __provider = (() => {
         const parts = cleanT.split(/[:\–\-]+/).map((s) => s.trim()).filter((s) => s.length > 5);
         if (parts.length > 0 && parts[0] !== cleanT) shortTitles.push(parts[0]);
       }
-      let matches = [];
       const seenKeys = /* @__PURE__ */ new Set();
       const uniqueTitles = shortTitles.filter((t) => {
         const key = t.toLowerCase().trim();
@@ -14611,11 +14742,19 @@ var __provider = (() => {
         seenKeys.add(key);
         return true;
       });
+      let matches = [];
+      const seenMatchUrlsAcrossTitles = /* @__PURE__ */ new Set();
       for (const title of uniqueTitles) {
         const results = yield searchAnime(title);
         if (results && results.length > 0) {
-          matches = results;
-          break;
+          for (const r of results) {
+            if (!seenMatchUrlsAcrossTitles.has(r.url)) {
+              seenMatchUrlsAcrossTitles.add(r.url);
+              matches.push(r);
+            }
+          }
+          const usable = isMoviePath ? matches.some((m) => (m.url || "").includes("/film/")) : matches.some((m) => !(m.url || "").includes("/film/"));
+          if (usable || matches.length >= 6) break;
         }
       }
       if (!matches || matches.length === 0) return [];
@@ -14642,7 +14781,19 @@ var __provider = (() => {
           uniqueMatches.push(m);
         }
       }
-      const matchesToProcess = mediaType === "movie" ? uniqueMatches.slice(0, 1) : uniqueMatches;
+      let matchesToProcess;
+      if (isMoviePath) {
+        matchesToProcess = [...uniqueMatches].sort((a, b) => {
+          const aFilm = (a.url || "").includes("/film/") ? 0 : 1;
+          const bFilm = (b.url || "").includes("/film/") ? 0 : 1;
+          return aFilm - bFilm;
+        }).slice(0, 3);
+      } else {
+        matchesToProcess = uniqueMatches.filter((m) => !(m.url || "").includes("/film/"));
+        if (matchesToProcess.length !== uniqueMatches.length) {
+          console.log(`[AnimeVOSTFR] S\xE9ries : ${uniqueMatches.length - matchesToProcess.length} match(s) /film/ \xE9cart\xE9(s)`);
+        }
+      }
       let directStreamCount = 0;
       for (const match of matchesToProcess) {
         if (directStreamCount >= 2) break;
@@ -14658,6 +14809,8 @@ var __provider = (() => {
         if (seasonMatchText && parseInt(seasonMatchText[1]) !== Number(searchSeason) && targetEpisodes.length === 1) {
           continue;
         }
+        const sheetOk = yield verifySheetTitle(match.url, titles);
+        if (!sheetOk) continue;
         const epResults = [];
         if (isMoviePath) {
           if (!checkedEpisodeUrls.has(match.url)) {
@@ -14680,9 +14833,9 @@ var __provider = (() => {
           const epType = Number(ep) === searchEpisode ? "" : ` (Abs ${ep})`;
           playerStreams.forEach((s) => {
             if (!s.name.includes("(")) {
-              s.name = `AnimeVOSTFR (${langSuffix})`;
+              s.name = langSuffix ? `AnimeVOSTFR (${langSuffix})` : "AnimeVOSTFR";
             }
-            if (!s.title.includes(langSuffix)) {
+            if (langSuffix && !s.title.includes(langSuffix)) {
               s.title = `${s.title}${epType} - ${langSuffix}`;
             } else {
               s.title = `${s.title}${epType}`;
@@ -14694,7 +14847,8 @@ var __provider = (() => {
         }
       }
       if (streams.length === 0) {
-        console.warn(`[AnimeVOSTFR] Episode S${searchSeason}E${searchEpisode} not found (targets: ${targetEpisodes.join(", ")})`);
+        if (isMoviePath) console.warn(`[AnimeVOSTFR] Film introuvable (aucune fiche / streams)`);
+        else console.warn(`[AnimeVOSTFR] Episode S${searchSeason}E${searchEpisode} not found (targets: ${targetEpisodes.join(", ")})`);
       }
       const seenUrls = /* @__PURE__ */ new Set();
       const deduped = [];
@@ -14712,7 +14866,7 @@ var __provider = (() => {
       return sortStreamsByLanguage(validStreams);
     });
   }
-  var import_cheerio_without_node_native2, BASE_URL, SEARCH_TIMEOUT;
+  var import_cheerio_without_node_native2, BASE_URL, SEARCH_TIMEOUT, normalizeTitle, EDITION_SLUG_TOKENS, _pageCache, SHEET_GUARD_THRESHOLD;
   var init_extractor = __esm({
     "src/animevostfr/extractor.js"() {
       init_dle_extractor();
@@ -14720,8 +14874,12 @@ var __provider = (() => {
       import_cheerio_without_node_native2 = __toESM(require_cheerio_without_node_native());
       init_resolvers();
       init_metadata();
-      BASE_URL = "https://v2.animevostfr.org";
+      BASE_URL = "https://animevostfr.org";
       SEARCH_TIMEOUT = 1e4;
+      normalizeTitle = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/['\u2018\u2019:!.,?"]/g, "").replace(/\b(?:the|an?)\s+/g, "").replace(/\s+/g, " ").trim();
+      EDITION_SLUG_TOKENS = ["netflix", "gyojin", "requiem", "live-action", "fishman", "fish-man", "stampede", "strong-world"];
+      _pageCache = /* @__PURE__ */ new Map();
+      SHEET_GUARD_THRESHOLD = 75;
     }
   });
 

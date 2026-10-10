@@ -1,6 +1,6 @@
 /**
  * french-manga - Built from src/french-manga/
- * Generated: 2026-10-10T10:54:58.766698757Z
+ * Generated: 2026-10-10T13:19:14.892354856Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12686,8 +12686,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
-        const tldVariants = ["to", "net", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.biz/";
+        const tldVariants = ["biz", "net", "ru", "is", "to"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -12700,12 +12700,20 @@ var __provider = (() => {
             const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
+            const serveRefOf = (r, fallbackRef) => {
+              var _a2;
+              const finalDomain = r && r.url && ((_a2 = r.url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a2[1]) || "";
+              return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+            };
             let html = yield res.text();
             const hasJsRedirect = /window\.location\.replace/.test(html);
             if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+            if (match) {
+              const serveRef = serveRefOf(res, ref);
+              return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+            }
             const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) || html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
             if (jsRedirect && jsRedirect[1] !== fetchUrl) {
               res = yield safeFetch(jsRedirect[1], { headers: { "Referer": ref, "Origin": ref } });
@@ -12713,7 +12721,10 @@ var __provider = (() => {
                 html = yield res.text();
                 if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
                 const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match2) {
+                  const serveRef = serveRefOf(res, ref);
+                  return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
               }
             }
           } catch (e) {
@@ -13346,8 +13357,10 @@ var __provider = (() => {
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
         else if (urlLower.includes("fsvid.") || urlLower.includes("vidzy.")) result = yield resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
-        else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-        // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+        else if (urlLower.includes("luluvid.") || urlLower.includes("lulust.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+        // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+        // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+        // refuse ; les providers filtrent ces URLs en aval)
         urlLower.includes("livavid.") || urlLower.includes("lulavid.") || urlLower.includes("livastream.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("lecteurvideo.")) result = yield resolveLecteurVideo(originalUrl);
@@ -13467,7 +13480,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "f20986e9" : "dev";
+      BUILD_HASH = true ? "e78b9d2c" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -13563,6 +13576,10 @@ var __provider = (() => {
       NEVER_CORRECT_DOMAINS = [
         "voembed.net",
         // famille VidMoly (m3u8 en clair) — PAS voe
+        "vidmoly.biz",
+        // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+        "vidmoly.net",
+        // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
         "gn1r5n.org",
         // embed "myTV" de VoirAnime
         "streamhide.to"
@@ -14483,27 +14500,60 @@ var __provider = (() => {
     const m = (title || "").match(PATTERNS.SEASON_IN_TITLE);
     return m ? parseInt(m[1]) : null;
   }
+  function scoreCandidate(item, title, targetSeason) {
+    let score = scoreMatch(item.title || item.name, title);
+    if (targetSeason && score > 0) {
+      const ts = parseInt(targetSeason);
+      const rs = item.season;
+      if (rs === ts) {
+        if (score >= SCORES.STRONG_MATCH) score += 40;
+      } else if (rs && Math.abs(rs - ts) === 1) {
+        score -= 60;
+      } else if (rs && rs !== ts) {
+        score -= 80;
+      }
+    }
+    return score;
+  }
   function bestMatch(items, title, targetSeason) {
     let best = null, bestScore = 0;
     for (const item of items) {
-      let score = scoreMatch(item.title || item.name, title);
-      if (targetSeason && score > 0) {
-        const ts = parseInt(targetSeason);
-        const rs = item.season;
-        if (rs === ts) {
-          if (score >= SCORES.STRONG_MATCH) score += 40;
-        } else if (rs && Math.abs(rs - ts) === 1) {
-          score -= 60;
-        } else if (rs && rs !== ts) {
-          score -= 80;
-        }
-      }
+      const score = scoreCandidate(item, title, targetSeason);
       if (score > bestScore) {
         bestScore = score;
         best = item;
       }
     }
     return bestScore >= SCORES.MIN_MATCH ? best : null;
+  }
+  function scorePageTitle(pageTitle, title) {
+    const nt = normalize2(title);
+    const nr = normalize2(pageTitle);
+    if (!nt || !nr) return 0;
+    if (nr === nt) return 100;
+    if ((nr.includes(nt) || nt.includes(nr)) && !hasForeignLeadingTokens(nr, nt)) return 80;
+    return 0;
+  }
+  function maxPageTitleScore(pageTitle, titles) {
+    let best = 0;
+    for (const t of titles || []) {
+      if (typeof t !== "string" || !t) continue;
+      const s = scorePageTitle(pageTitle, stripSeasonSuffix(t));
+      if (s > best) {
+        best = s;
+        if (best >= 100) break;
+      }
+    }
+    return best;
+  }
+  function passesTitleGuard(pageTitle, titles) {
+    const score = maxPageTitleScore(pageTitle, titles);
+    if (score < TITLE_GUARD_THRESHOLD) {
+      console.log(`[FrenchManga] \u2717 Titre rejet\xE9: "${pageTitle}" sans rapport avec la cible (score ${score})`);
+      return false;
+    }
+    console.log(`[FrenchManga] Titre valid\xE9: "${pageTitle}" (score ${score})`);
+    return true;
   }
   function parseSearchResults(html) {
     if (!html) return [];
@@ -14591,21 +14641,10 @@ var __provider = (() => {
     const altTitleJp = altTitles.jp || "";
     return { versions, info, altTitleUs, altTitleJp };
   }
-  function trySearchGet(title, targetSeason) {
-    return __async(this, null, function* () {
-      const html = yield cached(
-        "main_page_listing",
-        () => fetchText(ENDPOINTS.SEARCH, { timeout: TIMEOUTS.SEARCH })
-      );
-      const results = parseSearchResults(html);
-      if (results.length === 0) return null;
-      return bestMatch(results, title, targetSeason);
-    });
-  }
   function trySearchFallback(allResults, tmdbTitles) {
     return __async(this, null, function* () {
-      const nt = normalize2(tmdbTitles[0] || "");
-      if (!nt || allResults.length === 0) return null;
+      const nts = (tmdbTitles || []).map((t) => normalize2(t)).filter(Boolean);
+      if (nts.length === 0 || allResults.length === 0) return null;
       const unique = [];
       const seen = /* @__PURE__ */ new Set();
       for (const r of allResults) {
@@ -14620,8 +14659,10 @@ var __provider = (() => {
           const config = parseSerieConfig(html);
           if (!config || !config.title || !config.newsId) return null;
           const nr = normalize2(config.title);
-          const extra = countExtraWords(nr, nt);
-          if ((nr === nt || nr.includes(nt) || nt.includes(nr)) && extra < 2 && !hasForeignLeadingTokens(nr, nt)) {
+          const hit = nts.some(
+            (nt) => (nr === nt || nr.includes(nt) || nt.includes(nr)) && countExtraWords(nr, nt) < 2 && !hasForeignLeadingTokens(nr, nt)
+          );
+          if (hit) {
             const apiData = yield fetchEpisodeApi(config.newsId);
             if (apiData && apiData.versions) {
               return {
@@ -14643,43 +14684,60 @@ var __provider = (() => {
       return null;
     });
   }
-  function trySearch(titles, targetSeason) {
+  function collectCandidates(titles, targetSeason) {
     return __async(this, null, function* () {
-      const cleanTitles = titles.map((t) => stripSeasonSuffix(t));
-      const allPostResults = [];
-      const dedupResults = /* @__PURE__ */ new Map();
+      const seenTitles = /* @__PURE__ */ new Set();
+      const cleanTitles = [];
+      for (const t of (titles || []).map((t2) => stripSeasonSuffix(t2))) {
+        const key = normalize2(t);
+        if (key && !seenTitles.has(key)) {
+          seenTitles.add(key);
+          cleanTitles.push(t);
+        }
+      }
+      const dedup = /* @__PURE__ */ new Map();
       for (const title of cleanTitles.slice(0, MAX_SEARCH_TITLES)) {
         try {
           const postResults = yield trySearchPostRaw(title, targetSeason);
           if (postResults) {
             for (const r of postResults) {
               const key = r.newsid || r.url;
-              if (key && !dedupResults.has(key)) {
-                dedupResults.set(key, r);
-                allPostResults.push(r);
-              }
+              if (key && !dedup.has(key)) dedup.set(key, r);
             }
-            const postMatch = bestMatch(postResults, title, targetSeason);
-            if (postMatch) return postMatch;
           }
-          console.log(`[FrenchManga] Trying GET fallback for "${title}"...`);
-          const getMatch = yield trySearchGet(title, targetSeason);
-          if (getMatch) return getMatch;
         } catch (e) {
           console.warn(`[FrenchManga] Search failed for "${title}": ${e.message}`);
         }
       }
-      if (allPostResults.length > 0) {
-        const firstTitle = cleanTitles[0];
-        const bestPostMatch = bestMatch(allPostResults, firstTitle, targetSeason);
-        if (bestPostMatch) return bestPostMatch;
+      try {
+        const html = yield cached(
+          "main_page_listing",
+          () => fetchText(ENDPOINTS.SEARCH, { timeout: TIMEOUTS.SEARCH })
+        );
+        for (const r of parseSearchResults(html || "")) {
+          const key = r.newsid || r.url;
+          if (key && !dedup.has(key)) dedup.set(key, r);
+        }
+      } catch (_) {
       }
-      if (allPostResults.length > 0) {
-        console.log(`[FrenchManga] Trying deep fallback on ${allPostResults.length} POST results...`);
-        const fallbackMatch = yield trySearchFallback(allPostResults, titles);
-        if (fallbackMatch) return fallbackMatch;
+      const all = [...dedup.values()];
+      const scored = [];
+      for (const item of all) {
+        let best = 0;
+        for (const t of cleanTitles) {
+          const s = scoreCandidate(item, t, targetSeason);
+          if (s > best) best = s;
+        }
+        if (best >= SCORES.MIN_MATCH) scored.push({ item, score: best });
       }
-      return null;
+      scored.sort((a, b) => b.score - a.score);
+      if (scored.length > 0) return scored.map((s) => s.item);
+      if (all.length > 0) {
+        console.log(`[FrenchManga] Trying deep fallback on ${all.length} results...`);
+        const fb = yield trySearchFallback(all, titles);
+        if (fb) return [fb];
+      }
+      return [];
     });
   }
   function trySearchPostRaw(title, targetSeason) {
@@ -14708,11 +14766,47 @@ var __provider = (() => {
       }));
     });
   }
+  function isDeadHost(url) {
+    const u = (url || "").toLowerCase();
+    return DEAD_HOSTS.some((h) => u.includes(h));
+  }
+  function isLocalPackedHost(url) {
+    const u = (url || "").toLowerCase();
+    return LOCAL_PACKED_HOSTS.some((h) => u.includes(h));
+  }
+  function resolveCached(cache, stream) {
+    return __async(this, null, function* () {
+      if (cache.has(stream.url)) {
+        const c = cache.get(stream.url);
+        if (!c) return null;
+        return __spreadProps(__spreadValues({}, stream), { url: c.url, headers: __spreadValues(__spreadValues({}, stream.headers), c.headers), quality: c.quality || stream.quality, isDirect: true });
+      }
+      const r = yield resolveWithTimeout(stream);
+      cache.set(stream.url, r && r.url && r.isDirect ? { url: r.url, headers: r.headers, quality: r.quality } : null);
+      return r;
+    });
+  }
   function resolveWithTimeout(stream) {
     return __async(this, null, function* () {
       try {
         const start = Date.now();
-        const resolved = yield resolveStream(stream);
+        if (isDeadHost(stream.url)) {
+          console.log(`[FrenchManga] \u2717 Dead host, skipped: ${(stream.url || "").slice(0, 70)}`);
+          return null;
+        }
+        let resolved;
+        if (isLocalPackedHost(stream.url)) {
+          const local = yield resolvePackedPlayer(stream.url);
+          if (local && local.url && local.url !== stream.url) {
+            console.log(`[FrenchManga] Local-packed OK (${Date.now() - start}ms): ${stream.url.slice(0, 60)}... \u2192 ${local.url.slice(0, 60)}...`);
+            resolved = __spreadProps(__spreadValues({}, stream), { url: local.url, headers: __spreadValues(__spreadValues({}, stream.headers), local.headers || {}), isDirect: true });
+          } else {
+            console.log(`[FrenchManga] \u2717 Local-packed non r\xE9solu (${Date.now() - start}ms): ${(stream.url || "").slice(0, 70)} - rejet\xE9`);
+            return null;
+          }
+        } else {
+          resolved = yield resolveStream(stream);
+        }
         const elapsed = Date.now() - start;
         if (resolved && resolved.url && resolved.isDirect) {
           const urlLower = (resolved.url || "").toLowerCase();
@@ -14779,31 +14873,46 @@ var __provider = (() => {
   }
   function extractMovie(tmdbId, titles, subType) {
     return __async(this, null, function* () {
-      const match = yield trySearch(titles, null);
-      if (!match) {
+      const candidates = yield collectCandidates(titles, null);
+      if (candidates.length === 0) {
         console.warn(`[FrenchManga] Movie not found for TMDB ${tmdbId}`);
         return [];
       }
-      console.log(`[FrenchManga] Movie match: ${match.title} -> ${match.url}`);
-      try {
-        let newsid = match.newsid;
-        if (!newsid) {
-          const pageHtml = yield fetchText(match.url, { timeout: TIMEOUTS.PAGE });
-          const config = parseSerieConfig(pageHtml);
-          if (!config || !config.newsId) {
-            console.warn(`[FrenchManga] No config found on page ${match.url}`);
-            return [];
+      const attempts = [];
+      for (const cand of candidates) {
+        if (attempts.length >= MAX_MATCH_TRIES) break;
+        if (!passesTitleGuard(cand.title, titles)) continue;
+        attempts.push(cand);
+      }
+      if (attempts.length === 0) {
+        console.warn(`[FrenchManga] Movie candidates all rejected by title guard for TMDB ${tmdbId}`);
+        return [];
+      }
+      for (const att of attempts) {
+        console.log(`[FrenchManga] Movie match: ${att.title} -> ${att.url}`);
+        try {
+          let newsid = att.newsid;
+          let pageTitle = att.title;
+          if (!newsid) {
+            const pageHtml = yield fetchText(att.url, { timeout: TIMEOUTS.PAGE });
+            const config = parseSerieConfig(pageHtml);
+            if (!config || !config.newsId) {
+              console.warn(`[FrenchManga] No config found on page ${att.url}`);
+              continue;
+            }
+            newsid = config.newsId;
+            if (config.title) pageTitle = config.title;
           }
-          newsid = config.newsId;
+          if (pageTitle !== att.title && !passesTitleGuard(pageTitle, titles)) continue;
+          const apiData = yield fetchEpisodeApi(newsid);
+          if (!apiData || !apiData.versions) {
+            console.warn(`[FrenchManga] No episode data for newsid ${newsid}`);
+            continue;
+          }
+          return extractStreamsFromApi(apiData, "FrenchManga", subType);
+        } catch (e) {
+          console.warn(`[FrenchManga] Movie extraction failed: ${e.message}`);
         }
-        const apiData = yield fetchEpisodeApi(newsid);
-        if (!apiData || !apiData.versions) {
-          console.warn(`[FrenchManga] No episode data for newsid ${newsid}`);
-          return [];
-        }
-        return extractStreamsFromApi(apiData, "FrenchManga", subType);
-      } catch (e) {
-        console.warn(`[FrenchManga] Movie extraction failed: ${e.message}`);
       }
       return [];
     });
@@ -14813,15 +14922,26 @@ var __provider = (() => {
       const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
       const targetSeasonNum = parseInt(effectiveSeason) || 1;
       const targetEpisodeNums = yield resolveTargetEpisodes(tmdbId, mediaType, season, episode);
-      let match = yield trySearch(titles, targetSeasonNum);
-      if (!match) {
+      const candidates = yield collectCandidates(titles, targetSeasonNum);
+      if (candidates.length === 0) {
         console.warn(`[FrenchManga] Series not found for TMDB ${tmdbId}`);
         return [];
       }
-      const needsSeasonRetry = targetSeasonNum >= 1 && (match.season == null || // season inconnue (ex: "Film - Red")
-      match.season !== targetSeasonNum);
-      if (needsSeasonRetry) {
-        console.log(`[FrenchManga] Season check: match.season=${match.season}, target=${targetSeasonNum}, searching specific...`);
+      const exactSeason = [];
+      const unknownSeason = [];
+      let sawWrongSeason = false;
+      for (const cand of candidates) {
+        if (!passesTitleGuard(cand.title, titles)) continue;
+        if (targetSeasonNum >= 1 && cand.season != null && cand.season !== targetSeasonNum) {
+          sawWrongSeason = true;
+          console.log(`[FrenchManga] Skipping "${cand.title}" (S${cand.season} \u2260 S${targetSeasonNum})`);
+          continue;
+        }
+        if (cand.season === targetSeasonNum) exactSeason.push(cand);
+        else unknownSeason.push(cand);
+      }
+      let match = exactSeason.length > 0 ? exactSeason[0] : unknownSeason.length > 0 ? unknownSeason[0] : null;
+      if (!match || targetSeasonNum >= 1 && match.season == null) {
         const baseTitle = stripSeasonSuffix(titles[0]);
         const seasonQuery = `${baseTitle} Saison ${targetSeasonNum}`;
         console.log(`[FrenchManga] Season search: "${seasonQuery}"`);
@@ -14831,7 +14951,7 @@ var __provider = (() => {
             const results = parseSearchResults(html);
             if (results.length > 0) {
               const seasonMatch = bestMatch(results, titles[0], targetSeasonNum);
-              if (seasonMatch && seasonMatch.season === targetSeasonNum) {
+              if (seasonMatch && seasonMatch.season === targetSeasonNum && passesTitleGuard(seasonMatch.title, titles)) {
                 console.log(`[FrenchManga] \u2705 Season search matched: "${seasonMatch.title}" (S${seasonMatch.season})`);
                 match = seasonMatch;
               }
@@ -14840,64 +14960,86 @@ var __provider = (() => {
         } catch (e) {
           console.warn(`[FrenchManga] Season search failed for "${seasonQuery}": ${e.message}`);
         }
-        if (match.season !== targetSeasonNum) {
-          console.log(`[FrenchManga] \u26A0 Season search didn't find S${targetSeasonNum}, using original match`);
-        }
       }
-      console.log(`[FrenchManga] Series match: ${match.title} -> ${match.url} (newsid: ${match.newsid})`);
-      try {
-        let newsid = match.newsid;
-        if (!newsid) {
-          const pageHtml = yield fetchText(match.url, { timeout: TIMEOUTS.PAGE });
-          const config = parseSerieConfig(pageHtml);
-          if (!config || !config.newsId) {
-            console.warn(`[FrenchManga] No config found on page ${match.url}`);
-            return [];
-          }
-          newsid = config.newsId;
+      if (!match) {
+        if (sawWrongSeason) {
+          console.warn(`[FrenchManga] \u2717 Season mismatch after retry (target S${targetSeasonNum}) \u2014 abandoning`);
+        } else {
+          console.warn(`[FrenchManga] \u2717 All candidates rejected by title guard (target S${targetSeasonNum}) \u2014 abandoning`);
         }
-        const apiData = yield fetchEpisodeApi(newsid);
-        if (!apiData || !apiData.versions) {
-          console.warn(`[FrenchManga] No episode data for newsid ${newsid}`);
-          return [];
-        }
-        const streams = [];
-        const seenUrls = /* @__PURE__ */ new Set();
-        const targetEp = targetEpisodeNums[0];
-        const MAX_SERVERS_PER_LANG = 3;
-        for (const [lang, episodes] of Object.entries(apiData.versions)) {
-          let ep = episodes.find((e) => e.num === targetEp);
-          if (!ep) {
-            ep = episodes[targetEp - 1];
-            if (ep) console.log(`[FrenchManga] Fallback: using episode ${ep.num} for target ${targetEp} (${lang})`);
-          }
-          if (!ep) continue;
-          const epInfo = apiData.info && apiData.info[String(ep.num)];
-          if (epInfo && epInfo.title) {
-            console.log(`[FrenchManga] Episode ${ep.num}: "${epInfo.title}" (${lang})`);
-          }
-          console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`);
-          let resolvedCount = 0;
-          for (const server of ep.servers) {
-            if (resolvedCount >= MAX_SERVERS_PER_LANG) break;
-            if (seenUrls.has(server.url)) {
-              console.log(`[FrenchManga] Dedup: skipping ${lang} server ${server.name} (same URL as other lang)`);
+        return [];
+      }
+      if (match.season == null) {
+        console.log(`[FrenchManga] \u26A0 Season unknown, using match "${match.title}" for S${targetSeasonNum}`);
+      }
+      const attempts = [match];
+      for (const cand of [...exactSeason, ...unknownSeason]) {
+        if (attempts.length >= MAX_MATCH_TRIES) break;
+        if (cand === match) continue;
+        attempts.push(cand);
+      }
+      for (const att of attempts) {
+        console.log(`[FrenchManga] Series match: ${att.title} -> ${att.url} (newsid: ${att.newsid})`);
+        try {
+          let newsid = att.newsid;
+          let pageTitle = att.title;
+          if (!newsid) {
+            const pageHtml = yield fetchText(att.url, { timeout: TIMEOUTS.PAGE });
+            const config = parseSerieConfig(pageHtml);
+            if (!config || !config.newsId) {
+              console.warn(`[FrenchManga] No config found on page ${att.url}`);
               continue;
             }
-            seenUrls.add(server.url);
-            const stream = toStream(server.url, lang, "FrenchManga", SITE.BASE_URL, { quality: "HD" });
-            if (subType) stream.subType = subType;
-            const resolved = yield resolveWithTimeout(stream);
-            if (resolved && resolved.url && resolved.isDirect) {
-              streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "french-manga" }));
-              resolvedCount++;
+            newsid = config.newsId;
+            if (config.title) pageTitle = config.title;
+          }
+          if (pageTitle !== att.title && !passesTitleGuard(pageTitle, titles)) continue;
+          const apiData = yield fetchEpisodeApi(newsid);
+          if (!apiData || !apiData.versions) {
+            console.warn(`[FrenchManga] No episode data for newsid ${newsid}`);
+            continue;
+          }
+          const streams = [];
+          const seenLangUrls = /* @__PURE__ */ new Set();
+          const resolveCache = /* @__PURE__ */ new Map();
+          const targetEp = targetEpisodeNums[0];
+          const targetAbs = targetEpisodeNums.length > 1 ? targetEpisodeNums[1] : null;
+          const MAX_SERVERS_PER_LANG = 3;
+          for (const [lang, episodes] of Object.entries(apiData.versions)) {
+            let ep = episodes.find((e) => e.num === targetEp);
+            if (!ep && targetAbs != null && targetAbs !== targetEp) {
+              ep = episodes.find((e) => e.num === targetAbs);
+              if (ep) console.log(`[FrenchManga] Absolute match: episode ${ep.num} for S${targetSeasonNum}E${targetEp} (${lang})`);
+            }
+            if (!ep) {
+              console.log(`[FrenchManga] No episode ${targetEp}${targetAbs != null && targetAbs !== targetEp ? ` (abs ${targetAbs})` : ""} in ${lang} (${episodes.length} ep(s)) \u2014 skipping lang`);
+              continue;
+            }
+            const epInfo = apiData.info && apiData.info[String(ep.num)];
+            if (epInfo && epInfo.title) {
+              console.log(`[FrenchManga] Episode ${ep.num}: "${epInfo.title}" (${lang})`);
+            }
+            console.log(`[FrenchManga] Found episode ${ep.num} (${lang}) with ${ep.servers.length} server(s)`);
+            let resolvedCount = 0;
+            for (const server of ep.servers) {
+              if (resolvedCount >= MAX_SERVERS_PER_LANG) break;
+              const langKey = `${server.url}|${lang}`;
+              if (seenLangUrls.has(langKey)) continue;
+              seenLangUrls.add(langKey);
+              const stream = toStream(server.url, lang, "FrenchManga", SITE.BASE_URL, { quality: "HD" });
+              if (subType) stream.subType = subType;
+              const resolved = yield resolveCached(resolveCache, stream);
+              if (resolved && resolved.url && resolved.isDirect) {
+                streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "french-manga" }));
+                resolvedCount++;
+              }
             }
           }
+          console.log(`[FrenchManga] Series: ${streams.length} streams for episode ${targetEp}`);
+          return streams;
+        } catch (e) {
+          console.warn(`[FrenchManga] Series extraction failed: ${e.message}`);
         }
-        console.log(`[FrenchManga] Series: ${streams.length} streams for episode ${targetEp}`);
-        return streams;
-      } catch (e) {
-        console.warn(`[FrenchManga] Series extraction failed: ${e.message}`);
       }
       return [];
     });
@@ -14905,7 +15047,8 @@ var __provider = (() => {
   function extractStreamsFromApi(apiData, name, subType) {
     return __async(this, null, function* () {
       const streams = [];
-      const seenUrls = /* @__PURE__ */ new Set();
+      const seenLangUrls = /* @__PURE__ */ new Set();
+      const resolveCache = /* @__PURE__ */ new Map();
       const MAX_SERVERS_PER_LANG = 3;
       for (const [lang, episodes] of Object.entries(apiData.versions)) {
         const firstEp = episodes[0];
@@ -14914,21 +15057,14 @@ var __provider = (() => {
         let resolvedCount = 0;
         for (const server of firstEp.servers) {
           if (resolvedCount >= MAX_SERVERS_PER_LANG) break;
-          if (seenUrls.has(server.url)) {
-            console.log(`[FrenchManga] Dedup: skipping ${lang} server ${server.name} (same URL as other lang)`);
-            continue;
-          }
-          seenUrls.add(server.url);
+          const langKey = `${server.url}|${lang}`;
+          if (seenLangUrls.has(langKey)) continue;
+          seenLangUrls.add(langKey);
           const stream = toStream(server.url, lang, name, SITE.BASE_URL, { quality: "HD" });
           if (subType) stream.subType = subType;
-          const resolved = yield resolveWithTimeout(stream);
+          const resolved = yield resolveCached(resolveCache, stream);
           if (resolved && resolved.url && resolved.isDirect) {
             streams.push(__spreadProps(__spreadValues({}, resolved), { provider: "french-manga" }));
-            resolvedCount++;
-          } else if (resolved && resolved.url && !resolved.isDirect) {
-            stream.provider = "french-manga";
-            stream.isDirect = false;
-            streams.push(stream);
             resolvedCount++;
           }
         }
@@ -14937,7 +15073,7 @@ var __provider = (() => {
       return streams;
     });
   }
-  var import_cheerio_without_node_native2, CACHE;
+  var import_cheerio_without_node_native2, CACHE, TITLE_GUARD_THRESHOLD, MAX_MATCH_TRIES, DEAD_HOSTS, LOCAL_PACKED_HOSTS;
   var init_extractor = __esm({
     "src/french-manga/extractor.js"() {
       import_cheerio_without_node_native2 = __toESM(require_cheerio_without_node_native());
@@ -14947,6 +15083,10 @@ var __provider = (() => {
       init_dle_extractor();
       init_config();
       CACHE = /* @__PURE__ */ new Map();
+      TITLE_GUARD_THRESHOLD = 80;
+      MAX_MATCH_TRIES = 3;
+      DEAD_HOSTS = ["vidhsareup."];
+      LOCAL_PACKED_HOSTS = ["lulust."];
     }
   });
 

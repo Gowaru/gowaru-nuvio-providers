@@ -1,6 +1,6 @@
 /**
  * frenchstream - Built from src/frenchstream/
- * Generated: 2026-10-10T10:54:58.802698766Z
+ * Generated: 2026-10-10T13:19:15.025354892Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12681,8 +12681,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
-        const tldVariants = ["to", "net", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.biz/";
+        const tldVariants = ["biz", "net", "ru", "is", "to"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -12695,12 +12695,20 @@ var __provider = (() => {
             const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
+            const serveRefOf = (r, fallbackRef) => {
+              var _a2;
+              const finalDomain = r && r.url && ((_a2 = r.url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a2[1]) || "";
+              return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+            };
             let html = yield res.text();
             const hasJsRedirect = /window\.location\.replace/.test(html);
             if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+            if (match) {
+              const serveRef = serveRefOf(res, ref);
+              return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+            }
             const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) || html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
             if (jsRedirect && jsRedirect[1] !== fetchUrl) {
               res = yield safeFetch(jsRedirect[1], { headers: { "Referer": ref, "Origin": ref } });
@@ -12708,7 +12716,10 @@ var __provider = (() => {
                 html = yield res.text();
                 if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
                 const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match2) {
+                  const serveRef = serveRefOf(res, ref);
+                  return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
               }
             }
           } catch (e) {
@@ -13287,6 +13298,72 @@ var __provider = (() => {
     }
     return correctedUrl;
   }
+  function getResponseHeader(headers, name) {
+    try {
+      if (!headers) return "";
+      if (typeof headers.get === "function") {
+        return headers.get(name) || headers.get(String(name).toLowerCase()) || "";
+      }
+      const lower = String(name).toLowerCase();
+      const keys = Object.keys(headers);
+      for (let i = 0; i < keys.length; i++) {
+        if (keys[i].toLowerCase() === lower) return String(headers[keys[i]] || "");
+      }
+    } catch (e) {
+    }
+    return "";
+  }
+  function isProbeHlsUrl(url) {
+    const u = String(url || "").toLowerCase();
+    return u.includes(".m3u8") || u.includes("/hls2/") || u.includes("/hls/");
+  }
+  function verifyPlayableUrl(_0) {
+    return __async(this, arguments, function* (url, headers = {}, opts = {}) {
+      try {
+        if (!url || typeof url !== "string" || !/^https?:\/\//i.test(url)) return "unknown";
+        const timeoutMs = opts && opts.timeoutMs > 0 ? opts.timeoutMs : 6e3;
+        const reqHeaders = __spreadValues({}, headers || {});
+        if (isProbeHlsUrl(url)) {
+          let res2 = null;
+          try {
+            res2 = yield safeFetch(url, { headers: reqHeaders, timeout: timeoutMs });
+          } catch (e) {
+            return "unknown";
+          }
+          if (!res2) return "unknown";
+          const status2 = res2.status;
+          if (status2 === 403 || status2 === 404 || status2 === 410) return "dead";
+          if (!res2.ok || status2 < 200 || status2 >= 300) return "unknown";
+          let body = "";
+          try {
+            body = yield res2.text();
+          } catch (e) {
+            return "unknown";
+          }
+          if (typeof body === "string" && body.includes("#EXTM3U")) return "ok";
+          const ctype2 = getResponseHeader(res2.headers, "content-type");
+          if (/m3u8|mpegurl/i.test(ctype2)) return "ok";
+          if (typeof body === "string" && /^\s*<(!doctype|html|head|body)/i.test(body)) return "dead";
+          return "unknown";
+        }
+        let res = null;
+        try {
+          res = yield safeFetch(url, { method: "HEAD", headers: reqHeaders, timeout: timeoutMs });
+        } catch (e) {
+          return "unknown";
+        }
+        if (!res) return "unknown";
+        const status = res.status;
+        if (status === 403 || status === 404 || status === 410) return "dead";
+        if (!res.ok || status < 200 || status >= 300) return "unknown";
+        const ctype = getResponseHeader(res.headers, "content-type");
+        if (/^video\//i.test(ctype)) return "ok";
+        return "unknown";
+      } catch (e) {
+        return "unknown";
+      }
+    });
+  }
   function findBestVideoIframe(html, pageUrl) {
     var _a;
     const iframeRegex = /<iframe\s+[^>]*src=["']([^"']+)["']/gi;
@@ -13341,8 +13418,10 @@ var __provider = (() => {
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
         else if (urlLower.includes("fsvid.") || urlLower.includes("vidzy.")) result = yield resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
-        else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-        // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+        else if (urlLower.includes("luluvid.") || urlLower.includes("lulust.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+        // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+        // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+        // refuse ; les providers filtrent ces URLs en aval)
         urlLower.includes("livavid.") || urlLower.includes("lulavid.") || urlLower.includes("livastream.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("lecteurvideo.")) result = yield resolveLecteurVideo(originalUrl);
@@ -13462,7 +13541,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "f20986e9" : "dev";
+      BUILD_HASH = true ? "e78b9d2c" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -13557,6 +13636,10 @@ var __provider = (() => {
       NEVER_CORRECT_DOMAINS = [
         "voembed.net",
         // famille VidMoly (m3u8 en clair) — PAS voe
+        "vidmoly.biz",
+        // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+        "vidmoly.net",
+        // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
         "gn1r5n.org",
         // embed "myTV" de VoirAnime
         "streamhide.to"
@@ -14761,8 +14844,8 @@ var __provider = (() => {
     }
     return list;
   }
-  function resolveCandidates(candidates) {
-    return __async(this, null, function* () {
+  function resolveCandidates(_0) {
+    return __async(this, arguments, function* (candidates, probeCtx = {}) {
       const prefs = getPrefs();
       candidates = applyPrefsToCandidates(candidates, prefs);
       const limited = candidates.slice(0, MAX_CANDIDATES);
@@ -14778,7 +14861,60 @@ var __provider = (() => {
         } catch (e) {
         }
       }
-      return dedupeByUrl(direct);
+      const deduped = dedupeByUrl(direct);
+      return filterPlayableStreams(deduped, probeCtx);
+    });
+  }
+  function filterPlayableStreams(_0) {
+    return __async(this, arguments, function* (streams, probeCtx = {}) {
+      if (!Array.isArray(streams) || streams.length === 0) return streams || [];
+      const startTime = probeCtx.startTime || Date.now();
+      const budgetMs = probeCtx.budgetMs || 45e3;
+      if (isBudgetExhausted(startTime, budgetMs - PROBE_MIN_REMAINING_MS)) {
+        console.log("[Frenchstream] Sonde playback: skip (budget restant < 12s)");
+        return streams;
+      }
+      let ok = 0, dead = 0, unknown = 0;
+      const kept = [];
+      const probeStart = Date.now();
+      try {
+        for (let i = 0; i < streams.length; i += PROBE_CONCURRENCY) {
+          if (Date.now() - probeStart > PROBE_TOTAL_BUDGET_MS || isBudgetExhausted(startTime, budgetMs - 2e3)) {
+            for (let j = i; j < streams.length; j++) {
+              kept.push(streams[j]);
+              unknown++;
+            }
+            break;
+          }
+          const chunk = streams.slice(i, i + PROBE_CONCURRENCY);
+          const results = yield Promise.allSettled(
+            chunk.map((s) => verifyPlayableUrl(s.url, s.headers, { timeoutMs: PROBE_TIMEOUT_MS }))
+          );
+          for (let k = 0; k < chunk.length; k++) {
+            const verdict = results[k].status === "fulfilled" ? results[k].value : "unknown";
+            if (verdict === "dead") {
+              dead++;
+              let host = "?";
+              try {
+                host = new URL(chunk[k].url).hostname;
+              } catch (e) {
+              }
+              console.log("[Frenchstream] Sonde playback: dead " + host);
+            } else if (verdict === "ok") {
+              ok++;
+              kept.push(chunk[k]);
+            } else {
+              unknown++;
+              kept.push(chunk[k]);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[Frenchstream] Sonde playback error: " + (e && e.message));
+        return streams;
+      }
+      console.log("[Frenchstream] Sonde playback: " + ok + " ok / " + dead + " dead / " + unknown + " unknown (kept " + kept.length + "/" + streams.length + ")");
+      return dedupeByUrl(kept);
     });
   }
   function searchByTmdbTag(tmdbId, mediaType) {
@@ -14894,7 +15030,7 @@ var __provider = (() => {
         if (tagged.length > 0) {
           const streams = yield verifyAndExtractMovieStreams(tagged[0].newsId, tmdbId, subType);
           if (streams && streams.length > 0) {
-            const resolved = yield resolveCandidates(streams);
+            const resolved = yield resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
             console.log("[Frenchstream] Movie found via TMDB tag: " + resolved.length + " streams");
             return resolved;
           }
@@ -14914,7 +15050,7 @@ var __provider = (() => {
             if (ranked[0]._score >= MIN_MATCH_SCORE) {
               const streams = yield verifyAndExtractMovieStreams(ranked[0].newsId, tmdbId, subType);
               if (streams && streams.length > 0) {
-                const resolved = yield resolveCandidates(streams);
+                const resolved = yield resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
                 console.log("[Frenchstream] Movie found via DLE search: " + resolved.length + " streams");
                 return resolved;
               }
@@ -14974,7 +15110,7 @@ var __provider = (() => {
       if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
         const streams = yield verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
         if (streams && streams.length > 0) {
-          const resolved = yield resolveCandidates(streams);
+          const resolved = yield resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
           console.log("[Frenchstream] Movie found via category: " + bestMatch.title + " \u2192 " + resolved.length + " streams");
           return resolved;
         }
@@ -15003,7 +15139,7 @@ var __provider = (() => {
       if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
         const streams = yield verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
         if (streams && streams.length > 0) {
-          const resolved = yield resolveCandidates(streams);
+          const resolved = yield resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
           console.log("[Frenchstream] Movie found via category: " + bestMatch.title + " \u2192 " + resolved.length + " streams");
           return resolved;
         }
@@ -15084,7 +15220,7 @@ var __provider = (() => {
               for (const ep of targetEpisodes) {
                 const candidates = collectTvSiteCandidates(epData, ep, subType);
                 if (candidates.length > 0) {
-                  const streams = yield resolveCandidates(candidates);
+                  const streams = yield resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                   console.log("[Frenchstream] Direct eps " + firstSeasonNewsId + ": " + candidates.length + " candidates, " + streams.length + " streams (ep=" + ep + ")");
                   return streams;
                 }
@@ -15116,7 +15252,7 @@ var __provider = (() => {
               for (const ep of targetEpisodes) {
                 const candidates = collectTvSiteCandidates(epData, ep, subType);
                 if (candidates.length > 0) {
-                  const streams = yield resolveCandidates(candidates);
+                  const streams = yield resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                   if (streams.length > 0) {
                     console.log("[Frenchstream] Site eps " + target.id + ": " + candidates.length + " candidates, " + streams.length + " streams (ep=" + ep + ")");
                     return streams;
@@ -15132,7 +15268,7 @@ var __provider = (() => {
                   for (const ep of targetEpisodes) {
                     const candidates = collectTvSiteCandidates(lastData, ep, subType);
                     if (candidates.length > 0) {
-                      const streams = yield resolveCandidates(candidates);
+                      const streams = yield resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                       if (streams.length > 0) {
                         console.log("[Frenchstream] Last-season fallback " + last.id + ": " + streams.length + " streams (ep=" + ep + ")");
                         return streams;
@@ -15169,7 +15305,7 @@ var __provider = (() => {
                   for (const ep of targetEpisodes) {
                     const candidates = collectTvSiteCandidates(epData, ep, subType);
                     if (candidates.length > 0) {
-                      const streams = yield resolveCandidates(candidates);
+                      const streams = yield resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                       console.log("[Frenchstream] DLE fallback eps " + modalMatch + ": " + candidates.length + " candidates, " + streams.length + " streams (ep=" + ep + ")");
                       return streams;
                     }
@@ -15188,7 +15324,7 @@ var __provider = (() => {
       return [];
     });
   }
-  var import_cheerio_without_node_native2, withCache, MIN_MATCH_SCORE, MOVIE_MATCH_SCORE, MAX_SEARCH_QUERIES, MAX_CANDIDATES, TARGET_DIRECT, RESOLVE_TIMEOUT_MS, DEAD_HOSTS, CACHE_TTL_MS, CATEGORY_FETCH_TIMEOUT, TMDB_API_KEY3, TMDB_API_BASE3, GENRE_TO_CATEGORY, ALL_CATEGORIES, ANIME_KEYWORDS;
+  var import_cheerio_without_node_native2, withCache, MIN_MATCH_SCORE, MOVIE_MATCH_SCORE, MAX_SEARCH_QUERIES, MAX_CANDIDATES, TARGET_DIRECT, RESOLVE_TIMEOUT_MS, PROBE_TIMEOUT_MS, PROBE_CONCURRENCY, PROBE_TOTAL_BUDGET_MS, PROBE_MIN_REMAINING_MS, DEAD_HOSTS, CACHE_TTL_MS, CATEGORY_FETCH_TIMEOUT, TMDB_API_KEY3, TMDB_API_BASE3, GENRE_TO_CATEGORY, ALL_CATEGORIES, ANIME_KEYWORDS;
   var init_extractor = __esm({
     "src/frenchstream/extractor.js"() {
       init_dle_extractor();
@@ -15204,6 +15340,10 @@ var __provider = (() => {
       MAX_CANDIDATES = 6;
       TARGET_DIRECT = 4;
       RESOLVE_TIMEOUT_MS = 22e3;
+      PROBE_TIMEOUT_MS = 6e3;
+      PROBE_CONCURRENCY = 3;
+      PROBE_TOTAL_BUDGET_MS = 1e4;
+      PROBE_MIN_REMAINING_MS = 12e3;
       DEAD_HOSTS = ["kakaflix", "dood", "streamtape"];
       CACHE_TTL_MS = 3e5;
       CATEGORY_FETCH_TIMEOUT = 8e3;

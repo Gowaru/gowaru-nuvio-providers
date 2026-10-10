@@ -1,6 +1,6 @@
 import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
-import { safeFetch, resolveStream, isBudgetExhausted, isAborted, getScraperSettings } from '../utils/resolvers.js';
+import { safeFetch, resolveStream, verifyPlayableUrl, isBudgetExhausted, isAborted, getScraperSettings } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { fetchText, fetchJson, fetchPost, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
@@ -16,6 +16,15 @@ const TARGET_DIRECT = 4;     // VF + VOSTFR même si les 1ers hosts échouent
 // variante). 15s ne laissait la place qu'à 2 résolutions → VOSTFR jamais atteinte
 // (les candidats VF passent avant). 22s ≈ 4 résolutions, reste < 45s de budget plugin.
 const RESOLVE_TIMEOUT_MS = 22000;
+// Sonde de jouabilité (verifyPlayableUrl) : certains CDN (u14.vidzy.cc,
+// r1.fsvid.lol) servent des masters HLS bien formés mais répondent 403 au
+// playback depuis certains réseaux → le lecteur reçoit une page 403. On
+// sonde chaque direct et on rejette uniquement les verdicts 'dead'
+// (fail-open : 'unknown' conservé pour ne pas réduire la disponibilité).
+const PROBE_TIMEOUT_MS = 6000;       // timeout par sonde (via safeFetch)
+const PROBE_CONCURRENCY = 3;         // chunks de 3 en Promise.allSettled
+const PROBE_TOTAL_BUDGET_MS = 10000; // coût total plafonné à ~10s
+const PROBE_MIN_REMAINING_MS = 12000; // skipper la sonde si budget restant < 12s
 // Hosts connus pour timeout systématique (vérifié en live 2026-09) → jamais
 // en tête de file. 'kakaflix' = wrapper actuel de dood/voe/netu sur
 // french-stream.one (timeout 18 s vérifié) — matcher l'URL couvre toutes les
@@ -448,7 +457,7 @@ function applyPrefsToCandidates(candidates, prefs) {
     return list;
 }
 
-async function resolveCandidates(candidates) {
+async function resolveCandidates(candidates, probeCtx = {}) {
     // Préférences utilisateur (langue / hosts exclus) — fallback sûr si absentes
     const prefs = getPrefs();
     candidates = applyPrefsToCandidates(candidates, prefs);
@@ -476,7 +485,70 @@ async function resolveCandidates(candidates) {
         } catch (e) { /* skip failed candidate */ }
     }
 
-    return dedupeByUrl(direct);
+    const deduped = dedupeByUrl(direct);
+    // Sonde de jouabilité : rejette les directs servis en 403 (vidzy/fsvid
+    // selon le réseau), conserve ok + unknown (fail-open). probeCtx =
+    // { startTime, budgetMs } de l'extraction en cours (skip si < 12s restants).
+    return filterPlayableStreams(deduped, probeCtx);
+}
+
+/**
+ * Passe les streams directs à la sonde verifyPlayableUrl (chunks de 3 en
+ * Promise.allSettled) et rejette uniquement les verdicts 'dead'. Fail-open :
+ * 'unknown' (timeout, HEAD non supporté, erreur réseau) est conservé.
+ * Coût total plafonné (~10s max) + skip si budget restant < 12s.
+ * @param {Array} streams - streams avec isDirect exigé
+ * @param {object} [probeCtx] - { startTime, budgetMs } de l'extraction
+ * @returns {Promise<Array>} streams jouables ou présumés jouables
+ */
+async function filterPlayableStreams(streams, probeCtx = {}) {
+    if (!Array.isArray(streams) || streams.length === 0) return streams || [];
+    const startTime = probeCtx.startTime || Date.now();
+    const budgetMs = probeCtx.budgetMs || 45000;
+    if (isBudgetExhausted(startTime, budgetMs - PROBE_MIN_REMAINING_MS)) {
+        console.log('[Frenchstream] Sonde playback: skip (budget restant < 12s)');
+        return streams;
+    }
+    let ok = 0, dead = 0, unknown = 0;
+    const kept = [];
+    const probeStart = Date.now();
+    try {
+        for (let i = 0; i < streams.length; i += PROBE_CONCURRENCY) {
+            // Plafond ~10s + garde budget global : le reste est conservé tel
+            // quel (fail-open) au lieu d'être sondé.
+            if (Date.now() - probeStart > PROBE_TOTAL_BUDGET_MS ||
+                isBudgetExhausted(startTime, budgetMs - 2000)) {
+                for (let j = i; j < streams.length; j++) { kept.push(streams[j]); unknown++; }
+                break;
+            }
+            const chunk = streams.slice(i, i + PROBE_CONCURRENCY);
+            const results = await Promise.allSettled(
+                chunk.map(s => verifyPlayableUrl(s.url, s.headers, { timeoutMs: PROBE_TIMEOUT_MS }))
+            );
+            for (let k = 0; k < chunk.length; k++) {
+                const verdict = results[k].status === 'fulfilled' ? results[k].value : 'unknown';
+                if (verdict === 'dead') {
+                    dead++;
+                    let host = '?';
+                    try { host = new URL(chunk[k].url).hostname; } catch (e) {}
+                    console.log('[Frenchstream] Sonde playback: dead ' + host);
+                } else if (verdict === 'ok') {
+                    ok++;
+                    kept.push(chunk[k]);
+                } else {
+                    unknown++;
+                    kept.push(chunk[k]);
+                }
+            }
+        }
+    } catch (e) {
+        // La sonde ne doit jamais faire perdre de streams : en cas d'erreur
+        // inattendue, tout conserver (fail-open).
+        console.warn('[Frenchstream] Sonde playback error: ' + (e && e.message));
+        return streams;
+    }
+    console.log('[Frenchstream] Sonde playback: ' + ok + ' ok / ' + dead + ' dead / ' + unknown + ' unknown (kept ' + kept.length + '/' + streams.length + ')');
+    return dedupeByUrl(kept);
 }
 
 /**
@@ -609,7 +681,7 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
         if (tagged.length > 0) {
             const streams = await verifyAndExtractMovieStreams(tagged[0].newsId, tmdbId, subType);
             if (streams && streams.length > 0) {
-                const resolved = await resolveCandidates(streams);
+                const resolved = await resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
                 console.log('[Frenchstream] Movie found via TMDB tag: ' + resolved.length + ' streams');
                 return resolved;
             }
@@ -633,7 +705,7 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
                 if (ranked[0]._score >= MIN_MATCH_SCORE) {
                     const streams = await verifyAndExtractMovieStreams(ranked[0].newsId, tmdbId, subType);
                     if (streams && streams.length > 0) {
-                        const resolved = await resolveCandidates(streams);
+                        const resolved = await resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
                         console.log('[Frenchstream] Movie found via DLE search: ' + resolved.length + ' streams');
                         return resolved;
                     }
@@ -705,7 +777,7 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
     if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
         const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
         if (streams && streams.length > 0) {
-            const resolved = await resolveCandidates(streams);
+            const resolved = await resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
             console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
             return resolved;
         }
@@ -739,7 +811,7 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
     if (bestMatch && bestScore >= MOVIE_MATCH_SCORE) {
         const streams = await verifyAndExtractMovieStreams(bestMatch.newsId, tmdbId, subType);
         if (streams && streams.length > 0) {
-            const resolved = await resolveCandidates(streams);
+            const resolved = await resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
             console.log('[Frenchstream] Movie found via category: ' + bestMatch.title + ' → ' + resolved.length + ' streams');
             return resolved;
         }
@@ -841,7 +913,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                     for (const ep of targetEpisodes) {
                         const candidates = collectTvSiteCandidates(epData, ep, subType);
                         if (candidates.length > 0) {
-                            const streams = await resolveCandidates(candidates);
+                            const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                             console.log('[Frenchstream] Direct eps ' + firstSeasonNewsId + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
                             return streams;
                         }
@@ -881,7 +953,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                     for (const ep of targetEpisodes) {
                         const candidates = collectTvSiteCandidates(epData, ep, subType);
                         if (candidates.length > 0) {
-                            const streams = await resolveCandidates(candidates);
+                            const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                             if (streams.length > 0) {
                                 console.log('[Frenchstream] Site eps ' + target.id + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
                                 return streams;
@@ -901,7 +973,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                             for (const ep of targetEpisodes) {
                                 const candidates = collectTvSiteCandidates(lastData, ep, subType);
                                 if (candidates.length > 0) {
-                                    const streams = await resolveCandidates(candidates);
+                                    const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                                     if (streams.length > 0) {
                                         console.log('[Frenchstream] Last-season fallback ' + last.id + ': ' + streams.length + ' streams (ep=' + ep + ')');
                                         return streams;
@@ -937,7 +1009,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                             for (const ep of targetEpisodes) {
                                 const candidates = collectTvSiteCandidates(epData, ep, subType);
                                 if (candidates.length > 0) {
-                                    const streams = await resolveCandidates(candidates);
+                                    const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                                     console.log('[Frenchstream] DLE fallback eps ' + modalMatch + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
                                     return streams;
                                 }

@@ -1,6 +1,6 @@
 /**
  * animevost-fr - Built from src/animevost-fr/
- * Generated: 2026-10-10T10:54:58.137697994Z
+ * Generated: 2026-10-10T13:19:14.17335412Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -12277,8 +12277,8 @@ var __provider = (() => {
       var _a, _b;
       try {
         const originalDomain = ((_a = url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a[1]) || "";
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.to/";
-        const tldVariants = ["to", "net", "ru", "is"];
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : "https://vidmoly.biz/";
+        const tldVariants = ["biz", "net", "ru", "is", "to"];
         const domains = [url];
         for (const tld of tldVariants) {
           const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -12291,12 +12291,20 @@ var __provider = (() => {
             const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
             let res = yield safeFetch(fetchUrl, { headers: { "Referer": ref, "Origin": ref } });
             if (!res || !res.ok) continue;
+            const serveRefOf = (r, fallbackRef) => {
+              var _a2;
+              const finalDomain = r && r.url && ((_a2 = r.url.match(/^https?:\/\/([^/]+)/)) == null ? void 0 : _a2[1]) || "";
+              return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+            };
             let html = yield res.text();
             const hasJsRedirect = /window\.location\.replace/.test(html);
             if (html.length < 500 && !hasJsRedirect || html.includes("finisheddaysflamboyant")) continue;
             if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
             const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-            if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+            if (match) {
+              const serveRef = serveRefOf(res, ref);
+              return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+            }
             const jsRedirect = html.match(/window\.location\.replace\(['"]([^'"]+)['"]\)/) || html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
             if (jsRedirect && jsRedirect[1] !== fetchUrl) {
               res = yield safeFetch(jsRedirect[1], { headers: { "Referer": ref, "Origin": ref } });
@@ -12304,7 +12312,10 @@ var __provider = (() => {
                 html = yield res.text();
                 if (html.includes("p,a,c,k,e,d") || html.includes("eval(function")) html = unpack(html);
                 const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) || html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) || html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match2) {
+                  const serveRef = serveRefOf(res, ref);
+                  return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
               }
             }
           } catch (e) {
@@ -12816,6 +12827,10 @@ var __provider = (() => {
   var NEVER_CORRECT_DOMAINS = [
     "voembed.net",
     // famille VidMoly (m3u8 en clair) — PAS voe
+    "vidmoly.biz",
+    // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+    "vidmoly.net",
+    // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
     "gn1r5n.org",
     // embed "myTV" de VoirAnime
     "streamhide.to"
@@ -13013,8 +13028,10 @@ var __provider = (() => {
         else if (urlLower.includes("myvi.") || urlLower.includes("mytv.")) result = yield resolveMyTV(originalUrl);
         else if (urlLower.includes("fsvid.") || urlLower.includes("vidzy.")) result = yield resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes("vidstream.pro") || urlLower.includes("vidcdn.") || urlLower.includes("kakaflix.") || urlLower.includes("vidhsareup.")) result = yield resolvePackedPlayer(originalUrl);
-        else if (urlLower.includes("luluvid.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-        // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+        else if (urlLower.includes("luluvid.") || urlLower.includes("lulust.") || urlLower.includes("lulustream.") || urlLower.includes("luluvdo.") || // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+        // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+        // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+        // refuse ; les providers filtrent ces URLs en aval)
         urlLower.includes("livavid.") || urlLower.includes("lulavid.") || urlLower.includes("livastream.") || urlLower.includes("wishonly.") || urlLower.includes("veev.")) result = yield resolvePackedPlayer(originalUrl);
         else if (urlLower.includes("lulu.")) result = yield resolveLuluvid(originalUrl);
         else if (urlLower.includes("lecteurvideo.")) result = yield resolveLecteurVideo(originalUrl);
@@ -13605,7 +13622,10 @@ var __provider = (() => {
   ]);
 
   // src/animevost-fr/extractor.js
-  var MAX_SEARCH_TITLES = 4;
+  var MAX_SEARCH_TITLES = 6;
+  function stripNumericSuffix(slug) {
+    return String(slug || "").replace(/-\d{4,}$/, "");
+  }
   function scoreMatch(candidateTitle, wantedTitles, candidateSlug) {
     const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const cn = norm(candidateTitle);
@@ -13617,6 +13637,10 @@ var __provider = (() => {
       const cnTokens = cn.split(/[^a-z0-9]+/).filter(Boolean);
       const wnTokens = wn.split(/[^a-z0-9]+/).filter(Boolean);
       if (candidateSlug && candidateSlug === toSlug(t)) return 95;
+      if (candidateSlug) {
+        const base = stripNumericSuffix(candidateSlug);
+        if (base && base !== candidateSlug && base === toSlug(t)) return 80;
+      }
       if (cnTokens[0] === wnTokens[0]) {
         const extras = cnTokens.filter((w) => !wnTokens.includes(w)).length;
         best = Math.max(best, 80 - Math.min(extras * 10, 30));
@@ -13628,35 +13652,45 @@ var __provider = (() => {
   }
   function searchApi(titles, signal) {
     return __async(this, null, function* () {
-      for (const t of titles.slice(0, 2)) {
-        if (isAborted(signal)) return null;
+      let best = null;
+      for (const t of titles.slice(0, 6)) {
+        if (isAborted(signal)) return { hit: null, best };
         const data = yield fetchJson(`/api/anime/search?q=${encodeURIComponent(t)}`, { signal });
         const results = Array.isArray(data && data.results) ? data.results : [];
-        let bestResult = null;
-        let bestScore = 0;
         for (const r of results) {
           const slug = r && r.slug;
           if (!slug) continue;
           const score = scoreMatch(r.title_romaji || r.title_english || slug, titles, slug);
-          if (score > bestScore) {
-            bestScore = score;
-            bestResult = { slug, score };
-          }
+          const scored = { slug, score };
+          if (!best || score > best.score) best = scored;
+          if (score >= 70) return { hit: scored, best: scored };
         }
-        if (bestResult && bestScore >= 70) return bestResult;
       }
-      return null;
+      return { hit: null, best };
     });
   }
-  function probeSlug(titles, signal) {
-    return __async(this, null, function* () {
+  function probeSlug(_0, _1) {
+    return __async(this, arguments, function* (titles, signal, extraSlugs = []) {
+      const seen = /* @__PURE__ */ new Set();
+      const candidates = [];
+      for (const s of extraSlugs) {
+        if (s && !seen.has(s)) {
+          seen.add(s);
+          candidates.push({ slug: s, score: 65 });
+        }
+      }
       for (const t of titles.slice(0, MAX_SEARCH_TITLES)) {
         if (isAborted(signal)) return null;
         const slug = toSlug(t);
-        if (!slug) continue;
-        const html = yield fetchText(`/anime/${slug}`, { signal });
+        if (!slug || seen.has(slug)) continue;
+        seen.add(slug);
+        candidates.push({ slug, score: 80 });
+      }
+      for (const c of candidates) {
+        if (isAborted(signal)) return null;
+        const html = yield fetchText(`/anime/${c.slug}`, { signal });
         if (html && html.includes("zoplayer_id")) {
-          return { slug, score: 80 };
+          return c;
         }
       }
       return null;
@@ -13674,45 +13708,75 @@ var __provider = (() => {
     if (!seasonData || !Array.isArray(seasonData.episodes)) return null;
     return seasonData.episodes.find((e) => parseInt(e.episode_number, 10) === episodeNum) || null;
   }
-  var QUALITY_ORDER = ["720p", "1080p", "480p", "360p"];
+  function detailsTitleScore(details, titles, slug) {
+    const anime = details && details.anime ? details.anime : null;
+    if (!anime) return 100;
+    return scoreMatch(
+      anime.title_romaji || anime.title_english || anime.title_french || slug,
+      titles,
+      slug
+    );
+  }
+  var GUPLOAD_HOST = "https://gupload.site";
+  var QUALITY_ORDER = ["720p", "1080p"];
+  function collectZoplayerIds(epData) {
+    const ids = [];
+    const push = (id) => {
+      if (typeof id === "string" && /^[A-Za-z0-9]+$/.test(id) && !ids.includes(id)) ids.push(id);
+    };
+    const streams = epData && Array.isArray(epData.streams) ? epData.streams : [];
+    for (const s of streams) {
+      if (!s) continue;
+      push(s.zoplayer_id);
+      const vu = s.video_url || s.videoUrl || s.url;
+      if (typeof vu === "string") {
+        const m = vu.match(/\/data\/e\/([A-Za-z0-9]+)/);
+        if (m) push(m[1]);
+      }
+    }
+    push(epData && epData.zoplayer_id);
+    return ids;
+  }
   function resolveEpisodeStreams(slug, seasonNum, episodeNum, epData, signal) {
     return __async(this, null, function* () {
-      const zoplayerId = epData && epData.zoplayer_id;
-      if (!zoplayerId) return [];
-      for (const q of QUALITY_ORDER) {
-        if (isAborted(signal)) return [];
-        const m3u8Url = `https://gupload.xyz/data/e/hls/${zoplayerId}/${q}.m3u8`;
-        let manifest = null;
-        try {
-          manifest = yield fetchText(m3u8Url, {
-            signal,
-            headers: { Referer: "https://gupload.xyz/" }
-          });
-        } catch (e) {
-          if (isAborted(signal)) throw e;
-          continue;
-        }
-        if (!manifest || !manifest.includes("#EXTM3U")) continue;
-        const baseStream = {
-          name: "AnimeVOST (VOSTFR)",
-          title: `AnimeVOST [VOSTFR]`,
-          url: m3u8Url,
-          quality: q,
-          language: "ja",
-          type: "hls",
-          headers: { Referer: "https://gupload.xyz/" }
-        };
-        try {
-          const resolved = yield resolveStream(baseStream, 0);
-          if (!resolved || !resolved.url || resolved.isDirect === false) continue;
-          delete resolved.isDirect;
-          delete resolved.originalUrl;
-          return [resolved];
-        } catch (e) {
-          if (isAborted(signal)) throw e;
+      const ids = collectZoplayerIds(epData);
+      if (ids.length === 0) return [];
+      for (const zoplayerId of ids) {
+        for (const q of QUALITY_ORDER) {
+          if (isAborted(signal)) return [];
+          const m3u8Url = `${GUPLOAD_HOST}/data/e/hls/${zoplayerId}/${q}.m3u8`;
+          let manifest = null;
+          try {
+            manifest = yield fetchText(m3u8Url, {
+              signal,
+              headers: { Referer: `${GUPLOAD_HOST}/` }
+            });
+          } catch (e) {
+            if (isAborted(signal)) throw e;
+            continue;
+          }
+          if (!manifest || !manifest.includes("#EXTM3U")) continue;
+          const baseStream = {
+            name: "AnimeVOST (VOSTFR)",
+            title: `AnimeVOST S${seasonNum}E${episodeNum} [VOSTFR]`,
+            url: m3u8Url,
+            quality: q,
+            language: "fr",
+            type: "hls",
+            headers: { Referer: `${GUPLOAD_HOST}/` }
+          };
+          try {
+            const resolved = yield resolveStream(baseStream, 0);
+            if (!resolved || !resolved.url || resolved.isDirect === false) continue;
+            delete resolved.isDirect;
+            delete resolved.originalUrl;
+            return [resolved];
+          } catch (e) {
+            if (isAborted(signal)) throw e;
+          }
         }
       }
-      console.log(`[AnimeVostFR] Aucun manifeste HLS pour ${slug} S${seasonNum}E${episodeNum} (${zoplayerId})`);
+      console.log(`[AnimeVostFR] Aucun manifeste HLS pour ${slug} S${seasonNum}E${episodeNum} (${ids.join(",")})`);
       return [];
     });
   }
@@ -13726,13 +13790,22 @@ var __provider = (() => {
       const episodeNum = Math.max(1, parseInt(episode, 10) || 1);
       const titles = yield getTmdbTitles(tmdbId, "tv", { season: seasonNum });
       if (!titles || titles.length === 0) return [];
-      let match = yield searchApi(titles, signal);
-      if (!match) match = yield probeSlug(titles, signal);
+      let match = null;
+      const search = yield searchApi(titles, signal);
+      if (search && search.hit) match = search.hit;
+      if (!match) {
+        const extra = search && search.best && search.best.score >= 50 ? [search.best.slug] : [];
+        match = yield probeSlug(titles, signal, extra);
+      }
       if (!match) {
         console.log(`[AnimeVostFR] Titre introuvable pour TMDB ${tmdbId}`);
         return [];
       }
       const details = yield getAnimeDetails(match.slug, signal);
+      if (detailsTitleScore(details, titles, match.slug) < 40) {
+        console.log(`[AnimeVostFR] Fiche ${match.slug} sans rapport avec TMDB ${tmdbId} \u2014 abandon`);
+        return [];
+      }
       const epData = findEpisodeData(details, seasonNum, episodeNum);
       if (!epData) {
         console.log(`[AnimeVostFR] S${seasonNum}E${episodeNum} absent de ${match.slug}`);
