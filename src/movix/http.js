@@ -24,9 +24,13 @@ export const HEADERS = {
 
 /**
  * Délais de retry pour Cloudflare (ms)
- * Cloudflare peut bloquer temporairement → on attend 1s, 2s, 4s
+ * ANCIEN : 1s/2s/4s → jusqu'à 7 s de sleep dans un budget plugin de 45 s.
+ * Avec le timeout natif de 20 s par requête, un contenu absent des 3 sources
+ * (fstream + wiflix + j1f) pouvait dépasser 25-30 s avant le 1er stream.
+ * Réduit à 400 ms + 800 ms : suffisant pour les rafales CF brèves, sans
+ * sacrifier le budget de résolution des embeds (le vrai goulot de latence).
  */
-const RETRY_DELAYS = [1000, 2000, 4000];
+const RETRY_DELAYS = [400, 800];
 
 /**
  * Vérifie si la réponse est un blocage Cloudflare ou une erreur
@@ -52,13 +56,14 @@ function isHtmlResponse(data) {
 export async function fetchJson(url, options = {}) {
     console.log(`[Movix] Fetching: ${url}`);
 
-    const { headers: customHeaders, retries = 2, ...rest } = options;
+    const { headers: customHeaders, retries = 1, ...rest } = options;
+    const timeoutMs = rest.timeout || 12000;
 
     let lastError = null;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-            const result = await attemptFetch(url, customHeaders, rest);
+            const result = await attemptFetch(url, customHeaders, { ...rest, timeout: timeoutMs });
             if (result) return result;
             lastError = new Error(`Empty response (attempt ${attempt + 1})`);
         } catch (e) {
@@ -68,7 +73,7 @@ export async function fetchJson(url, options = {}) {
 
         // Attendre avant de réessayer (sauf dernier essai)
         if (attempt < retries) {
-            const delay = RETRY_DELAYS[attempt] || 4000;
+            const delay = RETRY_DELAYS[attempt] || 800;
             console.log(`[Movix] Retry in ${delay}ms...`);
             await sleep(delay);
         }
@@ -83,10 +88,9 @@ async function attemptFetch(url, customHeaders, rest) {
     if (isAborted(signal)) return null;
 
     const res = await safeFetch(url, {
-        timeout: 20000,
+        timeout: rest.timeout || 12000,
         headers: { ...HEADERS, ...(customHeaders || {}) },
         signal,
-        ...rest
     });
 
     if (!res) {
