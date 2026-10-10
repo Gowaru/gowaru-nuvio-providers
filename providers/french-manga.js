@@ -1,6 +1,6 @@
 /**
  * french-manga - Built from src/french-manga/
- * Generated: 2026-10-10T09:27:23.402443344Z
+ * Generated: 2026-10-10T10:54:58.766698757Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -13467,7 +13467,7 @@ var __provider = (() => {
       MAX_STREAMS_PER_PROVIDER = 80;
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
-      BUILD_HASH = true ? "574fb20e" : "dev";
+      BUILD_HASH = true ? "f20986e9" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {

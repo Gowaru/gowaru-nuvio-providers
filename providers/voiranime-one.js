@@ -1,6 +1,6 @@
 /**
  * voiranime-one - Built from src/voiranime-one/
- * Generated: 2026-10-10T09:27:25.278445081Z
+ * Generated: 2026-10-10T10:54:59.33369931Z
  */
 var __provider = (() => {
   var __defProp = Object.defineProperty;
