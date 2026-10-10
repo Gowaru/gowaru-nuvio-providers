@@ -1813,11 +1813,17 @@ export async function resolveFsvidVidzy(url) {
         // LEURRE anti-scraper (identique pour tous les embeds) → à rejeter absolument.
         let videoUrl = null;
 
-        // --- Pattern 1 (2024+): clé dynamique via hostname hash + reverse ---
+        // --- Pattern 1 (2024+ puis 2026+): clé dynamique via hostname hash+
+        // reverse + constante BC (fingerprint de layout) ---
         // IIFE: (function(s){var h=(location&&location.hostname)||"",H=0;...
+        //   var BC = largeur CSS mesurée (js injecté 2026) : _ch.offsetWidth|0
+        //   pour une div 1in+54px → dépend du navigateur (≈75urt sur Chrome). 
         //   var b=atob(s),a=b.split("").reverse().join(""),r="";...
-        //   var kk=(0x3d+i*89+H)&255; r+=String.fromCharCode(a.charCodeAt(i)^kk)
+        //   var kk=(0x3d+i*89+H+BC)&255; r+=String.fromCharCode(a.charCodeAt(i)^kk)
         //   ...return /^https?:/.test(r)?r:"troll"})("BASE64")
+        // BC n'est PAS calculable en QuickJS (pas de layout engine) → brute-force
+        // sur les 256 valeurs possibles (vérifié en live : chaque embed a un BC
+        // fixe, une seule valeur de 0..255 produit une URL https valide).
         const hostname = embedDomain ? embedDomain.split('/')[0] : (embedRef.split('//')[1] || '').replace(/\//g, '');
         const newPattern = html.match(/\}\)\(["']([A-Za-z0-9+/=_-]{50,})["']\)/);
         if (newPattern && html.includes('reverse().join')) {
@@ -1830,15 +1836,20 @@ export async function resolveFsvidVidzy(url) {
                 for (let j = 0; j < hostname.length; j++) {
                     H = (H + hostname.charCodeAt(j)) & 255;
                 }
-                // Reverse + XOR with dynamic key
+                // Reverse + XOR with dynamic key. BC (fingerprint de layout) est
+                // inconnu du runtime → brute-force 0..255 : une seule valeur
+                // produit une URL https://…m3u8 valide.
                 const a = bin.split('').reverse().join('');
-                let decoded = '';
-                for (let i = 0; i < a.length; i++) {
-                    const kk = (0x3d + i * 89 + H) & 255;
-                    decoded += String.fromCharCode(a.charCodeAt(i) ^ kk);
-                }
-                if (decoded.startsWith('http') && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
-                    videoUrl = decoded;
+                for (let BC = 0; BC < 256; BC++) {
+                    let decoded = '';
+                    for (let i = 0; i < a.length; i++) {
+                        const kk = (0x3d + i * 89 + H + BC) & 255;
+                        decoded += String.fromCharCode(a.charCodeAt(i) ^ kk);
+                    }
+                    if (/^https?:\/\//.test(decoded) && decoded.includes('.m3u8') && !decoded.includes('/troll/')) {
+                        videoUrl = decoded;
+                        break;
+                    }
                 }
             }
         }
@@ -1962,21 +1973,34 @@ export async function resolveHGCloud(url) {
 export async function resolveDood(url) {
     try {
         const domain = url.match(/https?:\/\/([^\/]+)/)?.[1] || "dood.to";
-        const res = await safeFetch(url);
+        let currentUrl = url;
+        // Redirection 301 de la famille dood (vérifié en live 2026-10 :
+        // dood.to/e/xxx → 301 → playmogo.com/e/xxx,ême flow pass_md5).
+        // On suit une redirection une fois pour garder le résolveur fonctionnel.
+        let res = await safeFetch(currentUrl);
         if (!res) return { url };
+        let finalUrl = res.url || currentUrl;
+        const finalDomain = finalUrl.match(/https?:\/\/([^\/]+)/)?.[1] || domain;
         let html = await res.text();
+        // Le redirect safeFetch renvoie déjà la page finale ; si le domaine final
+        // diffère, tous les appel pass_md5 se font sur ce CDN final.
+        if (finalDomain !== domain) {
+            currentUrl = finalUrl;
+        }
+        res = null;
         if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
-        const passMatch = html.match(/\$\.get\(['"]\/pass_md5\/([^'"]+)['"]/);
+        const passMatch = html.match(/\$\.get\(['"]\/pass_md5\/([^'"]+)['"]/)
+            || html.match(/pass_md5\/([^'"\s]+)['"]/);
             if (passMatch) {
             const token = passMatch[1];
-            const passUrl = `https://${domain}/pass_md5/${token}`;
-            const passRes = await safeFetch(passUrl, { headers: { "Referer": url } });
+            const passUrl = `https://${finalDomain}/pass_md5/${token}`;
+            const passRes = await safeFetch(passUrl, { headers: { "Referer": currentUrl } });
             if (passRes && passRes.ok) {
                 const content = await passRes.text();
                 const randomStr = Math.random().toString(36).substring(2, 12);
                 return { 
                     url: content + randomStr + "?token=" + token + "&expiry=" + Date.now(),
-                    headers: { "Referer": `https://${domain}/` }
+                    headers: { "Referer": `https://${finalDomain}/` }
                 };
             }
         }
@@ -2519,6 +2543,11 @@ export async function resolveStream(stream, depth = 0) {
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulustream.') ||
             urlLower.includes('luluvdo.') ||
+            // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
+            // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+            urlLower.includes('livavid.') ||
+            urlLower.includes('lulavid.') ||
+            urlLower.includes('livastream.') ||
             urlLower.includes('wishonly.') ||
             urlLower.includes('veev.')
         ) result = await resolvePackedPlayer(originalUrl);

@@ -303,6 +303,10 @@ function extractDirectUrls(embedHtml) {
   for (const m of matches) {
     let url = m[0].replace(/[,;]+$/, '')
     if (!url || seen.has(url)) continue
+    // Leurre anti-scraper fsvid/vidzy : « /troll/master.m3u8 » est identique
+    // pour tous les embeds (vidéo de test). Causait des « flux indisponibles »
+    // (ExoPlayer jouait la vidéo de test, voire une 403) → à exclure ici.
+    if (/\/troll\/master\.m3u8/i.test(url)) continue
     seen.add(url)
     urls.push(url)
   }
@@ -379,8 +383,13 @@ async function resolveEmbedToStream(embedUrl, quality, lang, signal, startTime) 
     }
 
     // Les manifests HLS tokenisés sont déjà directs : on renvoie le premier
-    // candidat même si le peeler a échoué sur un host inconnu.
-    return buildStream(candidates[0], quality, lang)
+    // candidat même si le peeler a échoué sur un host inconnu — SAUF si c'est
+    // le leurre anti-scraper (test-videos/troll), jamais exploitable.
+    const first = candidates[0]
+    if (first && !/\/troll\/master\.m3u8/i.test(first) && !/test-videos|big_?buck|sample-videos/i.test(first)) {
+      return buildStream(first, quality, lang)
+    }
+    return null
   } catch (e) {
     if (e.name === 'AbortError') return null
     console.warn(`[Streamzo] Résolution embed échouée: ${e.message}`)

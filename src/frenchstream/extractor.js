@@ -854,7 +854,22 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (seasons.length > 0) {
             const sn = Number(effectiveSeason) || 1;
             const sIdx = seasons.findIndex(s => /saison\s*(\d+)/i.test(s.title) && parseInt(s.title.match(/saison\s*(\d+)/i)[1]) === sn);
-            const target = sIdx !== -1 ? seasons[sIdx] : seasons[0];
+            let target = sIdx !== -1 ? seasons[sIdx] : null;
+            // FIX « l'épisode d'une autre saison s'affiche » : si la saison
+            // demandée n'existe PAS sur le site et que le site expose plusieurs
+            // saisons numérotées, l'ancien code retombait sur seasons[0] → la
+            // S1 (ex: « 100 % physique » S3 = « Physical: Asia », série TMDB
+            // distincte absente de la fiche → un épisode S1/S2 était servi).
+            // On abandonne proprement (0 stream) plutôt que de servir un faux
+            // match. seasons.length === 1 : série mono-saison / numérotation
+            // absolue (One Piece, etc.) → la card unique reste une cible légitime.
+            if (!target) {
+                if (seasons.length > 1) {
+                    console.warn(`[Frenchstream] Saison ${sn} absente sur la fiche (${seasons.length} saisons disponibles) — pas de faux match, abandon propre`);
+                    return [];
+                }
+                target = seasons[0];
+            }
             if (target) {
                 let epData = null;
                 try {
