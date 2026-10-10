@@ -9,8 +9,8 @@ if (typeof globalThis !== 'undefined' && process.env.NUVIOPROXY_URL) {
     globalThis.__NUVIOPROXY__ = process.env.NUVIOPROXY_URL;
 }
 const providers = [
-    'sekai', 'voiranime', 'voiranime-homes', 'voiranime-rip', 'vostfree',
-    'animevostfr', 'anime-sama', 'animesama-co', 'animesultra', 'animoflix',
+    'sekai', 'voiranime', 'voiranime-homes', 'voiranime-rip', 'voiranime-be', 'vostfree',
+    'animevostfr', 'animevost-fr', 'anime-sama', 'animesama-co', 'animesultra', 'animoflix',
     'french-anime', 'frenchstream', 'french-manga', 'movix', 'mugiwarastream',
     'dulourd', 'wookafr', 'flemmix', 'coflix', 'anime-ultime', 'waveanime',
     'papadustream', 'nakios', 'streamzo', 'otakufr', 'aniverse', 'webflix'

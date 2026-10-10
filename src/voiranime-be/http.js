@@ -10,6 +10,7 @@ export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const rateLimit = createProviderRateLimiter(350, 0.3);
 const DOMAIN = 'voiranime.be';
+const SITE = 'https://voiranime.be';
 
 export const HEADERS = {
     "User-Agent": USER_AGENT,
@@ -43,4 +44,33 @@ export async function fetchJson(url, options = {}) {
     } catch (e) {
         return null; // QuickJS : response.json() peut renvoyer null — garde symétrique
     }
+}
+
+/**
+ * Comme fetchText mais expose aussi l'URL finale après redirects.
+ * Sert la garde 404-déguisée : URL inconnue → 301 → homepage HTTP 200.
+ */
+export async function fetchPage(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
+    const { headers: customHeaders, ...rest } = options;
+    await rateLimit(DOMAIN);
+    const res = await safeFetch(url, {
+        ...rest,
+        headers: { ...HEADERS, ...(customHeaders || {}) },
+        signal,
+    });
+    if (!res || !res.ok) {
+        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        throw new Error(`HTTP error ${status} for ${url}`);
+    }
+    return { html: await res.text(), finalUrl: res.url || url };
+}
+
+/** Vrai si l'URL finale est la homepage (redirigée depuis une 404 déguisée). */
+export function isHomepageUrl(u) {
+    if (!u || typeof u !== 'string') return false;
+    const norm = u.split('#')[0].split('?')[0].replace(/\/+$/, '');
+    return norm === SITE || norm === 'http://voiranime.be';
 }

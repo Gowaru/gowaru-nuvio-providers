@@ -3,15 +3,59 @@
  * Site: animevostfr.org (WordPress + ToroPlay theme)
  */
 
-import { stripSeasonSuffix, resolveTargetEpisodes, countExtraWords } from '../utils/dle-extractor.js';
+import { stripSeasonSuffix, resolveTargetEpisodes, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-const BASE_URL = "https://v2.animevostfr.org";
+const BASE_URL = "https://animevostfr.org";
 const MAX_SEARCH_TITLES = 8;
 const SEARCH_TIMEOUT = 10000;
+
+const normalizeTitle = (s) => (s || '').toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/['\u2018\u2019:!.,?"]/g, '').replace(/\b(?:the|an?)\s+/g, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Score un titre candidat contre un titre requête (même logique que le tri
+ * de searchAnime). Utilisé aussi par la garde anti-faux-match sur le h1
+ * des fiches. Comportement inchangé : voir commentaires dans searchAnime.
+ */
+function scoreAgainstQuery(candidateTitle, queryTitle) {
+    const n = normalizeTitle(candidateTitle);
+    const simplifiedTitle = normalizeTitle(queryTitle);
+    const titleWords = simplifiedTitle.split(/\s+/).filter(w => w.length > 2);
+    let score = 0;
+    if (n === simplifiedTitle) {
+        score = 200;
+    } else if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
+        score = 100;
+        const extra = countExtraWords(n, simplifiedTitle);
+        if (extra > 0) score -= Math.min(extra * 25, 60);
+    } else {
+        for (const w of titleWords) {
+            if (n.includes(w)) score += 20;
+        }
+        const lenRatio = Math.min(n.length, simplifiedTitle.length) / Math.max(n.length, simplifiedTitle.length);
+        score = Math.round(score * lenRatio);
+    }
+    return score;
+}
+
+// Fiches "édition" (compilations, films dérivés, versions Netflix...) :
+// tokens de slug qui signalent une variante quand une fiche exacte existe.
+const EDITION_SLUG_TOKENS = ['netflix', 'gyojin', 'requiem', 'live-action', 'fishman', 'fish-man', 'stampede', 'strong-world'];
+
+// Cache mémoire intra-exécution (une instance QuickJS fraîche par getStreams) :
+// la garde anti-faux-match et findEpisodeUrl lisent la même page fiche.
+const _pageCache = new Map();
+async function fetchPageCached(url) {
+    if (_pageCache.has(url)) return _pageCache.get(url);
+    const html = await fetchText(url, { timeout: SEARCH_TIMEOUT });
+    _pageCache.set(url, html || '');
+    return html || '';
+}
 
 /**
  * Search for anime on AnimeVOSTFR
@@ -73,42 +117,31 @@ async function searchAnime(title) {
 
         console.log(`[AnimeVOSTFR] Search results for "${title}": ${unique.length}`);
 
-        const normalize = (s) => s.toLowerCase()
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-            .replace(/['\u2018\u2019:!.,?"]/g, '').replace(/\b(?:the|an?)\s+/g, '').replace(/\s+/g, ' ').trim();
-        const simplifiedTitle = normalize(title);
-        const titleWords = simplifiedTitle.split(/\s+/).filter(w => w.length > 2);
+        // Score via le scorer partagé (même fonction que la garde
+        // anti-faux-match sur les h1 de fiches).
 
         // Score each result by how many title words it matches.
         // ATTENTION : l'égalité exacte doit être testée AVANT l'includes,
         // sinon "Naruto" (exact) et "Naruto Shippuden" (contient "naruto")
         // sont ex æquo à 100 et le tri stable garde l'ordre du site → la
         // mauvaise série (suite/fan-edit) est extraite pour la S1.
-        const scored = unique.map(r => {
-            const n = normalize(r.title);
-            let score = 0;
-            if (n === simplifiedTitle) {
-                score = 200;
-            } else if (simplifiedTitle.length >= 5 && n.includes(simplifiedTitle)) {
-                // Includes match : pénalité par mot significatif en trop
-                // (anti fan-edit/dérivés : "Naruto Shippuden Kai" vs "Naruto" → -50)
-                score = 100;
-                const extra = countExtraWords(n, simplifiedTitle);
-                if (extra > 0) score -= Math.min(extra * 25, 60);
-            } else {
-                for (const w of titleWords) {
-                    if (n.includes(w)) score += 20;
-                }
-                // Penalize length difference
-                const lenRatio = Math.min(n.length, simplifiedTitle.length) / Math.max(n.length, simplifiedTitle.length);
-                score = Math.round(score * lenRatio);
-            }
-            return { ...r, score };
-        });
+        const scored = unique.map(r => ({ ...r, score: scoreAgainstQuery(r.title, title) }));
 
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];
         const bestScore = best ? best.score : 0;
+
+        // Fiches édition : quand une fiche EXACTE (200) existe, les variantes
+        // d'édition (slug netflix-/gyojin-/requiem-...) sont rétrogradées —
+        // elles restent en fallback si l'exacte échoue, mais ne passent plus
+        // devant (ex netflix-one-piece vs one-piece-vostfr).
+        if (bestScore >= 200) {
+            for (const r of scored) {
+                const slug = (r.url || '').toLowerCase();
+                if (EDITION_SLUG_TOKENS.some(t => slug.includes(t))) r.score -= 80;
+            }
+            scored.sort((a, b) => b.score - a.score);
+        }
 
         let matches;
         if (best && bestScore >= 25) {
@@ -133,7 +166,7 @@ async function searchAnime(title) {
  */
 async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
     try {
-        const html = await fetchText(seriesUrl, { timeout: SEARCH_TIMEOUT });
+        const html = await fetchPageCached(seriesUrl);
         const $ = cheerio.load(html);
         const episodeLinks = [];
 
@@ -145,6 +178,13 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
         });
 
         console.log(`[AnimeVOSTFR] Found ${episodeLinks.length} episode links`);
+
+        // Si la FICHE n'a aucun token de saison (single-season / pas de
+        // "saison N" ni "-N-episode-"), la garde saison reste ACTIVE même
+        // pour les épisodes absolus : sinon en S2+ n'importe quelle fiche
+        // "-episode-N" peut matcher (contenu cross-saison).
+        const ficheHasSeasonToken = /saison[\s_-]*\d+|season[\s_-]*\d+|-\d+-episode-/i.test(seriesUrl || '');
+        const seasonGuardOn = !isAbsolute || !ficheHasSeasonToken;
 
         // If this is a movie (no season/episode), use the first episode URL found
         if (season == null || episode == null) {
@@ -184,7 +224,9 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
                 // token de saison explicite dans l'URL. Les patterns sans saison
                 // ("-episode-1") matchent sinon les pages S1/single-season et
                 // servent du contenu cross-saison. (Pour S1 on garde le tolérant.)
-                if (!isAbsolute && season != null && Number(season) > 1) {
+                // Garde conservée pour les épisodes ABSOLUS quand la fiche n'a
+                // aucun token de saison (fiche générique → match aveugle interdit).
+                if (seasonGuardOn && season != null && Number(season) > 1) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
                     if (!seasonMatch || parseInt(seasonMatch[1]) !== Number(season)) {
                         return false;
@@ -223,8 +265,9 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
         const matchByText = (links, pattern) => {
             return links.find(l => {
                 if (!pattern.test(l.text)) return false;
-                // Même garde que matchEpisode : S2+ exige un token de saison.
-                if (!isAbsolute && season != null && Number(season) > 1) {
+                // Même garde que matchEpisode : S2+ exige un token de saison
+                // (y compris épisodes absolus sur fiche sans token de saison).
+                if (seasonGuardOn && season != null && Number(season) > 1) {
                     const seasonMatch = l.url.match(/-(?:saison-)?(\d+)-episode-/i);
                     if (!seasonMatch || parseInt(seasonMatch[1]) !== Number(season)) {
                         return false;
@@ -257,6 +300,21 @@ async function findEpisodeUrl(seriesUrl, season, episode, isAbsolute = false) {
         console.error(`[AnimeVOSTFR] Error finding episode: ${e.message}`);
         return null;
     }
+}
+
+/**
+ * Décode les entités HTML d'un fragment échappé en texte
+ * (onglet film : &lt;iframe ... src=&quot;...?trembed...&quot;&gt;).
+ * Ordre important : &amp; d'abord (&amp;#038; → &#038; → &).
+ */
+function decodeEscapedHtml(s) {
+    return (s || '')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#0?39;/gi, "'")
+        .replace(/&amp;/gi, '&')
+        .replace(/&#0?38;/gi, '&');
 }
 
 /**
@@ -293,6 +351,20 @@ async function extractPlayersFromEpisode(episodeUrl) {
             } else if (lazyDiv.length && lazyDiv.attr('data-src')) {
                 src = lazyDiv.attr('data-src');
             }
+            if (!src) {
+                // 3e source (pages /film/) : l'onglet 2 est un iframe ÉCHAPPÉ
+                // EN TEXTE dans le div (pas de <iframe> ni de .lazy-player).
+                // On décode les entités puis on cherche une URL ?trembed=.
+                const rawInner = $(el).html() || $(el).text() || '';
+                if (rawInner.indexOf('trembed') !== -1) {
+                    const decoded = decodeEscapedHtml(rawInner);
+                    const m = decoded.match(/https?:\/\/[^"'\s<>]*trembed[^"'\s<>]*/i);
+                    if (m) {
+                        src = m[0];
+                        console.log(`[AnimeVOSTFR] Escaped trembed iframe decoded in tab "${serverName}"`);
+                    }
+                }
+            }
             if (src) trembedEntries.push({ src, serverName });
         });
 
@@ -307,7 +379,7 @@ async function extractPlayersFromEpisode(episodeUrl) {
         console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
 
         // Resolve each trembed URL to get the real player iframe (séquentiel + early-exit)
-        const DIRECT_HOSTS = ['vidmoly', 'sibnet', 'luluvid', 'uqload', 'myvi', 'mytv', 'dood', 'ds2play', 'hgcloud', 'stape', 'streamtape'];
+        const DIRECT_HOSTS = ['sibnet', 'luluvid', 'uqload', 'myvi', 'mytv', 'dood', 'ds2play', 'hgcloud', 'stape', 'streamtape'];
         let directCount = 0;
         for (const entry of trembedEntries) {
             try {
@@ -331,9 +403,13 @@ async function extractPlayersFromEpisode(episodeUrl) {
 
                 if (playerSrc && playerSrc.startsWith('http')) {
                     const playerName = getPlayerName(playerSrc);
-                    // Skip early les hosts morts/lents (gain ~8-15s par lecteur mort)
+                    // Skip early les hosts morts/lents (gain ~8-15s par lecteur mort).
+                    // sibnet PAS skippé : 403 datacenter mais OK en résidentiel FR.
+                    // vidmoly = challenge JS sans flux en HTML ; upstream.to =
+                    // injoignable sans resolver dédié (comme sendvid).
                     const pLower = playerSrc.toLowerCase();
-                    if (pLower.includes('sendvid.com') || pLower.includes('vidstream.pro')) {
+                    if (pLower.includes('sendvid.com') || pLower.includes('vidstream.pro') ||
+                        pLower.includes('vidmoly') || pLower.includes('upstream')) {
                         console.log(`[AnimeVOSTFR] Skip host mort (${playerName}): ${playerSrc.slice(0, 60)}`);
                         continue;
                     }
@@ -376,15 +452,31 @@ async function extractPlayersFromEpisode(episodeUrl) {
 /**
  * Get player name from URL domain
  */
+/**
+ * Détecte VF/VOSTFR/VO depuis le slug de la fiche et le titre du match.
+ * Retourne null quand NON DISCRIMINANT (slug "-vf-vostfr", ambigu ou
+ * absent) : pas de suffixe de titre dans ce cas, la `language` du tab
+ * (Lecteur VF / VOSTFR) fait foi. Ne tester -vostfr qu'après avoir écarté
+ * les slugs mixtes — l'ancien test "-vostfr en premier" retournait toujours
+ * VOSTFR sur "-vf-vostfr" (titres "- VOSTFR" même pour du VF).
+ */
 function detectLang(url, title) {
-    const u = url.toLowerCase();
+    const u = (url || '').toLowerCase();
+    const slugMatch = u.match(/\/(?:animes|film)\/([^/?#]+)/);
+    const slug = slugMatch ? slugMatch[1] : '';
+    const hasVf = /(?:^|-)vf(?:-|$)/.test(slug);
+    const hasVostfr = /(?:^|-)vostfr(?:-|$)/.test(slug);
+    // Slug discriminant (un seul des deux) → fait foi
+    if (hasVostfr && !hasVf) return 'VOSTFR';
+    if (hasVf && !hasVostfr) return 'VF';
+    // Slug ambigu (-vf-vostfr) ou absent → titre du match
     const t = (title || '').toLowerCase();
-    // Check VOSTFR first (must be before VF check since 'vostfr' contains 'vf')
-    if (/\/animes\/[^/]*-vostfr(?:\/|$)/.test(u) || /\bvostfr\b/.test(t)) return 'VOSTFR';
-    if (/\/animes\/[^/]*-vf(?:\/|$)/.test(u) || /\bvf\b/.test(t)) return 'VF';
-    if (/\/animes\/[^/]*-vo(?:\/|$)/.test(u) || /\bvo\b/.test(t)) return 'VO';
-    // Default: VOSTFR pour un site spécialisé VOSTFR (animevostfr.org)
-    return 'VOSTFR';
+    if (/\bvostfr\b/.test(t)) return 'VOSTFR';
+    if (/\bvf\b/.test(t)) return 'VF';
+    const hasVoSlug = /(?:^|-)vo(?:-|$)/.test(slug);
+    if (hasVoSlug && !hasVf && !hasVostfr) return 'VO';
+    if (/\bvo\b/.test(t)) return 'VO';
+    return null;
 }
 
 function getPlayerName(url) {
@@ -398,9 +490,64 @@ function getPlayerName(url) {
     if (url.includes('dood') || url.includes('ds2play')) return 'Doodstream';
     if (url.includes('myvi') || url.includes('mytv')) return 'MyVi';
     if (url.includes('sendvid')) return 'Sendvid';
+    if (url.includes('upstream')) return 'Upstream';
     if (url.includes('stape') || url.includes('streamtape')) return 'Streamtape';
     if (url.includes('moon')) return 'Moon';
     return 'Player';
+}
+
+// Seuil STRICT de la garde anti-faux-match : accepte les fiches exactes
+// (200) et les includes à ≤1 mot extra (75), rejette les dérivés à 2+ mots
+// extra (≤50 : "Demon Slayer: Sibling's Bond", "Goldorak contre Great
+// Mazinger", "Tojima Wants to Be a Kamen Rider"). Complété par
+// hasForeignLeadingTokens (homonymes à fort score : "Steins;Gate" pour
+// "Gate"). Calibré avec le scorer de searchAnime (même fonction).
+const SHEET_GUARD_THRESHOLD = 75;
+
+/**
+ * Vérifie que le titre réel de la fiche (h1, fallback <title>) correspond
+ * à l'œuvre demandée (titres TMDB). Si échec → slug rejeté, suite de la
+ * boucle. Best-effort : page illisible (fetch vide, pas de h1) → on ne
+ * rejette PAS (la chaîne garde sa chance, 0 propre si rien ne résout).
+ */
+async function verifySheetTitle(sheetUrl, tmdbTitles) {
+    let html = '';
+    try {
+        html = await fetchPageCached(sheetUrl);
+    } catch (e) {
+        console.log(`[AnimeVOSTFR] Guard: fiche illisible (${e.message}) — gardée par prudence`);
+        return true;
+    }
+    if (!html) {
+        console.log(`[AnimeVOSTFR] Guard: fiche vide — gardée par prudence`);
+        return true;
+    }
+    let sheetTitle = '';
+    try {
+        const $ = cheerio.load(html);
+        sheetTitle = $('h1').first().text().trim() || $('title').first().text().trim() || '';
+    } catch (e) {
+        return true;
+    }
+    if (!sheetTitle) {
+        console.log(`[AnimeVOSTFR] Guard: pas de titre de fiche — gardée par prudence`);
+        return true;
+    }
+    let best = 0;
+    let pass = false;
+    for (const q of tmdbTitles) {
+        const s = scoreAgainstQuery(sheetTitle, q);
+        if (s > best) best = s;
+        // Un homonyme sur UNE variante ne rejette pas un exact-match sur une
+        // autre : le pass est par-titre (score strict ET pas de leading étranger).
+        if (s >= SHEET_GUARD_THRESHOLD && !hasForeignLeadingTokens(sheetTitle, q)) pass = true;
+    }
+    if (!pass) {
+        console.log(`[AnimeVOSTFR] Guard: fiche rejetée "${sheetTitle}" (meilleur score ${best}) — ${sheetUrl}`);
+        return false;
+    }
+    console.log(`[AnimeVOSTFR] Guard: fiche acceptée "${sheetTitle}" (score ${best})`);
+    return true;
 }
 
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
@@ -431,9 +578,23 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const searchEpisode = (mediaType === 'movie' && episode == null) ? 1 : Number(episode);
     const isMoviePath = mediaType === 'movie' && season == null && episode == null;
 
-    // OPTIMISATION: Limiter les recherches à 3 titres max (au lieu de 8+)
-    // Prioriser le titre principal + 1 variante courte
-    const baseTitles = titlesOrdered.slice(0, 3);
+    // Films : ~6 titres de base (les seules variantes FR exotiques — ex Your
+    // Name → "Comment Tu T'Appelles?", "Tvé jméno" — manquent
+    // /film/your-name/ puis abandonnent). TOUJOURS inclure le titre original
+    // anglais (titles[0] = EN côté metadata.js) + le titre principal
+    // débarrassé de son suffixe de saison, avant abandon. Séries : 3 titres
+    // (budget total <45s, recherches séquentielles avec early-exit).
+    const baseTitles = titlesOrdered.slice(0, isMoviePath ? 6 : 3);
+    const mustTry = [];
+    const englishTitle = (titles[0] || '').trim();
+    if (englishTitle) mustTry.push(englishTitle);
+    const strippedMain = stripSeasonSuffix(titlesOrdered[0] || '');
+    if (strippedMain && strippedMain !== titlesOrdered[0]) mustTry.push(strippedMain);
+    for (const m of mustTry) {
+        const key = m.toLowerCase().trim();
+        if (!baseTitles.some(b => (b || '').toLowerCase().trim() === key)) baseTitles.push(m);
+    }
+    console.log(`[AnimeVOSTFR] Titres essayés (${baseTitles.length}): ${baseTitles.join(' | ')}`);
     const shortTitles = [];
     for (const t of baseTitles) {
         const cleanT = stripSeasonSuffix(t);
@@ -443,7 +604,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (parts.length > 0 && parts[0] !== cleanT) shortTitles.push(parts[0]);
     }
 
-    let matches = [];
     const seenKeys = new Set();
     const uniqueTitles = shortTitles.filter(t => {
         const key = t.toLowerCase().trim();
@@ -452,15 +612,28 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         return true;
     });
 
-    // OPTIMISATION: Recherche séquentielle avec early-exit
-    // Au lieu de lancer toutes les recherches en parallèle, on arrête dès
-    // qu'on trouve un bon résultat (score >= 100). Cela réduit le temps de
-    // 15s à ~3s pour la plupart des titres.
+    // OPTIMISATION: Recherche séquentielle avec early-exit "utile".
+    // On accumule (dédup par URL) et on s'arrête dès qu'un match EXPLOITABLE
+    // existe : une fiche /animes/ pour les séries, une fiche /film/ pour les
+    // films. Sans ça, le premier titre qui ramène n'importe quoi (ex Demon
+    // Slayer → seul le film "Sibling's Bond", écarté ensuite car /film/)
+    // bloque les titres suivants qui auraient trouvé la vraie fiche série
+    // ("Demon Slayer" court → demon-slayer-vostfr). Garde-budget : 6 matchs.
+    let matches = [];
+    const seenMatchUrlsAcrossTitles = new Set();
     for (const title of uniqueTitles) {
         const results = await searchAnime(title);
         if (results && results.length > 0) {
-            matches = results;
-            break;
+            for (const r of results) {
+                if (!seenMatchUrlsAcrossTitles.has(r.url)) {
+                    seenMatchUrlsAcrossTitles.add(r.url);
+                    matches.push(r);
+                }
+            }
+            const usable = isMoviePath
+                ? matches.some(m => (m.url || '').includes('/film/'))
+                : matches.some(m => !(m.url || '').includes('/film/'));
+            if (usable || matches.length >= 6) break;
         }
     }
     if (!matches || matches.length === 0) return [];
@@ -492,8 +665,23 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    // Movie mode: only try the first match (1 hop) to avoid excessive chaining
-    const matchesToProcess = mediaType === 'movie' ? uniqueMatches.slice(0, 1) : uniqueMatches;
+    // Films : /film/ d'abord (lecteur direct dans la page fiche), jusqu'à 3
+    // fiches pour laisser la garde anti-faux-match rejeter + continuer.
+    // Séries : les matchs /film/ sont écartés (aucun lien /episode/, que du
+    // bruit traité pour rien).
+    let matchesToProcess;
+    if (isMoviePath) {
+        matchesToProcess = [...uniqueMatches].sort((a, b) => {
+            const aFilm = (a.url || '').includes('/film/') ? 0 : 1;
+            const bFilm = (b.url || '').includes('/film/') ? 0 : 1;
+            return aFilm - bFilm;
+        }).slice(0, 3);
+    } else {
+        matchesToProcess = uniqueMatches.filter(m => !(m.url || '').includes('/film/'));
+        if (matchesToProcess.length !== uniqueMatches.length) {
+            console.log(`[AnimeVOSTFR] Séries : ${uniqueMatches.length - matchesToProcess.length} match(s) /film/ écarté(s)`);
+        }
+    }
 
     // Résolution séquentielle avec early-exit (target 2 streams directs)
     let directStreamCount = 0;
@@ -515,6 +703,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (seasonMatchText && parseInt(seasonMatchText[1]) !== Number(searchSeason) && targetEpisodes.length === 1) {
             continue;
         }
+
+        // Garde anti-faux-match : le titre réel de la fiche (h1) doit
+        // correspondre à l'œuvre (Demon Slayer ≠ film "Sibling's Bond",
+        // Great Mazinger ≠ "Goldorak contre Great Mazinger", Kamen Rider ≠
+        // "Tojima Wants to Be a Kamen Rider"). Échec → slug rejeté, suite.
+        const sheetOk = await verifySheetTitle(match.url, titles);
+        if (!sheetOk) continue;
 
         const epResults = [];
         if (isMoviePath) {
@@ -545,10 +740,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         for (const { ep, playerStreams } of epResults) {
             const epType = Number(ep) === searchEpisode ? "" : ` (Abs ${ep})`;
             playerStreams.forEach(s => {
+                // Suffixe de titre SEULEMENT si detectLang discriminant
+                // (slug avec -vf OU -vostfr seul, ou titre du match). Sinon
+                // (slug "-vf-vostfr" ambigu) : titre sans suffixe, la
+                // `language` du tab (Lecteur VF/VOSTFR) fait foi — fini les
+                // titres "- VOSTFR" sur du contenu VF.
                 if (!s.name.includes('(')) {
-                    s.name = `AnimeVOSTFR (${langSuffix})`;
+                    s.name = langSuffix ? `AnimeVOSTFR (${langSuffix})` : 'AnimeVOSTFR';
                 }
-                if (!s.title.includes(langSuffix)) {
+                if (langSuffix && !s.title.includes(langSuffix)) {
                     s.title = `${s.title}${epType} - ${langSuffix}`;
                 } else {
                     s.title = `${s.title}${epType}`;
@@ -564,7 +764,8 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     }
 
     if (streams.length === 0) {
-        console.warn(`[AnimeVOSTFR] Episode S${searchSeason}E${searchEpisode} not found (targets: ${targetEpisodes.join(', ')})`);
+        if (isMoviePath) console.warn(`[AnimeVOSTFR] Film introuvable (aucune fiche / streams)`);
+        else console.warn(`[AnimeVOSTFR] Episode S${searchSeason}E${searchEpisode} not found (targets: ${targetEpisodes.join(', ')})`);
     }
 
     // Dédupliquer les streams par URL ( VF/VOSTFR peuvent servir les mêmes sources)

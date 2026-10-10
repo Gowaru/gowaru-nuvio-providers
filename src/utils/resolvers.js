@@ -1563,13 +1563,15 @@ export async function resolveSibnet(url) {
 
 export async function resolveVidmoly(url) {
     try {
-        // Support all known vidmoly TLDs: .to, .biz, .net, .ru, .is, .me
-        // vidmoly.to is the active domain; .biz and .me are dead
+        // TLD vidmoly connus : .biz, .net, .to, .ru, .is, .me.
+        // Live 2026-10 : les iframes servent vidmoly.biz (m3u8 en clair),
+        // vidmoly.net redirige (301) vers .biz ; vidmoly.to n'a jamais été
+        // observé en production (et .me est mort).
         const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || '';
-        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.to/';
+        const originalReferer = originalDomain ? `https://${originalDomain}/` : 'https://vidmoly.biz/';
 
-        // Priority: original domain first, then to, net, ru (skip dead .biz and .me)
-        const tldVariants = ['to', 'net', 'ru', 'is'];
+        // Priorité : domaine d'origine d'abord, puis .biz vivant, puis replis
+        const tldVariants = ['biz', 'net', 'ru', 'is', 'to'];
         const domains = [url]; // Original domain first
         for (const tld of tldVariants) {
             const altUrl = url.replace(/vidmoly\.(net|to|ru|is|biz|me)/, `vidmoly.${tld}`);
@@ -1583,6 +1585,13 @@ export async function resolveVidmoly(url) {
                 const ref = fetchDomain ? `https://${fetchDomain}/` : originalReferer;
                 let res = await safeFetch(fetchUrl, { headers: { 'Referer': ref, 'Origin': ref } });
                 if (!res || !res.ok) continue;
+                // Domaine ayant réellement servi la page (après redirects :
+                // ex. .net → 301 → .biz) : le Referer servi avec le flux final
+                // s'aligne dessus, pas sur le domaine demandé.
+                const serveRefOf = (r, fallbackRef) => {
+                    const finalDomain = (r && r.url && r.url.match(/^https?:\/\/([^/]+)/)?.[1]) || '';
+                    return finalDomain ? `https://${finalDomain}/` : fallbackRef;
+                };
                 let html = await res.text();
                 // Skip if response is ad/404 page (short or contains ad scripts)
                 // But allow JWT redirect pages (contain window.location.replace) even if short
@@ -1594,7 +1603,10 @@ export async function resolveVidmoly(url) {
                 const match = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                               html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                               html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                if (match) return { url: match[1], headers: { "Referer": ref, "Origin": ref } };
+                if (match) {
+                    const serveRef = serveRefOf(res, ref);
+                    return { url: match[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                }
 
                 // Vidmoly uses JWT redirect: window.location.replace('URL?ch=1&js=JWT')
                 // Follow the redirect and try again
@@ -1608,7 +1620,10 @@ export async function resolveVidmoly(url) {
                         const match2 = html.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i) ||
                                        html.match(/sources\s*:\s*\[["']([^"']+\.(?:m3u8|mp4)[^"']*)["']\]/i) ||
                                        html.match(/["'](https?:\/\/[^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
-                        if (match2) return { url: match2[1], headers: { "Referer": ref, "Origin": ref } };
+                        if (match2) {
+                            const serveRef = serveRefOf(res, ref);
+                            return { url: match2[1], headers: { "Referer": serveRef, "Origin": serveRef } };
+                        }
                     }
                 }
             } catch (e) {}
@@ -2258,6 +2273,8 @@ const KNOWN_HOST_NAMES = [
  */
 const NEVER_CORRECT_DOMAINS = [
     'voembed.net',      // famille VidMoly (m3u8 en clair) — PAS voe
+    'vidmoly.biz',      // domaine VidMoly vivant servi dans les iframes (live 2026-10)
+    'vidmoly.net',      // 301 → vidmoly.biz (live 2026-10) — ne pas réécrire en .to
     'gn1r5n.org',       // embed "myTV" de VoirAnime
     'streamhide.to',    // gate ParkLogic — PAS streamtape
 ];
@@ -2415,6 +2432,109 @@ function correctDeformedVideoUrl(url) {
     return correctedUrl;
 }
 
+// ─── Playability Probe (verifyPlayableUrl) ────────────────────────────────────
+// Sonde de « jouabilité » avant marquage direct : certains CDN (fsvid/vidzy)
+// servent des masters HLS bien formés (tokens valides) mais répondent 403 au
+// playback selon le réseau — le lecteur reçoit alors une page 403
+// (« invalid or unplayable content »). Cette sonde vérifie que l'URL finale
+// répond réellement avant de l'exposer comme directe.
+//
+// Usage (fail-open : ne rejeter QUE les verdicts 'dead') :
+//   const verdict = await verifyPlayableUrl(s.url, s.headers, { timeoutMs: 6000 });
+//   if (verdict === 'dead') drop(s); else keep(s); // 'ok' + 'unknown' conservés
+//
+// Câblé uniquement sur frenchstream pour l'instant ; réutilisable tel quel par
+// tout autre provider (helper central, aucune dépendance provider).
+//
+// QuickJS-safe : pas de Range (strippé par le runtime), pas de setTimeout
+// (le timeout passe par safeFetch/AbortSignal.timeout), jamais de throw
+// (toute erreur réseau/timeout/exception → 'unknown').
+
+/**
+ * Lit un header de réponse quel que soit son conteneur (Headers natif avec
+ * .get(), ou objet plain issu du cache safeFetch — clés en minuscules sur
+ * les deux apps).
+ * @param {object} headers
+ * @param {string} name
+ * @returns {string}
+ */
+function getResponseHeader(headers, name) {
+    try {
+        if (!headers) return '';
+        if (typeof headers.get === 'function') {
+            return headers.get(name) || headers.get(String(name).toLowerCase()) || '';
+        }
+        const lower = String(name).toLowerCase();
+        const keys = Object.keys(headers);
+        for (let i = 0; i < keys.length; i++) {
+            if (keys[i].toLowerCase() === lower) return String(headers[keys[i]] || '');
+        }
+    } catch (e) {}
+    return '';
+}
+
+function isProbeHlsUrl(url) {
+    const u = String(url || '').toLowerCase();
+    return u.includes('.m3u8') || u.includes('/hls2/') || u.includes('/hls/');
+}
+
+/**
+ * Sonde la jouabilité d'une URL finale (master HLS ou fichier progressif).
+ *
+ * - HLS/m3u8 : GET via safeFetch (timeout 6s, avec les headers du stream dont
+ *   Referer) ; 'ok' si status 2xx ET (body contient #EXTM3U OU content-type
+ *   playlist). Échec définitif ('dead') : 403/404/410 ou body HTML d'erreur
+ *   (page d'erreur servie en 200).
+ * - MP4/MKV/autres : HEAD léger (status 2xx + content-type video/* → 'ok') ;
+ *   si HEAD non supporté (405...) ou échec technique → 'unknown' (pas d'échec).
+ *
+ * @param {string} url - URL finale à sonder
+ * @param {object} [headers] - Headers du stream (Referer/Origin inclus)
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs=6000] - Timeout par sonde
+ * @returns {Promise<'ok'|'dead'|'unknown'>} Jamais de throw.
+ */
+export async function verifyPlayableUrl(url, headers = {}, opts = {}) {
+    try {
+        if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return 'unknown';
+        const timeoutMs = opts && opts.timeoutMs > 0 ? opts.timeoutMs : 6000;
+        const reqHeaders = { ...(headers || {}) };
+
+        if (isProbeHlsUrl(url)) {
+            let res = null;
+            try {
+                res = await safeFetch(url, { headers: reqHeaders, timeout: timeoutMs });
+            } catch (e) { return 'unknown'; }
+            if (!res) return 'unknown';
+            const status = res.status;
+            if (status === 403 || status === 404 || status === 410) return 'dead';
+            if (!res.ok || status < 200 || status >= 300) return 'unknown';
+            let body = '';
+            try { body = await res.text(); } catch (e) { return 'unknown'; }
+            if (typeof body === 'string' && body.includes('#EXTM3U')) return 'ok';
+            const ctype = getResponseHeader(res.headers, 'content-type');
+            if (/m3u8|mpegurl/i.test(ctype)) return 'ok';
+            // 200 avec page HTML d'erreur (403 déguisé, stub expiré...) → mort
+            if (typeof body === 'string' && /^\s*<(!doctype|html|head|body)/i.test(body)) return 'dead';
+            return 'unknown';
+        }
+
+        // Fichiers progressifs (mp4/mkv/webm...) : HEAD léger, sans Range
+        // (strippé par le runtime Nuvio — ne jamais s'appuyer dessus).
+        let res = null;
+        try {
+            res = await safeFetch(url, { method: 'HEAD', headers: reqHeaders, timeout: timeoutMs });
+        } catch (e) { return 'unknown'; }
+        if (!res) return 'unknown';
+        const status = res.status;
+        if (status === 403 || status === 404 || status === 410) return 'dead';
+        if (!res.ok || status < 200 || status >= 300) return 'unknown';
+        const ctype = getResponseHeader(res.headers, 'content-type');
+        if (/^video\//i.test(ctype)) return 'ok';
+        return 'unknown';
+    } catch (e) { return 'unknown'; }
+}
+
 // ─── resolveStream optimizations ────────────────────────────────────────────
 
 /**
@@ -2541,10 +2661,13 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.') || urlLower.includes('vidhsareup.')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
+            urlLower.includes('lulust.') ||
             urlLower.includes('lulustream.') ||
             urlLower.includes('luluvdo.') ||
             // Miroirs/wrappers LuluStream (vérifié en live 2026-10 : le packer
-            // exposes master.m3u8 tnmr.org jouable avec Referer du site source)
+            // expose un master.m3u8 tnmr.org, mais 403 constaté même avec Referer
+            // (test 2026-10-10, 2 masters) — la résolution aboutit mais le CDN
+            // refuse ; les providers filtrent ces URLs en aval)
             urlLower.includes('livavid.') ||
             urlLower.includes('lulavid.') ||
             urlLower.includes('livastream.') ||

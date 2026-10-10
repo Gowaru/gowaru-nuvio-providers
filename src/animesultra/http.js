@@ -9,7 +9,7 @@ let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const rateLimit = createProviderRateLimiter();
-const DOMAIN = 'ww.animesultra.org';
+const DOMAIN = 'https://animesultra.com/';
 
 export const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
