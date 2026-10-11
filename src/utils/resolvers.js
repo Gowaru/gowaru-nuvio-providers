@@ -1758,6 +1758,66 @@ export async function resolveUqload(url) {
     return { url };
 }
 
+/**
+ * Décodage du player VOE « classique » (vérifié en live 2026-10 sur
+ * teresapoliticallearn.com — domaine rotatif servi par voe.sx) :
+ *
+ * La page embed contient EN PARALLÈLE :
+ *   var source='https://test-videos.co.uk/.../Big_Buck_Bunny...mp4';  ← LEURRE
+ *   <script type="application/json">["<payload encodé>"]</script>      ← vrai config
+ *
+ * Le loader (/js/loader.*.js) décode le payload via 5 transforms lues dans
+ * le bundle obfusqué (0x62159 ROT13, 0x62942 atob, 0x63107 shift-3,
+ * 0x63133 reverse, 0x63554 atob + JSON.parse) → objet avec champs :
+ *   key, request, file_code, source (master.m3u8 signé),
+ *   direct_access_url (mp4 fallback), direct_access_allowed, captions…
+ *
+ * ⚠️ Portabilité QuickJS : string ops + atob uniquement (polyfillés sur les
+ * 2 runtimes) — AUCUN crypto.subtle requis → fonctionne aussi sur NuvioTV.
+ * @returns {object|null} config décodé ou null si le format n'est pas attendu
+ */
+function decodeVoePlayerConfig(html) {
+    if (!html || html.indexOf('application/json') < 0) return null;
+    const m = html.match(/<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/);
+    if (!m) return null;
+    let payload = null;
+    try {
+        const arr = JSON.parse(m[1]);
+        if (Array.isArray(arr) && typeof arr[0] === 'string') payload = arr[0];
+        else if (typeof arr === 'string') payload = arr;
+    } catch (e) { return null; }
+    if (!payload) return null;
+
+    // Pipeline : ROT13 → base64 → shift(-3) → reverse → base64 → JSON
+    // ⚠️ Atob TOLÉRANT : le payload contient des caractères décoratifs
+    // (#&~@$%?^!*&) intercalés qui ne font PAS partie de l'alphabet base64 —
+    // atob standard (QuickJS/browser) THRO dessus ; Buffer (Node) les ignore.
+    // On strippe manuellement avant atob pour un comportement identique partout.
+    const lenientB64 = (s) => {
+        const clean = String(s || '').replace(/[^A-Za-z0-9+/=]/g, '');
+        const pad = clean.length % 4;
+        const padded = pad ? clean + '='.repeat(4 - pad) : clean;
+        return _atob(padded);
+    };
+    const rot13 = (s) => s.replace(/[a-zA-Z]/g, (c) => {
+        const base = c <= 'Z' ? 65 : 97;
+        return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+    });
+    try {
+        let s = rot13(payload);
+        s = lenientB64(s);
+        let shifted = '';
+        for (let i = 0; i < s.length; i++) shifted += String.fromCharCode(s.charCodeAt(i) - 3);
+        const reversed = shifted.split('').reverse().join('');
+        const decoded = lenientB64(reversed);
+        const obj = JSON.parse(decoded);
+        if (obj && typeof obj === 'object' && typeof obj.source === 'string' && /^https?:\/\//.test(obj.source)) {
+            return obj;
+        }
+    } catch (e) { /* pipeline non attendu → fallback */ }
+    return null;
+}
+
 export async function resolveVoe(url) {
     try {
         const res = await safeFetch(url);
@@ -1780,15 +1840,41 @@ export async function resolveVoe(url) {
             return { url };
         }
 
-        // ── Ancien player voe (script packé avec clé 'hls') ────────────────
+        // ── Redirection JS du shell voe.sx → domaine rotatif joueur classique ─
+        // (vérifié en live : /e/<code> de voe.sx = page 759 o qui fait
+        //  window.location.href = 'https://<rotating>.com/e/<code>' ; le
+        //  rotating sert la VRAIE page joueur 125 KB avec config encodée).
+        // Suivre jusqu'à 3 hops (chaines de redirections observées).
         let fetchUrl = url;
-        const redirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
-        if (redirect) {
+        for (let hop = 0; hop < 3; hop++) {
+            const redirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+            if (!redirect || redirect[1] === fetchUrl) break;
             fetchUrl = redirect[1];
             const res2 = await safeFetch(fetchUrl);
-            if (res2) html = await res2.text();
+            if (!res2) break;
+            html = await res2.text();
         }
 
+        // ── Player VOE « classique » : config encodée dans application/json ──
+        // (vérifié en live 2026-10) : source = master.m3u8 signé (t/s/e/f/node…
+        //  paramètres déjà inclus, jouable sans headers spéciaux) +
+        // direct_access_url = mp4 fallback. Le "var source=" de la page est
+        // un LEURRE Big Buck Bunny → JAMAIS l'utiliser.
+        const cfg = decodeVoePlayerConfig(html);
+        if (cfg) {
+            const directUrl = String(cfg.direct_access_url || '');
+            const masterUrl = String(cfg.source || '');
+            // Priorité au master HLS (meilleure qualité/adaptive), fallback mp4
+            const finalUrl = masterUrl || directUrl;
+            if (finalUrl && !isKnownFakeDirectUrl(finalUrl)) {
+                return { url: finalUrl, headers: { 'Referer': fetchUrl + '/' } };
+            }
+            if (directUrl && !isKnownFakeDirectUrl(directUrl)) {
+                return { url: directUrl, headers: { 'Referer': fetchUrl + '/' } };
+            }
+        }
+
+        // ── Ancien player voe (script packé avec clé 'hls') ────────────────
         if (html.includes('p,a,c,k,e,d') || html.includes('eval(function')) html = unpack(html);
 
         const match = html.match(/'hls'\s*:\s*'([^']+)'/) || 
@@ -1799,7 +1885,9 @@ export async function resolveVoe(url) {
         if (match) {
             let videoUrl = match[1] || match[0];
             if (videoUrl.includes('base64')) videoUrl = _atob(videoUrl.split(',')[1] || videoUrl);
-            if (isKnownFakeDirectUrl(videoUrl)) return { url };
+            // Garde anti-leurre : le « var source= » du player VOE sert
+            // systématiquement un Big Buck Bunny de démonstration.
+            if (videoUrl.includes('test-videos.co.uk') || isKnownFakeDirectUrl(videoUrl)) return { url };
             return { url: videoUrl, headers: { "Referer": fetchUrl } };
         }
     } catch (e) {}
@@ -2081,6 +2169,53 @@ export async function resolveVidoza(url) {
         if (match) {
             return { url: match[1], headers: { 'Referer': 'https://vidoza.net/' } };
         }
+    } catch (e) {}
+    return { url };
+}
+
+/**
+ * lecteur2.xtremestream.xyz — lecteur principal de l'embed lecteurvideo.com
+ * (section OD_FR «xtremestream», ~60-70% des liens VF, priorité showVideo=2).
+ * Structure vérifiée en live (2026-10) :
+ *   player/index.php?data={data}          → page HTML (1 MB, Referer lecteurvideo OK)
+ *     var video_id = `b069b…`             → ID de la vidéo
+ *     var m3u8_loader_url = `…/xs1.php?data=`
+ *   {m3u8_loader_url}{video_id}           → master.m3u8 DIRECT (681 o)
+ *     ⚠ Referer requis = domaine propre du player (403 sinon — anti-hotlink)
+ *     ⚠ La page HTML est ~1 MB < 1 MB? NON > 1 MB → tronquée par le runtime à
+ *       1 MB + suffixe "\n...[truncated]". Les var video_id/loader sont à
+ *       ~1 004 000 octets — sous le seuil, mais on parse le texte brut sans
+ *       jamais re-faire confiance à du JSON : safeFetch renvoie null sur
+ *       tronqué (HTML) → dans ce cas on retente une fois sans cache en
+ *       demandant le début de page ? Non : fiable car < seuil vérifié en live ;
+ *       si tronqué un jour, la regex ne matchera pas → return { url } propre.
+ */
+export async function resolveXtremeStream(url) {
+    try {
+        const origin = url.match(/^https?:\/\/[^/]+/)?.[0] || 'https://lecteur2.xtremestream.xyz';
+        const res = await safeFetch(url, {
+            headers: { 'Referer': 'https://lecteurvideo.com/' },
+            timeout: 12000,
+        });
+        if (!res) return { url };
+        const html = await res.text();
+        if (!html || html.length < 100) return { url };
+
+        const videoId = html.match(/var\s+video_id\s*=\s*[`"']([A-Za-z0-9_-]+)[`"']/)?.[1];
+        const loaderUrl = html.match(/var\s+m3u8_loader_url\s*=\s*[`"']([^`"']+)[`"']/)?.[1];
+        if (!videoId || !loaderUrl) return { url };
+
+        // Le loader exige le Referer du player lui-même (403 avec lecteurvideo)
+        const loaderFull = loaderUrl + videoId;
+        const res2 = await safeFetch(loaderFull, {
+            headers: { 'Referer': origin + '/' },
+            timeout: 12000,
+        });
+        if (!res2) return { url };
+        const manifest = await res2.text();
+        if (!manifest || !manifest.includes('#EXTM3U')) return { url };
+        // Loader → m3u8 direct : le body EST le manifest
+        return { url: loaderFull, headers: { 'Referer': origin + '/' } };
     } catch (e) {}
     return { url };
 }
@@ -2655,6 +2790,7 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
         else if (urlLower.includes('younetu.') || urlLower.includes('netu.')) result = await resolveYounetu(originalUrl);
         else if (urlLower.includes('vidoza.')) result = await resolveVidoza(originalUrl);
+        else if (urlLower.includes('xtremestream.')) result = await resolveXtremeStream(originalUrl);
         else if (urlLower.includes('sendvid.') || urlLower.includes('daisukianime')) result = await resolveSendvid(originalUrl);
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
         else if (urlLower.includes('fsvid.') || urlLower.includes('vidzy.')) result = await resolveFsvidVidzy(originalUrl);

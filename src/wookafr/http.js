@@ -165,7 +165,41 @@ export async function probeFinalUrl(url, options = {}) {
     })
     if (!res) return null
     // Drain le body pour libérer la connexion (petit read, le HEAD-like).
-    try { await res.text() } catch { /* ignore */ }
+    // FIX anti-faux-match (2026-10) : wookafr.boston répond 200 (aucune
+    // redirection) avec une page « similar series » sur les slugs inconnus
+    // (ex: /streaming/series/breaking-bad/ → 200, 79 KB, cartes d'AUTRES
+    // séries). Le check URL finale ne voit jamais de 301 → le slug fantôme
+    // validé → le provider sert la mauvaise série (ou rien quand la saison
+    // n'existe pas non plus sur la page de substitution → « épisodes ne
+    // correspondent pas »). Second garde-fou : vérifier que le TITRE de la
+    // page contient le slug demandé (le <title> d'une vraie page = le nom
+    // du show ; une page de résultat/recommandation = un nom différent).
+    try {
+      const text = await res.text()
+      const wanted = url.replace(/\/$/, '')
+      const finalUrl = (res.url || url).replace(/\/$/, '')
+      if (finalUrl !== wanted) {
+        console.log(`[Wookafr] Slug probe redirected: ${url} → ${finalUrl} (homonyme, rejeté)`)
+        return null
+      }
+      // Slug attendu depuis l'URL demandée
+      const slug = url.match(/\/([a-z0-9-]+)\/?$/i)?.[1]
+      if (slug && typeof text === 'string' && text.length > 100) {
+        const titleMatch = text.match(/<title[^>]*>([^<]+)<\/title>/i)
+        const h1Match = text.match(/<h1[^>]*>([\s\S]{0,200}?)<\/h1>/i)
+        const probe = `${titleMatch?.[1] || ''} ${h1Match?.[1] || ''}`
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+        const probeTokens = new Set(probe.split(/[^a-z0-9]+/).filter(Boolean))
+        const slugTokens = slug.split('-').filter(t => t.length > 2)
+        const allPresent = slugTokens.length > 0 && slugTokens.every(t => probeTokens.has(t))
+        if (!allPresent) {
+          console.log(`[Wookafr] Slug probe 200-mismatch: ${slug} → page « ${(titleMatch?.[1] || '').slice(0, 60)} » (slug fantôme, rejeté)`)
+          return null
+        }
+      }
+    } catch { /* body illisible → garder le verdict URL */ }
     return res.url || url
   } catch {
     return null

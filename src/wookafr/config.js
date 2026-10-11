@@ -30,10 +30,22 @@ export const SELECTORS = {
 }
 
 export const PATTERNS = {
-  EPISODE_URL: /\/episodes\/.*-saison-(\d+)-episode-(\d+)\/?$/i,
+  // URLs épisode vérifiées en live (2026-10) sur wookafr.boston :
+  //   …/episodes/squid-game-saison-3-episode-1/       (format classique)
+  //   …/episodes/squid-game-saison-3-episode-1-2/     (suffixe -2 = 2e version
+  //     de l'épisode republié — l'ancienne regex exigeait digits+fin et
+  //     échouait sur « 1-2 » → « No episodes for season 3 » → 0 stream).
+  // [1] = saison, [2] = numéro d'épisode ; le suffixe de version final est
+  // ignoré (tolérant aux -2, -3 futurs).
+  EPISODE_URL: /\/episodes\/.*-saison-(\d+)-episode-(\d+)(?:-\d+)?\/?$/i,
   SEASON_TITLE: /(\d+)/,
   IMDB_ID: /tt(\d+)/,
-  SM_PUBLIC: /sm_Public\s*=\s*\{[^}]*?url\s*:\s*["']([^"']+)["'][^}]*?nonce\s*:\s*["']([^"']+)["']/,
+  // Format actuel vérifié en live (2026-10) sur wookafr.boston : le nonce est
+  // publié en JSON strict (var sm_Public = {"url":"…","nonce":"1bde284a9f"})
+  // — l'ancienne regex exigait url: non-quoté (ancien format JS) et échouait
+  // systématiquement → "No AJAX nonce" → toutes les séries en AJAX mortes.
+  // Accepte les deux formats (JSON "key": value et JS bare key: value).
+  SM_PUBLIC: /sm_Public\s*=\s*\{[^}]*?["']?url["']?\s*:\s*["']([^"']+)["'][^}]*?["']?nonce["']?\s*:\s*["']([^"']+)["']/,
 }
 
 export const TIMEOUTS = {
@@ -87,6 +99,10 @@ export const LECTEURVIDEO_KNOWN_HOSTS = [
   'uqload.', 'vidmoly.', 'veev.', 'waaw.to', 'voe.', 'filemoon',
   'emmmmbed.com', 'wishonly.site', 'coflix.', 'oneupload.', 'vidoza.',
   'sendvid.', 'sibnet.ru', 'myvi.', 'luluvid.', 'upn.one',
+  // Hosts vérifiés en live (2026-10, squid-game E2, lecteurvideo OD_FR) :
+  // xtremestream = lecteur majeur VF (~60-70% des liens, résolveur dédié
+  // resolveXtremeStream ajouté au resolvers.js central)
+  'xtremestream.',
 ]
 
 export const ANIME_GENRE_ID = 16

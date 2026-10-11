@@ -11,7 +11,15 @@ export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const DOMAIN = 'french-stream.one';
 
-export const BASE_URLS = ['https://french-stream.one'];
+// 2026-10 : french-stream.one redirige TOUS ses chemins en 301 vers
+// french-stream.net (migration de domaine côté site). L'ancien code postait
+// ses recherches sur .one ; la 301 transformait le POST en GET sans corps →
+// réponse = page d'accueil générique (36 cartes fixes) → la recherche DLE
+// fallback ne trouvait jamais rien. .net est le domaine canonique actuel —
+// sans 301 (vérifié en live) et tous les endpoints (xfsearch, POST search,
+// engine/ajax/get_seasons.php, film_api) y répondent correctement.
+// .one est conservé en fallback multi-domain au cas où .net sature/404.
+export const BASE_URLS = ['https://french-stream.net', 'https://french-stream.one'];
 export const BASE_URL = BASE_URLS[0];
 export const GLOBAL_TIMEOUT_MS = 20000;
 
