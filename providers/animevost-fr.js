@@ -1,6 +1,6 @@
 /**
  * animevost-fr - Built from src/animevost-fr/
- * Generated: 2026-10-10T23:43:13.384793338Z
+ * Generated: 2026-10-11T00:01:08.316868284Z
  */
 var __provider = (() => {
   var __create = Object.create;
