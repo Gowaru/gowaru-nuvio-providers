@@ -31,7 +31,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | # | Provider | 🎬 Content | 🌐 Lang | 💾 Formats | 📱 App | 📺 TV | 🏷️ Ver. |
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
 | 1 | **ADKami** | 🎬📺 | FR / JA | — | ✅ | ✅ | 0.1.2 |
-| 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.58 |
+| 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.59 |
 | 3 | **AnimeSite** | 🎬📺 | FR / JA | — | ✅ | ✅ | 0.1.3 |
 | 4 | **Anime-Ultime** ¹ | 🎬📺 | VF / VOSTFR | MP4 | ✅ | ✅ | 0.0.5 |
 | 5 | **AnimeVOST.fr** | 📺 _only_ | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.2 |

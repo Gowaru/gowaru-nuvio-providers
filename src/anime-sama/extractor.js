@@ -150,22 +150,66 @@ function maxPageTitleScore(pageName, titles) {
     return best;
 }
 
-// Titre réel de la fiche : <h1> de la page catalogue (repli : <title>).
-// null si la page est un 404/soft-404 ou sans titre (= rejet du slug).
-async function fetchCatalogueTitle(slug) {
+// Fiche de l'œuvre (`catalogue/{slug}/`), lue une fois par requête :
+//  - title : <h1 id="titreOeuvre"> (repli <title>), null = 404/soft-404 ;
+//  - paths : saisons/langues réellement publiées, tirées des appels
+//    `panneauAnime("Saison 1", "saison1/vostfr");` du HTML statique. On évite
+//    ainsi de deviner (saison1-2…5, film/film2, vf) à coups de fetch aveugles.
+//    null si la fiche n'a pas pu être lue (on retombe alors sur le sondage).
+const catalogueCache = new Map();
+
+function parsePanelPaths(html) {
+    const paths = [];
+    const re = /panneauAnime\(\s*["']([^"']*)["']\s*,\s*["']([^"']+)["']\s*\)/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const p = m[2].replace(/^\/+|\/+$/g, '');
+        // Ignore le gabarit commenté `panneauAnime("nom", "url")`
+        if (!/\//.test(p) || p === 'url') continue;
+        if (!paths.includes(p)) paths.push(p);
+    }
+    return paths;
+}
+
+async function fetchCatalogue(slug) {
+    if (catalogueCache.has(slug)) return catalogueCache.get(slug);
     let html = null;
     try {
         html = await fetchText(`${BASE_URL}/catalogue/${slug}/`);
-    } catch (_) { return null; }
-    if (!html || html.length < 500 || /acc[eè]s\s+introuvable/i.test(html)) return null;
-    try {
-        const $ = cheerio.load(html);
-        const h1 = $('h1').first().text().trim();
-        if (h1) return h1;
-        const t = $('title').first().text().trim();
-        if (t) return t.split('|')[0].trim();
-    } catch (_) {}
-    return null;
+    } catch (_) { html = null; }
+    let info = { title: null, paths: null };
+    if (html && html.length >= 500 && !/acc[eè]s\s+introuvable/i.test(html)) {
+        try {
+            const $ = cheerio.load(html);
+            const h1 = ($('#titreOeuvre').first().text() || $('h1').first().text()).trim();
+            const t = $('title').first().text().trim();
+            info.title = h1 || (t ? t.split('|')[0].trim() : null);
+        } catch (_) {}
+        const paths = parsePanelPaths(html);
+        info.paths = paths.length > 0 ? paths : null;
+    }
+    catalogueCache.set(slug, info);
+    return info;
+}
+
+async function fetchCatalogueTitle(slug) {
+    return (await fetchCatalogue(slug)).title;
+}
+
+// Chemins publiés pour une saison et une langue, dans l'ordre du site :
+// `saison1/vostfr`, puis les parties `saison1-2/vostfr`, `saison1-3/vostfr`…
+function seasonPathsFor(paths, season, lang) {
+    const re = new RegExp(`^(saison${season}(?:-\\d+)?)/${lang}$`, 'i');
+    return paths.map(p => (p.match(re) || [])[1]).filter(Boolean);
+}
+
+// Langues publiées pour la saison : vostfr, puis vf et ses variantes (vf1, vf2).
+function languagesFor(paths, season, mediaType) {
+    const order = ['vostfr', 'vf', 'vf1', 'vf2'];
+    if (!paths) return ['vostfr', 'vf'];
+    const prefix = mediaType === 'movie' ? /^film\d*\// : new RegExp(`^saison${season}(?:-\\d+)?/`, 'i');
+    const found = new Set(paths.filter(p => prefix.test(p)).map(p => p.split('/').pop().toLowerCase()));
+    return order.filter(l => found.has(l));
 }
 
 // 1 fetch HTML supp. max par slug candidat : valide le titre de la fiche,
@@ -188,18 +232,28 @@ async function passesTitleGuard(slug, titles, signal, startTime) {
 
 
 
+// ─── Lecteurs (miroir de `lecteursInfos` des pages saison, refonte 10/2026) ──
+// Le site publie sur chaque page saison la table des lecteurs avec un drapeau
+// `mort` (ex. « Le lecteur Sibnet n'est plus disponible »). On en garde ici une
+// copie : nom affiché, et hôtes morts écartés avant toute résolution.
+const VOE_DOMAINS = ['voe.sx', 'teresapoliticallearn', 'megankiddifference', 'jeremyparticipantanything',
+    'jamesbornmain', 'claireguessthousand', 'derricknationtop'];
+const EARNVIDS_DOMAINS = ['smoothpre', 'morencius', 'movearnpre', 'earnvids', 'minochinos'];
+
 function getPlayerName(varName, url) {
     const u = (url || '').toLowerCase();
+    if (u.includes('vidmoly') || u.includes('ansembed')) return 'Vidmoly';
+    if (VOE_DOMAINS.some(d => u.includes(d))) return 'VOE';
+    if (EARNVIDS_DOMAINS.some(d => u.includes(d))) return 'Earnvids';
+    if (u.includes('uqload')) return 'Uqload';
+    if (u.includes('oneupload')) return 'OneUpload';
     if (u.includes('sibnet')) return 'Sibnet';
-    if (u.includes('vidmoly')) return 'Vidmoly';
-    if (u.includes('voe') || u.includes('jeremy') || u.includes('teresa')) return 'Voe';
-    if (u.includes('smoothpre')) return 'Smoothpre';
     if (u.includes('sendvid')) return 'Sendvid';
+    if (u.includes('vk.com') || u.includes('vkvideo')) return 'VK';
+    if (u.includes('dailymotion')) return 'Dailymotion';
     if (u.includes('stape') || u.includes('streamtape')) return 'Streamtape';
     if (u.includes('dood')) return 'Doodstream';
-    if (u.includes('uqload') || u.includes('oneupload')) return 'Uqload';
-    if (u.includes('ansembed')) return 'AnsEmbed';
-    if (u.includes('embed4me')) return 'Embed4Me';
+    if (/embed4me|player4me|4meplayer/.test(u)) return 'Embed4me';
     return 'Player';
 }
 
@@ -214,22 +268,32 @@ function parseUrls(jsContent) {
     return results;
 }
 
+// Vrai dès qu'un episodes.js revient bloqué par Cloudflare : les autres
+// episodes.js le seront aussi, inutile d'enchaîner recherche et sondages.
+let episodesBlocked = false;
+
 async function fetchJs(slug, seasonPath, lang) {
+    if (episodesBlocked) return null;
     const url = `${BASE_URL}/catalogue/${slug}${seasonPath ? '/' + seasonPath : ''}/${lang}/episodes.js`;
     try {
         const content = await withTimeout(fetchText(url), 8000, `fetchJs ${slug}`);
         return content || null;
-    } catch (e) { return null; }
+    } catch (e) {
+        if (/Cloudflare block/.test(e && e.message || '')) episodesBlocked = true;
+        return null;
+    }
 }
 
-// Slots morts (SPA React irrésolubles : budget brûlé pour rien) — exclus AVANT resolveStream
-const DEAD_HOSTS = /embed4me|sendvid/i;
+// Exclus AVANT resolveStream (budget brûlé pour rien) :
+//  - marqués `mort: true` par le site : sibnet, oneupload, myvi, embed4me et ses miroirs ;
+//  - sendvid : SPA React irrésoluble.
+const DEAD_HOSTS = /sibnet\.ru|oneupload\.|myvi\.|embed4me|player4me|4meplayer|sendvid/i;
 // Hosts avec résolveur dédié d'abord (évite de brûler le budget 12s sur des players génériques)
 const HOST_PRIORITY = [
-    [/sibnet/i, 0],
-    [/uqload|oneupload/i, 1],
-    [/vidmoly|ansembed/i, 2],
-    [/voe|jeremy|teresa|smoothpre/i, 3]
+    [/vidmoly|ansembed/i, 0],
+    [/uqload/i, 1],
+    [new RegExp(VOE_DOMAINS.map(d => d.replace('.', '\\.')).join('|'), 'i'), 2],
+    [new RegExp(EARNVIDS_DOMAINS.join('|'), 'i'), 3]
 ];
 function hostScore(url) {
     const u = url || '';
@@ -363,14 +427,18 @@ async function buildStreams(parsed, lang, episode, idx) {
     return playable;
 }
 
-async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes = []) {
+async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes = [], paths = null) {
     const episodesToTry = [episode, ...altEpisodes.filter(e => e !== episode)];
 
     if (mediaType === 'movie') {
         // Les films vivent sous le catalogue de la série, en /film/ OU /film2/
         // (constaté en live 09/2026 : demon-slayer/film2/, tensei-slime/film2/…
         // — /film/ renvoie une soft-404 HTML sans `var` → parseUrls vide).
-        for (const seasonPath of ['film', 'film2']) {
+        // Si la fiche liste ses films, on ne sonde que ceux-là.
+        const filmPaths = paths
+            ? paths.filter(p => new RegExp(`^film\\d*/${lang}$`, 'i').test(p)).map(p => p.split('/')[0])
+            : ['film', 'film2'];
+        for (const seasonPath of filmPaths) {
             const jsContent = await fetchJs(slug, seasonPath, lang);
             if (!jsContent) continue;
             const parsed = parseUrls(jsContent);
@@ -382,14 +450,37 @@ async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisode
     }
 
     for (const ep of episodesToTry) {
-        const result = await tryFetchEpisode(slug, lang, season, ep);
+        const result = paths
+            ? await tryFetchEpisodeFromPanels(slug, lang, seasonPathsFor(paths, season, lang), ep)
+            : await tryFetchEpisode(slug, lang, season, ep);
         if (result.length > 0) return result;
     }
     return [];
 }
 
 /**
- * Récupère les épisodes pour un slug/lang/saison.
+ * Variante guidée par la fiche : parcourt uniquement les parties publiées de la
+ * saison (`saison1`, `saison1-2`…) en cumulant leurs épisodes, sans sonder.
+ */
+async function tryFetchEpisodeFromPanels(slug, lang, seasonPaths, episode) {
+    let cumulativeEps = 0;
+    for (const seasonPath of seasonPaths) {
+        const js = await fetchJs(slug, seasonPath, lang);
+        if (!js) return []; // bloqué ou absent : les parties suivantes le seront aussi
+        const parsed = parseUrls(js);
+        if (parsed.length === 0) continue;
+        const total = parsed[0].urls.length;
+        const localEp = episode - cumulativeEps;
+        if (localEp >= 1 && localEp <= total) {
+            return buildStreams(parsed, lang, episode, localEp - 1);
+        }
+        cumulativeEps += total;
+    }
+    return [];
+}
+
+/**
+ * Récupère les épisodes pour un slug/lang/saison (fiche illisible : sondage).
  * Optimisé : fetch d'abord main+root, puis sub-seasons seulement si nécessaire.
  */
 async function tryFetchEpisode(slug, lang, season, episode) {
@@ -439,10 +530,27 @@ async function tryFetchEpisode(slug, lang, season, episode) {
     return [];
 }
 
+// Toutes les langues publiées d'un slug, jusqu'à `target` flux.
+// La fiche (1 fetch, mis en cache) dit quelles saisons/langues existent ;
+// fiche 404 → slug abandonné sans sonder episodes.js.
+async function streamsForSlug(slug, season, episode, mediaType, altEpisodes, target) {
+    const { title, paths } = await fetchCatalogue(slug);
+    if (!title) return [];
+    const streams = [];
+    for (const lang of languagesFor(paths, season, mediaType)) {
+        if (streams.length >= target) break;
+        const result = await fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes, paths);
+        streams.push(...result);
+    }
+    return streams;
+}
+
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
     const signal = options?.signal || null;
     if (isAborted(signal)) return [];
     setCurrentSignal(signal);
+    catalogueCache.clear();
+    episodesBlocked = false;
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
@@ -456,7 +564,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     const title = titles[0];
     const slug = toSlug(title);
-    const languages = ['vostfr', 'vf'];
     const streams = [];
 
     // OPTIMISATION: Traitement séquentiel des langues avec early-exit
@@ -484,33 +591,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const testedSlugs = new Set();
     if (mediaType !== 'movie' && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         testedSlugs.add(slug);
-        for (const lang of languages) {
-            if (streams.length >= TARGET_STREAMS) break;
-            const result = await fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-            streams.push(...result);
-        }
+        streams.push(...await streamsForSlug(slug, effectiveSeason, episode, mediaType, altEpisodes, TARGET_STREAMS));
+    }
+
+    if (episodesBlocked) {
+        console.warn('[Anime-Sama] episodes.js refusé par Cloudflare : arrêt (0 flux, ce n\'est pas un problème de titre ni de saison)');
+        return [];
     }
 
     // If primary failed, try slug with season suffix (e.g., "overlord-saison-3")
     if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const seasonSlug = `${slug}-saison-${effectiveSeason}`;
         testedSlugs.add(seasonSlug);
-        for (const lang of languages) {
-            if (streams.length >= TARGET_STREAMS) break;
-            const result = await fetchAndGetUrl(seasonSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-            streams.push(...result);
-        }
+        streams.push(...await streamsForSlug(seasonSlug, effectiveSeason, episode, mediaType, altEpisodes, TARGET_STREAMS));
     }
 
     // If still empty, try season numeric slug (e.g., "overlord-3")
     if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const numSlug = `${slug}-${effectiveSeason}`;
         testedSlugs.add(numSlug);
-        for (const lang of languages) {
-            if (streams.length >= TARGET_STREAMS) break;
-            const result = await fetchAndGetUrl(numSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-            streams.push(...result);
-        }
+        streams.push(...await streamsForSlug(numSlug, effectiveSeason, episode, mediaType, altEpisodes, TARGET_STREAMS));
     }
 
     // If primary failed, try search API to find correct slug (much faster than alt slug probing)
@@ -535,11 +635,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             // pour "Great Mazinger" — episodes.js valides). Titre réel exigé.
             if (!(await passesTitleGuard(fSlug, titles, signal, startTime))) continue;
 
-            for (const lang of languages) {
-                if (streams.length >= TARGET_STREAMS) break;
-                const result = await fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-                streams.push(...result);
-            }
+            streams.push(...await streamsForSlug(fSlug, effectiveSeason, episode, mediaType, altEpisodes, TARGET_STREAMS - streams.length));
         }
     }
 
@@ -564,20 +660,22 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         for (const cSlug of candidates) {
             if (streams.length >= TARGET_STREAMS) break;
             if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
-            const verified = mediaType === 'movie'
-                ? await verifySlugMovie(cSlug, signal, startTime)
-                : await verifySlugTv(cSlug, effectiveSeason, signal, startTime);
+            // Existence : d'abord la fiche (titre + saisons publiées) ; si elle
+            // ne liste rien, repli sur le sondage episodes.js d'avant.
+            const { title: ficheTitle, paths } = await fetchCatalogue(cSlug);
+            if (!ficheTitle) continue;
+            const verified = paths
+                ? languagesFor(paths, effectiveSeason, mediaType).length > 0
+                : mediaType === 'movie'
+                    ? await verifySlugMovie(cSlug, signal, startTime)
+                    : await verifySlugTv(cSlug, effectiveSeason, signal, startTime);
             if (!verified) continue;
-            // Garde anti-faux-match sur le slug vérifié gagnant (1 fetch HTML
-            // supp.) : échec → slug rejeté, on continue la passe 2 (pas
+            // Garde anti-faux-match sur le slug vérifié gagnant (fiche déjà en
+            // cache) : échec → slug rejeté, on continue la passe 2 (pas
             // d'arrêt) ; si aucun slug ne passe → 0 propre.
             if (!(await passesTitleGuard(cSlug, titles, signal, startTime))) continue;
             console.log(`[Anime-Sama] Verified slug: ${cSlug}`);
-            for (const lang of languages) {
-                if (streams.length >= TARGET_STREAMS) break;
-                const result = await fetchAndGetUrl(cSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-                streams.push(...result);
-            }
+            streams.push(...await streamsForSlug(cSlug, effectiveSeason, episode, mediaType, altEpisodes, TARGET_STREAMS - streams.length));
         }
     }
 

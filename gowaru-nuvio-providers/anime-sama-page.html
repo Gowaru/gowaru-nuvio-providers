@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="fr">
+
+	<head>
+
+		
+
+<!-- Meta Tags -->
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="robots" content="index, nofollow">
+
+<!-- Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-QK64GJ58E9"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-QK64GJ58E9');
+</script>
+
+<!-- Favicon -->
+<link rel="icon" type="image/png" sizes="32x32" href="/img/opti/icon.png?v=5">
+<link rel="apple-touch-icon" sizes="180x180" href="/img/appli/icone-apple-180.png">
+<!-- Appli (PWA) : description, couleur, icône ; installation gérée par js/defaut/appli.js -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#020306">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Anime-Sama">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="stylesheet" href="/css/appli.css?v=1792337067">
+<script defer src="/js/defaut/appli.js?v=1792420538"></script>
+
+<link rel="icon" href="/img/favicon.ico?v=4">
+
+<!-- CSS -->
+<!-- Anti-miroirs : si la page s'affiche sur un domaine qui n'est pas le nôtre, retour au vrai site (liste : /config/domaines.php) -->
+<script>(function(){var ok=["anime-sama.to","anime-sama.tv","anime-sama.si","anime-sama.org"],h=location.hostname.replace(/^www\./,'');if(ok.indexOf(h)===-1&&!/^(localhost|127\.0\.0\.1)$/.test(h)){location.replace('https://anime-sama.to'+location.pathname+location.search+location.hash);}})();</script>
+<link rel="preload" href="/fonts/outfit-latin-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/css/tailwind.css?v=1792337070">
+<link rel="stylesheet" href="/css/defaut.css?v=1792410121">
+<link rel="stylesheet" href="/css/carte.css?v=1792417874">
+<!-- Fond d'écran choisi dans le footer (appliqué avant l'affichage pour éviter un flash) -->
+<script>try{var fondSite=localStorage.getItem('fondSite');if(fondSite)document.documentElement.setAttribute('data-fond',fondSite);}catch(e){}</script>
+<!-- jQuery & JS -->
+<script src="/js/libs/jquery.min.js?v=3.7.1"></script>
+<script defer src="/js/defaut/defaut.js?v=1792337073"></script>
+<script defer src="/js/defaut/rangees.js?v=1792233832"></script>
+<!-- Cartes du site : menu ⋯ (Watchlist / Favoris / Vu) et webtoons en couleur -->
+<script defer src="/js/defaut/carte.js?v=1792420437"></script>
+<!-- Listes déroulantes du site (tri du catalogue, épisodes, lecteurs, chapitres…) -->
+<link rel="stylesheet" href="/css/deroulant.css?v=1792351032">
+<script defer src="/js/defaut/deroulant.js?v=1792410122"></script>
+<!-- La barre de défilement garde toujours sa place : la page ne se décale plus quand elle apparaît -->
+<style>html { scrollbar-gutter: stable; }</style>
+
+<!-- Enquête sur les pubs qui s'ouvrent toutes seules (inactif sauf ?debug_pub=1), avant Adcash -->
+<script src="/js/defaut/espion-pub.js?v=1792431616"></script>
+<!-- Adcash -->
+<script id="aclib" type="text/javascript" async src="//acscdn.com/script/aclib.js"></script>
+
+<!-- NAV BAR -->
+<nav class="asn-navbar">
+    <!-- Menu burger mobile -->
+    <button class="asn-burger">
+        <svg class="w-6 h-6" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+            <path d="M0 3h20v2H0V3zm0 6h20v2H0V9zm0 6h20v2H0v-2z"></path>
+        </svg>
+    </button>
+
+    <!-- Searchbar mobile -->
+    <div class="asn-mobile-search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M9 9a2 2 0 114 0 2 2 0 01-4 0z" />
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a4 4 0 00-3.446 6.032l-2.261 2.26a1 1 0 101.414 1.415l2.261-2.261A4 4 0 1011 5z" clip-rule="evenodd" />
+        </svg>
+        <input name="search_text" type="search" placeholder="Rechercher..." autocomplete="off" spellcheck="false"/>
+    </div>
+    <!-- Mobile Results (outside search box) -->
+    <div id="asn-result-mobile"></div>
+
+    <!-- Logo -->
+    <a href="/" class="asn-logo">
+        <img class="asn-logo-desktop" src="/img/opti/logo_banniere.webp" alt="Anime-Sama"/>
+        <img class="asn-logo-mobile" src="/img/opti/logo.webp" alt="Anime-Sama"/>
+    </a>
+
+    <!-- Donate -->
+    <a href="https://www.paypal.com/donate/?hosted_button_id=3FBNLMGT3JAJ2" class="asn-donate-btn">
+        <img src="/img/opti/flag_pal.webp" alt="PayPal"/>
+    </a>
+
+    <!-- Social Discord -->
+    <a href="https://discord.gg/mKbYYbmxY8" class="asn-social-link">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" class="bi bi-discord" viewBox="0 0 16 16">
+            <path d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612"/>
+        </svg>
+    </a>
+
+    <!-- Social X 
+    <a href="https://x.com/anime_samafr" class="asn-social-link">
+        <svg viewBox="0 0 1200 1227" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M714.163 519.284L1160.89 0H1055.03L667.137 450.887L357.328 0H0L468.492 681.821L0 1226.37H105.866L515.491 750.218L842.672 1226.37H1200L714.137 519.284H714.163ZM569.165 687.828L521.697 619.934L144.011 79.6944H306.615L611.412 515.685L658.88 583.579L1055.08 1150.3H892.476L569.165 687.854V687.828Z" fill="currentColor"/>
+        </svg>
+    </a>-->
+
+    <!-- Desktop Navigation -->
+    <div class="asn-nav-desktop">
+        <!-- Search -->
+        <div class="asn-desktop-search">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M9 9a2 2 0 114 0 2 2 0 01-4 0z" />
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a4 4 0 00-3.446 6.032l-2.261 2.26a1 1 0 101.414 1.415l2.261-2.261A4 4 0 1011 5z" clip-rule="evenodd" />
+            </svg>
+            <input name="search_text" type="search" placeholder="Rechercher une œuvre..." autocomplete="off" spellcheck="false"/>
+            <div id="asn-result-desktop"></div>
+        </div>
+
+        <!-- Catalogue -->
+        <a href="/catalogue" class="asn-nav-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
+            </svg>
+            <span>Catalogue</span>
+        </a>
+
+        <!-- Planning -->
+        <a href="/planning" class="asn-nav-link">
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+				<path d="M12.75 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM7.5 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM8.25 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM9.75 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM10.5 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM12.75 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM14.25 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM15 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM16.5 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM15 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM16.5 13.5a.75.75 0 100-1.5.75.75 0 000 1.5z" />
+				<path fill-rule="evenodd" d="M6.75 2.25A.75.75 0 017.5 3v1.5h9V3A.75.75 0 0118 3v1.5h.75a3 3 0 013 3v11.25a3 3 0 01-3 3H5.25a3 3 0 01-3-3V7.5a3 3 0 013-3H6V3a.75.75 0 01.75-.75zm13.5 9a1.5 1.5 0 00-1.5-1.5H5.25a1.5 1.5 0 00-1.5 1.5v7.5a1.5 1.5 0 001.5 1.5h13.5a1.5 1.5 0 001.5-1.5v-7.5z" clip-rule="evenodd" />
+			</svg>
+            <span>Planning</span>
+        </a>
+
+        <!-- Aide -->
+        <a href="/aide" class="asn-nav-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path fill-rule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12Zm11.378-3.917c-.89-.777-2.366-.777-3.255 0a.75.75 0 0 1-.988-1.129c1.454-1.272 3.776-1.272 5.23 0 1.513 1.324 1.513 3.518 0 4.842a3.75 3.75 0 0 1-.837.552c-.676.328-1.028.774-1.028 1.152v.75a.75.75 0 0 1-1.5 0v-.75c0-1.279 1.06-2.107 1.875-2.502.182-.088.351-.199.503-.331.83-.727.83-1.857 0-2.584ZM12 18a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd" />
+            </svg>
+            <span>Aide</span>
+        </a>
+
+        <!-- Profil -->
+        <a href="/profil" class="asn-nav-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-6-3a2 2 0 11-4 0 2 2 0 014 0zm-2 4a5 5 0 00-4.546 2.916A5.986 5.986 0 0010 16a5.986 5.986 0 004.546-2.084A5 5 0 0010 11z" clip-rule="evenodd" />
+            </svg>
+            <span>Profil (Déconnecté)</span>        </a>
+    </div>
+</nav>
+
+<!-- MOBILE MENU DRAWER -->
+<div class="asn-mobile-menu">
+    <div class="asn-menu-backdrop"></div>
+    
+    <nav class="asn-menu-panel">
+        <div class="asn-menu-nav">
+            <a href="/catalogue">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
+                </svg>
+                <span>Catalogue</span>
+            </a>
+            <a href="/planning">
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+					<path d="M12.75 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM7.5 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM8.25 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM9.75 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM10.5 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM12.75 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM14.25 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM15 17.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM16.5 15.75a.75.75 0 100-1.5.75.75 0 000 1.5zM15 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM16.5 13.5a.75.75 0 100-1.5.75.75 0 000 1.5z" />
+					<path fill-rule="evenodd" d="M6.75 2.25A.75.75 0 017.5 3v1.5h9V3A.75.75 0 0118 3v1.5h.75a3 3 0 013 3v11.25a3 3 0 01-3 3H5.25a3 3 0 01-3-3V7.5a3 3 0 013-3H6V3a.75.75 0 01.75-.75zm13.5 9a1.5 1.5 0 00-1.5-1.5H5.25a1.5 1.5 0 00-1.5 1.5v7.5a1.5 1.5 0 001.5 1.5h13.5a1.5 1.5 0 001.5-1.5v-7.5z" clip-rule="evenodd" />
+				</svg>
+                <span>Planning</span>
+            </a>
+            <a href="/aide">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                    <path fill-rule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12Zm11.378-3.917c-.89-.777-2.366-.777-3.255 0a.75.75 0 0 1-.988-1.129c1.454-1.272 3.776-1.272 5.23 0 1.513 1.324 1.513 3.518 0 4.842a3.75 3.75 0 0 1-.837.552c-.676.328-1.028.774-1.028 1.152v.75a.75.75 0 0 1-1.5 0v-.75c0-1.279 1.06-2.107 1.875-2.502.182-.088.351-.199.503-.331.83-.727.83-1.857 0-2.584ZM12 18a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd" />
+                </svg>
+                <span>Aide</span>
+            </a>
+
+            <a href="https://discord.gg/mKbYYbmxY8">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" class="bi bi-discord" viewBox="0 0 16 16">
+                    <path d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612"/>
+                </svg>
+                <span>Discord</span>
+            </a>
+            
+            <!-- X
+            <a href="https://x.com/anime_samafr">
+                <svg viewBox="0 0 1200 1227" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M714.163 519.284L1160.89 0H1055.03L667.137 450.887L357.328 0H0L468.492 681.821L0 1226.37H105.866L515.491 750.218L842.672 1226.37H1200L714.137 519.284H714.163ZM569.165 687.828L521.697 619.934L144.011 79.6944H306.615L611.412 515.685L658.88 583.579L1055.08 1150.3H892.476L569.165 687.854V687.828Z" fill="currentColor"/>
+                </svg>
+                <span>X</span>
+            </a>-->
+
+            <a href="/profil">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-6-3a2 2 0 11-4 0 2 2 0 014 0zm-2 4a5 5 0 00-4.546 2.916A5.986 5.986 0 0010 16a5.986 5.986 0 004.546-2.084A5 5 0 0010 11z" clip-rule="evenodd" />
+                </svg>
+                <span>Profil (Déconnecté)</span>            </a>
+        </div>
+    </nav>
+</div>
+
+<!-- Scroll to Top Button -->
+<div style="z-index:300;" id="scrollProgressWrapper">
+    <svg id="scrollProgressSvg" width="60" height="60" viewBox="0 0 60 60" class="absolute top-0 left-0 z-10" style="opacity: 1; transition: opacity 0.3s ease; pointer-events: none;">
+        <circle cx="30" cy="30" r="26" stroke="#0c4a6e" stroke-width="4" fill="none" stroke-linecap="round" />
+    </svg>
+
+	<button onclick="topFunction()" id="topBtn" style="background: rgba(39, 56, 70, 0.3);" class="pointer-events-auto rounded-full p-2 w-12 h-12 flex items-center justify-center hover:opacity-80 transition-all duration-200 z-20 relative">
+		<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-black" viewBox="0 0 20 20" fill="currentColor">
+		<path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+		</svg>
+	</button>
+</div>
+		<meta name="keywords" content="Twin Star Exorcists, Sousei no Onmyouji, Sosei no Onmyoji, Saison 1, Saison 2, Saison 3, Saison 4, Saison 5, Saison 6, Saison 7, Saison 8, Saison 9, Saison 10, Film, OAV, VOSTFR, VF, Scans, anime-sama, anime, scan, anime sama, vostfr, vf, streaming, streaming vostfr, streaming vf, sans pubs, streaming sans pubs, streaming scan">
+		<meta property="og:image" content="https://raw.githubusercontent.com/Anime-Sama/IMG/img/contenu/twin-star-exorcists.jpg"/>
+		<meta property="og:image:width" content="800">
+		<meta property="og:image:height" content="450">
+		<meta property="og:image:type" content="image/jpeg"/>
+		<meta name="description" content="Twin Star Exorcists - Saison 1 | Anime-Sama - Streaming et catalogage d'animes et scans.">
+		<title>Twin Star Exorcists - Saison 1 | Anime-Sama - Streaming et catalogage d'animes et scans.</title>
+		<script>$(document).ready(function(){$("#avOeuvre").html("Saison 1");});</script>
+		<link rel="canonical" href="https://anime-sama.fr/" />
+
+	</head>
+
+	<body>
+
+		<div id="blocEntier" class="grid grid-cols-8 pb-16">
+
+	<div id="sousBlocLeft" style="margin-top: 600px; margin-left: 20px;" class="hidden lg:block">
+		<div id="bannLeft" class="ad-container">
+		<span class="ad-label">Publicité</span>
+			<a href="https://korbo.fr/jeux/animedle?utm_source=anime-sama&utm_medium=banniere&utm_campaign=animedle-sky" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/korbo_animedle_skyscraper.png" alt="Korbo - Skyscraper Animedle" loading="lazy" style="max-width:100%; height:auto; border-radius:6px;"></a>
+			<div class="ad-content"><script type="text/javascript">aclib.runBanner({zoneId: '8653010',});</script></div>
+			<a href="https://www.eneba.com/fr/?af_id=Leynoor&currency=EUR&region=global" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/eneba_skyscraper.jpg" alt="Eneba - Jeux moins chers" loading="lazy" style="max-width:100%; height:auto; border-radius:6px;"></a>
+		</div>
+	</div>
+
+	<div id="sousBlocMiddle" class="col-span-8 mx-3 lg:col-span-6 lg:mx-0 mt-6 z-20"><!-- liste épisodes -->
+<script type="text/javascript" src='episodes.js?filever=7010' defer></script>
+<!-- script vidéo -->
+<script defer src="/js/contenu/videos.js?v=1792492832"></script>
+<script defer src="/js/contenu/lecteur.js?v=1792579199"></script>
+
+<div class="ct-page">
+	<link rel="stylesheet" href="/css/contenu.css?v=1792579201">
+
+<div class="ct-tete">
+    <!-- Toute la bannière ramène à la fiche de l'œuvre -->
+    <a href="/catalogue/twin-star-exorcists/" class="ct-banniere-lien" aria-label="Fiche de l’œuvre"><img id="imgOeuvre" class="ct-banniere" src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/contenu/twin-star-exorcists.jpg" alt="Twin Star Exorcists" fetchpriority="high" decoding="async"></a>
+    <div class="ct-tete-contenu">
+        <a href="/catalogue/twin-star-exorcists/" class="ct-retour">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5"/></svg>
+            Fiche de l’œuvre
+        </a>
+        <h3 id="titreOeuvre" class="ct-titre">Twin Star Exorcists</h3>
+        <h2 id="avOeuvre" class="ct-saison"></h2>
+    </div>
+</div>
+
+<div class="ct-choix">
+        <label class="ct-select-saison">
+        <span class="ct-etiquette">Saison</span>
+        <select onchange="if (this.value) location.href = this.value;" aria-label="Changer de saison">
+                        <option value="/catalogue/twin-star-exorcists/saison1/vostfr/" selected>Saison 1</option>
+                        <option value="/catalogue/twin-star-exorcists/scan/vf/">Scans</option>
+                    </select>
+    </label>
+    
+    <div class="ct-langues" role="group" aria-label="Langue">
+                <a href="../vostfr" id="switchVOSTFR" class="ct-langue ct-langue-active" aria-current="page">
+            <img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/flag_jp.png" alt="" width="22" height="15">            <span>VOSTFR</span>
+        </a>
+            </div>
+</div>
+
+<p id="messagePage" class="ct-message"></p>
+<p id="ctLangueAbsente" class="ct-message ct-langue-absente" hidden></p>
+<script>
+/* Arrivé ici depuis une autre saison regardée dans une langue que cette saison n'a pas encore */
+(function () {
+    var m = /^#sans-([a-z0-9]+)$/.exec(location.hash);
+    if (!m) return;
+    var noms = {"vostfr":"VOSTFR","vf":"VF","vf1":"VF1","vf2":"VF2","va":"VA","vj":"VJ","var":"VAR","vkr":"VKR","vcn":"VCN","vqc":"VQC"};
+    var voulue = noms[m[1]] || m[1].toUpperCase();
+    var ici = "VOSTFR";
+    var p = document.getElementById('ctLangueAbsente');
+    p.textContent = 'Cette saison n’est pas encore disponible en ' + voulue + ' : elle est affichée en ' + ici + '.';
+    p.hidden = false;
+    history.replaceState(null, '', location.pathname + location.search);
+})();
+</script>
+<script>var ctSaisonSuivante = null;</script>
+<script>
+var languesDispo = ["vostfr"];
+var lecteursInfos = {"ansembed.net":{"nom":"Vidmoly","pub":1,"hd":true},"vidmoly.to":{"nom":"Vidmoly","pub":1,"hd":true},"vidmoly.net":{"nom":"Vidmoly","pub":1,"hd":true},"vidmoly.biz":{"nom":"Vidmoly","pub":1,"hd":true},"smoothpre.com":{"nom":"Earnvids","pub":2,"hd":true},"morencius.com":{"nom":"Earnvids","pub":2,"hd":true},"movearnpre.com":{"nom":"Earnvids","pub":2,"hd":true},"earnvids.com":{"nom":"Earnvids","pub":2,"hd":true},"voe.sx":{"nom":"VOE","pub":2,"hd":false},"teresapoliticallearn.com":{"nom":"VOE","pub":2,"hd":false},"megankiddifference.com":{"nom":"VOE","pub":2,"hd":false},"jeremyparticipantanything.com":{"nom":"VOE","pub":2,"hd":false},"jamesbornmain.com":{"nom":"VOE","pub":2,"hd":false},"claireguessthousand.com":{"nom":"VOE","pub":2,"hd":false},"derricknationtop.com":{"nom":"VOE","pub":2,"hd":false},"sendvid.com":{"nom":"Sendvid","pub":0,"hd":false},"sibnet.ru":{"nom":"Sibnet","pub":0,"hd":false,"mort":true},"uqload.vc":{"nom":"Uqload","pub":1,"hd":true},"oneupload.to":{"nom":"OneUpload","pub":2,"hd":false,"mort":true},"vk.com":{"nom":"VK","pub":0,"hd":true},"vkvideo.ru":{"nom":"VK","pub":0,"hd":true},"dailymotion.com":{"nom":"Dailymotion","pub":0,"hd":true},"youtube.com":{"nom":"YouTube","pub":0,"hd":true},"minochinos.com":{"nom":"Earnvids","pub":1,"hd":true},"embed4me.com":{"nom":"Embed4me","pub":2,"hd":true,"mort":true},"player4me.com":{"nom":"Embed4me","pub":2,"hd":true,"mort":true},"4meplayer.com":{"nom":"Embed4me","pub":2,"hd":true,"mort":true},"drive.google.com":{"nom":"Google Drive"},"ok.ru":{"nom":"OK.ru"},"yourupload.com":{"nom":"YourUpload"},"uptostream.com":{"nom":"Uptostream"},"myvi.top":{"nom":"MyVi","pub":0,"hd":false,"mort":true},"player.vimeo.com":{"nom":"Vimeo"},"playtube.ws":{"nom":"Playtube"},"anime-sama.fr":{"nom":"Anime-Sama"},"animationdigitalnetwork.fr":{"nom":"ADN"}};
+</script>
+
+<!-- Choix de l'épisode et du lecteur -->
+<div class="ct-barre">
+	<label class="ct-champ" title="Double-clic (ou appui long sur téléphone) pour taper directement un numéro">
+		<span class="ct-etiquette">Épisode</span>
+		<select ontouchstart="handleTouchStart(event);" ondblclick="createInputField();" onchange="selectEpisode();" id="selectEpisodes" class="scrollBarStyled"></select>
+	</label>
+	<label class="ct-champ">
+		<span class="ct-etiquette">Lecteur</span>
+		<select onchange="selectLecteur();" id="selectLecteurs" class="scrollBarStyled"></select>
+	</label>
+	<span class="ct-lecteur-infos" id="ctLecteurInfos"></span>
+	<a id="printLastEpisode" class="ct-reprise"><b>Reprise :</b> <i id="savedEpisodeId"></i></a>
+	<button type="button" class="ct-bouton ct-cinema-btn" id="ctCinema" title="Mode cinéma (touche C)">
+		<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/></svg>
+		<span>Cinéma</span>
+	</button>
+</div>
+
+<!-- Annonces -->
+<div class="ct-annonces">
+	<p class="ct-annonce">
+		<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"/></svg>
+		<span>Le lecteur <b>Sibnet</b> n'est plus disponible, le remplacement du lecteur prendra quelque temps.</span>
+	</p>
+	<p class="ct-annonce ct-annonce-pub" id="ctAnnoncePub" hidden>
+		<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.6" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z"/></svg>
+		<span>Les pubs vous empêchent de regarder ? Utilisez le navigateur <a class="ct-lien-brave" href="https://brave.com/fr/download/" target="_blank" rel="noopener">Brave</a> ou l'extension <a class="ct-lien-ublock" href="https://ublockorigin.com/fr" target="_blank" rel="noopener">uBlock Origin</a>.</span>
+		<button type="button" class="ct-annonce-fermer" aria-label="Fermer ce message">&times;</button>
+	</p>
+</div>
+
+<!-- Navigation -->
+<div class="ct-nav ct-nav-video">
+	<button onclick="prevEp();" id="prevEpisode" class="ct-nav-btn" type="button" title="Épisode précédent (touche P)">
+		<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5"/></svg>
+		<span>Précédent</span>
+	</button>
+	<div class="ct-nav-milieu">
+		<span id="ctEpisodeActuel" class="ct-nav-actuel"></span>
+		<button onclick="lastEp();" id="lastEpisode" class="ct-nav-dernier" type="button">Dernier épisode</button>
+		<a id="ctSaisonSuivante" class="ct-nav-saison" href="#" hidden></a>
+	</div>
+	<button onclick="nextEp();" id="nextEpisode" class="ct-nav-btn ct-nav-suivant" type="button" title="Épisode suivant (touche N)">
+		<span>Suivant</span>
+		<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5"/></svg>
+	</button>
+</div>
+
+<!-- Vidéo -->
+<div class="ct-lecteur">
+	<button type="button" class="ct-cinema-fermer" aria-label="Quitter le mode cinéma">&times;</button>
+	<iframe id="playerDF" src="" onload="this.onload=null;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+	<img id="msgErrorEp" class="hidden" src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/erreur_videos.jpg" alt="Épisode indisponible"/>
+</div>
+
+<!-- Tous les épisodes -->
+<section class="ct-episodes" hidden>
+	<h2 class="ct-h2">Épisodes <span class="ct-h2-detail" id="ctNbEpisodes"></span></h2>
+	<div id="ctGrille" class="ct-grille scrollBarStyled"></div>
+</section>
+
+	<script>
+	$(document).ready(function(){
+		//check si episode existe
+		if(typeof eps1 === 'undefined'){$('#msgErrorEp').show();$('#playerDF').hide();}
+		resetListe();
+		finirListe(1);
+	});
+	</script>
+</div>
+<div id="blocBottom" class="flex flex-col items-center justify-center gap-4 mt-10">
+			<p class="text-sm text-white text-center font-medium opacity-50 pb-2">Cliquer sur une pub est le meilleur moyen de nous soutenir.</p>
+			<div id="bannBot" class="ad-container">
+				<span class="ad-label">Publicité</span>
+					<a href="https://korbo.fr/jeux/animedle?utm_source=anime-sama&utm_medium=banniere&utm_campaign=animedle-lb" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/korbo_animedle_leaderboard.png" alt="Korbo - Leaderboard Animedle" width="728" height="90" loading="lazy" style="max-width:100%; height:auto; border-radius:6px;"></a>
+				<span class="ad-label mt-2">Publicité</span>
+					<a href="https://www.eneba.com/fr/?af_id=Leynoor&currency=EUR&region=global" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/eneba_leaderboard.jpg" alt="Eneba - Jeux moins chers" width="728" height="90" loading="lazy" style="max-width:100%; height:auto; border-radius:6px;"></a>
+				<span class="ad-label mt-2">Publicité</span>
+					<div class="ad-content flex items-center justify-center mt-2"><script type="text/javascript">aclib.runBanner({zoneId: '8653014',});</script></div>
+			</div>
+			<div id="squBot" style="margin-top:5px;" class="ad-container">
+				<span class="ad-label">Publicité</span>
+				<div class="ad-content sm:inline-flex items-center justify-center pt-1">
+					<a href="https://korbo.fr/?utm_source=anime-sama&utm_medium=banniere&utm_campaign=liste-sq" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/korbo_liste_carre.png" alt="Korbo - Square liste" loading="lazy" width="300" height="300" style="max-width:100%; height:auto; border-radius:6px;"></a>
+					<script async data-cfasync="false" data-size="300x250" data-category="common" data-id="dl-banner-300x250" data-zone="7809940" src="//a-zzz.com/btag.min.js"></script>
+					<a href="https://www.eneba.com/fr/?af_id=Leynoor&currency=EUR&region=global" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/eneba_square.jpg" alt="Eneba - Jeux moins chers" loading="lazy" width="300" height="300" style="max-width:100%; height:auto; border-radius:6px;"></a>
+					<div><script type="text/javascript">aclib.runBanner({zoneId: '8653002',});</script></div>
+				</div>
+			</div>
+		</div>
+
+	</div>
+	
+	<div id="sousBlocRight" style="margin-top: 600px; margin-left: 30px;" class="hidden lg:block">
+		<div id="bannRight" class="ad-container">
+			<span class="ad-label">Publicité</span>
+			<a href="https://korbo.fr/jeux/blind-test?utm_source=anime-sama&utm_medium=banniere&utm_campaign=blindtest-sky" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/korbo_blindtest_skyscraper.png" alt="Korbo - Skyscraper Blindtest" loading="lazy" style="max-width:100%; height:auto; border-radius:6px;"></a>
+			<div class="ad-content"><script type="text/javascript">aclib.runBanner({zoneId: '8653006',});</script></div>
+			<a href="https://www.eneba.com/fr/?af_id=Leynoor&currency=EUR&region=global" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Anime-Sama/IMG@img/autres/eneba_skyscraper.jpg" alt="Eneba - Jeux moins chers" loading="lazy" style="max-width:100%; height:auto; border-radius:6px;"></a>
+		</div>
+	</div>
+
+	<!-- Bandeau de nuit (3h–6h, heure de l'appareil) : prévient que des pubs plus envahissantes tournent pendant ce créneau.
+	     Même famille que les autres bandeaux du site (raccourci écran d'accueil, annonces). -->
+	<div id="bandeau-pubs-nuit" role="status" hidden>
+		<div class="bpn-contenu">
+			<span class="bpn-icone" aria-hidden="true">
+				<svg viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M9.528 1.718a.75.75 0 0 1 .162.819A8.97 8.97 0 0 0 9 6a9 9 0 0 0 9 9 8.97 8.97 0 0 0 3.463-.69.75.75 0 0 1 .981.98 10.503 10.503 0 0 1-9.694 6.46c-5.799 0-10.5-4.7-10.5-10.5 0-4.368 2.667-8.112 6.46-9.694a.75.75 0 0 1 .818.162Z" clip-rule="evenodd"/></svg>
+			</span>
+			<p class="bpn-texte">
+				<strong>Période creuse de nuit · 3h – 6h</strong>
+				<span>Quelques pubs plus envahissantes s'affichent pendant ce créneau pour financer le site. Un bloqueur de pubs les retire.</span>
+			</p>
+			<span class="bpn-compteur" aria-hidden="true"></span>
+			<button type="button" class="bpn-fermer" aria-label="Fermer" title="Fermer">
+				<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg>
+			</button>
+		</div>
+	</div>
+
+	<style>
+	#bandeau-pubs-nuit {
+		position: fixed; left: 0; right: 0; bottom: 14px; z-index: 99999;
+		display: flex; justify-content: center;
+		padding: 0 14px;
+		pointer-events: none;
+		transition: opacity .35s ease, transform .35s ease;
+	}
+	#bandeau-pubs-nuit[hidden] { display: none; }
+	#bandeau-pubs-nuit.bpn-sortie { opacity: 0; transform: translateY(20px); }
+	#bandeau-pubs-nuit .bpn-contenu {
+		pointer-events: auto;
+		display: flex; align-items: center; gap: .85rem;
+		width: 100%; max-width: 760px;
+		padding: .85rem 1rem;
+		border-radius: 14px;
+		border: 1px solid rgba(245, 158, 11, .28);
+		background:
+			radial-gradient(120% 160% at 0% 0%, rgba(245, 158, 11, .10), transparent 55%),
+			rgba(11, 20, 36, .96);
+		box-shadow: 0 14px 40px rgba(0, 0, 0, .55);
+		color: #cbd5e1;
+		font-size: .85rem; line-height: 1.45;
+	}
+	#bandeau-pubs-nuit .bpn-icone {
+		flex: 0 0 auto;
+		display: flex; align-items: center; justify-content: center;
+		width: 38px; height: 38px;
+		border-radius: 10px;
+		background: rgba(245, 158, 11, .14);
+		color: #fbbf24;
+	}
+	#bandeau-pubs-nuit .bpn-icone svg { width: 20px; height: 20px; }
+	#bandeau-pubs-nuit .bpn-texte { margin: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+	#bandeau-pubs-nuit strong { color: #fde68a; font-weight: 800; }
+	#bandeau-pubs-nuit .bpn-compteur {
+		flex: 0 0 auto;
+		min-width: 2.2rem;
+		padding: .15rem .45rem;
+		border-radius: 999px;
+		background: rgba(148, 163, 184, .12);
+		color: #94a3b8;
+		font-size: .72rem; font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		text-align: center;
+		user-select: none;
+	}
+	#bandeau-pubs-nuit .bpn-fermer {
+		flex: 0 0 auto;
+		width: 28px; height: 28px; padding: 5px;
+		border: none; border-radius: 7px;
+		background: none; color: #7f9bb3;
+		cursor: pointer;
+	}
+	#bandeau-pubs-nuit .bpn-fermer:hover { color: #ffffff; background: rgba(255, 255, 255, .08); }
+	#bandeau-pubs-nuit .bpn-fermer svg { width: 100%; height: 100%; display: block; }
+	@media (max-width: 600px) {
+		#bandeau-pubs-nuit { bottom: 10px; padding: 0 10px; }
+		#bandeau-pubs-nuit .bpn-contenu { gap: .6rem; padding: .7rem .75rem; font-size: .78rem; }
+		#bandeau-pubs-nuit .bpn-icone { width: 32px; height: 32px; }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		#bandeau-pubs-nuit { transition: none; }
+	}
+	</style>
+
+	<script>
+		
+	(function () {
+		var HEURE_DEBUT = 3;
+		var HEURE_FIN   = 6;
+		var DUREE       = 10;   // secondes avant fermeture automatique
+
+		// Heure LOCALE du visiteur, selon les réglages de son appareil
+		var h = new Date().getHours();
+		if (h < HEURE_DEBUT || h >= HEURE_FIN) return;
+
+		// --- Bandeau ---
+		var b = document.getElementById('bandeau-pubs-nuit');
+		if (b && !sessionStorage.getItem('bpn-ferme')) {
+			b.hidden = false;
+
+			var compteur = b.querySelector('.bpn-compteur');
+			var restant  = DUREE;
+			var tic;
+
+			function fermer(memoriser) {
+				clearInterval(tic);
+				if (memoriser) sessionStorage.setItem('bpn-ferme', '1');
+				b.classList.add('bpn-sortie');
+				setTimeout(function () { b.remove(); }, 400);
+			}
+
+			function tick() {
+				restant--;
+				if (restant <= 0) { fermer(true); return; }
+				compteur.textContent = restant + ' s';
+			}
+
+			compteur.textContent = restant + ' s';
+			tic = setInterval(tick, 1000);
+
+			// Fermeture manuelle : mémorisée pour toute la session
+			b.querySelector('.bpn-fermer').addEventListener('click', function () {
+				fermer(true);
+			});
+
+			// On met en pause si le visiteur survole ou touche le bandeau
+			b.addEventListener('mouseenter', function () { clearInterval(tic); });
+			b.addEventListener('mouseleave', function () {
+				clearInterval(tic);
+				tic = setInterval(tick, 1000);
+			});
+		}
+
+		// --- Scripts pop, une seule fois, après le chargement complet ---
+		if (window.__popsCharges) return;
+		window.__popsCharges = true;
+
+		window.addEventListener('load', function () {
+			setTimeout(function () {
+				var s1 = document.createElement('script');
+				s1.dataset.zone = '11435645';
+				s1.src = 'https://llvpn.com/tag.min.js';
+				document.body.appendChild(s1);
+			}, 1500);
+		});
+	})();
+	</script>
+
+</div>
+		<script>
+		$(document).ready(function(){
+			/*
+			resetListe(); toujours au debut en premier
+			creerListe(debut, fin);newSP(special); on en met autant qu'on veut
+			creerListe(debut, fin);newSP(special); on en met autant qu'on veut
+			finirListe(debut de la fin);
+			*/
+		});
+		</script>
+	
+	<script>window.__CF$cv$params={r:'a5173f242e73f52a',t:'MTc5MzE2MjI2MQ==',u:'01a180ccb2b875969e3c0c4f306dc881',ut:'YNvWm6b5wzT8_TwSr74zfmAYByKtu507qg1xLJdC1j0-1793162261-1.2.1.1-SYajKKPdnZXxsvN1Z5OwqOZalmTuMPXdVf.Ohyej6gEIOP.ffBqTJDcexqlrkAhLzMrYWR18NcRyJvjeaMXjZDTRQrdQmKQUWN_U6ppO3VM',i:60};(function(){if(!document.body)return;var s=document.createElement('script');s.src='/cdn-cgi/challenge-platform/scripts/precursor/main.js';document.head.appendChild(s);})();</script></body>
+
+	<footer>
+		<footer class="asn-footer" role="contentinfo" aria-label="Pied de page site">
+  <div class="container">
+    <!-- Colonne 1 : Qui sommes-nous -->
+    <div class="col-about">
+      <h4>Qui sommes-nous</h4>
+      <p>Anime-Sama est un site de catalogue et de référencement d'animation APAC. Navigation optimisée, publicités réduites et fiches organisées pour faciliter vos recherches.</p>
+      <p class="legal">Anime-Sama n'héberge pas les vidéos. Pour toute réclamation liée au droit d'auteur, consultez la page DMCA ou contactez la plateforme d'hébergement concernée.</p>
+    </div>
+
+    <!-- Colonne 2 : Liens utiles -->
+    <div class="col-links">
+      <h4>Liens utiles</h4>
+      <ul class="links" aria-label="Liens utiles">
+        <li><a href="/catalogue">Catalogue</a></li>
+        <li><a href="/planning">Planning des sorties</a></li>
+        <li><a href="/aide">Centre d'aide</a></li>
+        <li><a href="/aide/#dmca">DMCA & signalements</a></li>
+        <li><a href="/profil">Mon profil</a></li>
+      </ul>
+    </div>
+
+    <!-- Colonne 3 : Soutien -->
+    <div class="col-support">
+      <h4>Soutenir les causes</h4>
+
+      <ul class="links" aria-label="Soutien les causes">
+        <li>
+          <a href="https://www.paypal.com/donate/?hosted_button_id=3FBNLMGT3JAJ2" target="_blank" rel="noopener">
+            <img class="flag" loading="lazy" src="https://flagcdn.com/w40/ps.png" alt="Drapeau Palestine">
+            <span>Palestine</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="https://life-ong.org/en-us/urgence-soudan" target="_blank" rel="noopener">
+            <img class="flag" loading="lazy" src="https://flagcdn.com/w40/sd.png" alt="Drapeau Soudan">
+            <span>Soudan</span>
+          </a>
+        </li>
+
+        <li>
+          <a href="https://soutenir.msf.fr/faire-un-don/~mon-don?ns_ira_cr_arg=IyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMy8U8gFXy%2BvsdzSPrRo%2Fs2RMylPSbGlljZY1f0RudDLg%3D%3D&_cv=1" target="_blank" rel="noopener">
+            <img class="flag" loading="lazy" src="https://flagcdn.com/w40/cd.png" alt="Drapeau RDC">
+            <span>RDC</span>
+          </a>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="container bottom">
+    <div class="brand-inline" style="align-items:center;">
+      <img class="logo-mobile" loading="lazy" src="/img/opti/logo.webp" alt="Logo Anime-Sama mini">
+      <div>
+        <span class="copyright" style="color:#8ea8bb; font-weight:700;">© 2026 Anime-Sama</span>
+        <div class="reserved" style="color:#6f8899;">Tous droits réservés</div>
+      </div>
+    </div>
+
+    <!-- Choix du fond d'écran (mémorisé dans le navigateur du visiteur) -->
+    <div class="fond-picker" role="group" aria-label="Fond d'écran du site">
+      <span>Fond d'écran</span>
+      <button type="button" data-fond="aurore" title="Aurore (par défaut)" aria-label="Aurore"></button>
+      <button type="button" data-fond="nuit" title="Bleu nuit" aria-label="Bleu nuit"></button>
+      <button type="button" data-fond="noir" title="Noir" aria-label="Noir"></button>
+      <button type="button" data-fond="anthracite" title="Anthracite" aria-label="Anthracite"></button>
+    </div>
+    <script>
+    (function () {
+      var boutons = document.querySelectorAll('.fond-picker button');
+      function marquerActif() {
+        var fond = document.documentElement.getAttribute('data-fond') || 'aurore';
+        boutons.forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.fond === fond ? 'true' : 'false'); });
+      }
+      boutons.forEach(function (b) {
+        b.addEventListener('click', function () {
+          var fond = b.dataset.fond;
+          try {
+            if (fond === 'aurore') localStorage.removeItem('fondSite');
+            else localStorage.setItem('fondSite', fond);
+          } catch (e) {}
+          if (fond === 'aurore') document.documentElement.removeAttribute('data-fond');
+          else document.documentElement.setAttribute('data-fond', fond);
+          marquerActif();
+        });
+      });
+      marquerActif();
+    })();
+    </script>
+
+    <div>
+
+    <nav aria-label="Discord">
+        <a href="https://discord.gg/mKbYYbmxY8" aria-label="Discord" target="_blank" rel="noopener" title="Discord" class="social-link">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" class="bi bi-discord" viewBox="0 0 16 16">
+              <path d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612"/>
+          </svg>
+          <span>Discord</span>
+        </a>
+      </nav>
+      
+      <nav aria-label="Appli">
+        <a href="/application/" class="social-link appli-pied" data-installer-appli="" title="Ajouter Anime-Sama sur l'écran d'accueil">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+          <span>Raccourci comme une appli</span>
+        </a>
+      </nav>
+
+      <!--
+      <nav aria-label="Réseau social X">
+        <a href="https://x.com/Anime_samaFR" aria-label="X" target="_blank" rel="noopener" title="X" class="social-link">
+          <svg viewBox="0 0 1200 1227" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+            <path d="M714.163 519.284L1160.89 0H1055.03L667.137 450.887L357.328 0H0L468.492 681.821L0 1226.37H105.866L515.491 750.218L842.672 1226.37H1200L714.137 519.284H714.163ZM569.165 687.828L521.697 619.934L144.011 79.6944H306.615L611.412 515.685L658.88 583.579L1055.08 1150.3H892.476L569.165 687.854V687.828Z"/>
+          </svg>
+          <span>@Anime_samaFR</span>
+        </a>
+      </nav>
+      -->
+
+
+    </div>
+  </div>
+</footer>
+	</footer>
+
+</html>

@@ -35,6 +35,16 @@ export async function fetchText(url, options = {}) {
     const res = await safeFetch(url, { headers: { ...HEADERS, ...(customHeaders || {}) }, ...rest, signal });
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        // Page de blocage Cloudflare (« Sorry, you have been blocked ») : on le
+        // dit clairement dans les logs au lieu d'un « 0 flux » muet.
+        if (res && (status === 403 || status === 503)) {
+            let body = '';
+            try { body = await res.text(); } catch (_) {}
+            if (/you have been blocked|attention required|cf-error-details|just a moment/i.test(body || '')) {
+                console.warn(`[Anime-Sama] Bloqué par Cloudflare (${status}) : ${url}`);
+                throw new Error(`Cloudflare block ${status} for ${url}`);
+            }
+        }
         throw new Error(`HTTP error ${status} for ${url}`);
     }
     return await res.text();

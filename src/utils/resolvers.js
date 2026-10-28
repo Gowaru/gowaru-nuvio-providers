@@ -2866,7 +2866,8 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('vidmoly.') || urlLower.includes('voembed.') || urlLower.includes('ansembed.')) result = await resolveVidmoly(originalUrl);
         else if (urlLower.includes('.mail.ru')) result = await resolveMailRu(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
-        else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother') || urlLower.includes('jeremyparticipantanything') || urlLower.includes('teresapoliticallearn')) result = await resolveVoe(originalUrl);
+        // Miroirs VOE : liste tenue à jour d'après `lecteursInfos` d'anime-sama (10/2026)
+        else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother') || urlLower.includes('jeremyparticipantanything') || urlLower.includes('teresapoliticallearn') || urlLower.includes('megankiddifference') || urlLower.includes('jamesbornmain') || urlLower.includes('claireguessthousand') || urlLower.includes('derricknationtop')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
         else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
@@ -2877,6 +2878,8 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('myvi.') || urlLower.includes('mytv.')) result = await resolveMyTV(originalUrl);
         else if (urlLower.includes('fsvid.') || urlLower.includes('vidzy.')) result = await resolveFsvidVidzy(originalUrl);
         else if (urlLower.includes('vidstream.pro') || urlLower.includes('vidcdn.') || urlLower.includes('kakaflix.') || urlLower.includes('vidhsareup.')) result = await resolvePackedPlayer(originalUrl);
+        // Earnvids et ses miroirs : player packé exposant un master.m3u8
+        else if (urlLower.includes('smoothpre.') || urlLower.includes('morencius.') || urlLower.includes('movearnpre.') || urlLower.includes('earnvids.') || urlLower.includes('minochinos.')) result = await resolvePackedPlayer(originalUrl);
         else if (
             urlLower.includes('luluvid.') ||
             urlLower.includes('lulust.') ||
