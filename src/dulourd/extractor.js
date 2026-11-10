@@ -3,7 +3,7 @@ import { fetchText, fetchApi, setCurrentSignal } from './http.js';
 import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { CONFIG } from './config.js';
-import { toSlug, normalize, toStream } from '../utils/dle-extractor.js';
+import { toSlug, normalize, toStream, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 function detectSubType(html, genre) {
   const catMatch = html.match(/class="[^"]*category_(anime|cartoon|series|movies)[^"]*"/);
@@ -248,6 +248,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     const startTime = Date.now();
     const BUDGET_MS = 45000;
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
+    // ABSOLU. Sans reverse-map, le garde ci-dessous renvoyait [] et l'absolu
+    // aurait été cherché en saison 1.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType, startTime, budgetMs: BUDGET_MS });
+    season = se.season;
+    episode = se.episode;
+
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 

@@ -23,9 +23,29 @@ const BASE_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
   'Referer': `${BASE}/`,
+  'Origin': BASE,
+  'Sec-Fetch-Site': 'same-origin',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Ch-Ua': '"Chromium";v="145", "Not(A:Brand";v="24", "Google Chrome";v="145"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
 }
 
 const RETRY_DELAYS = [1200, 2500]
+
+// ─── Portail « humain » du site (diag live 2026-10) ──────────────────────────
+// Depuis 2026-10, /api/episode/source répond 403 {"error":"verification-humaine"}
+// tant que le visiteur n'a pas résolu un Cloudflare Turnstile (sitekey
+// `0x4AAAAAAFS9VBp2M62FSgY3`, POST /api/humain depuis le client). Le site
+// vérifie le jeton CÔTÉ SERVEUR : aucun cookie ni en-tête forgeable ne le
+// remplace, et QuickJS ne peut pas exécuter le widget. On détecte donc le
+// portail pour ARRÊTER immédiatement (retries + fetch de secours gaspillaient
+// ~6 s et une page de 200 Ko pour rien) et on le journalise une seule fois.
+export const HUMAN_GATE = 'verification-humaine'
+let _humanGate = false
+export function isHumanGateActive() { return _humanGate }
+export function resetHumanGate() { _humanGate = false }
 
 function isChallenge(text) {
   if (!text) return false
@@ -74,8 +94,13 @@ export async function fetchApi(path, options = {}) {
       const text = await res.text()
       try {
         const json = JSON.parse(text)
-        // {"error":"origine-refusee"} / {"error":"Introuvable"} → null
-        if (json && json.error) return { status: res.status, error: json.error }
+        if (json && json.error) {
+          // Portail humain : définitif pour toute l'exécution — inutile de
+          // réessayer (les retries espacés ne changent rien et coûtent 3,7 s).
+          if (json.error === HUMAN_GATE) _humanGate = true
+          // {"error":"origine-refusee"} / {"error":"Introuvable"} → erreur stable
+          return { status: res.status, error: json.error }
+        }
         return json
       } catch {
         if (isChallenge(text)) {

@@ -4,7 +4,7 @@
 
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
+import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted, isTvMediaType } from '../utils/resolvers.js';
 import { resolveTargetEpisodes, getSeasonEpisodeFromAbsolute } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
@@ -211,7 +211,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   }
   
   // Fix #2: Fallback saison optimisé — 1 seule requête stratégique au lieu de 9+
-  if (!isAborted(signal) && mediaType === 'tv' && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
+  if (!isAborted(signal) && isTvMediaType(mediaType) && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
       const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === seasonForRanking);
       
       if (!hasExplicitSeasonMatch) {
@@ -241,7 +241,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   if (allMatches.length === 0) return [];
 
   // Prioritize results that match the season if explicitly mentioned
-  if (mediaType === 'tv' && seasonForRanking !== undefined && seasonForRanking !== null) {
+  if (isTvMediaType(mediaType) && seasonForRanking !== undefined && seasonForRanking !== null) {
       allMatches = allMatches.sort((a, b) => {
           const aSn = getSeasonNumber(a.title + ' ' + a.url);
           const bSn = getSeasonNumber(b.title + ' ' + b.url);
@@ -270,7 +270,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       const lang = (match.title.toUpperCase().includes(' VF') || match.url.includes('/vf/')) ? 'VF' : 'VOSTFR';
 
       // Skip OAV/OVA/FILM/Movie/Special results for TV series (non-film entries)
-      if (mediaType === 'tv') {
+      if (isTvMediaType(mediaType)) {
           const skipKeywords = /\b(oav|ova|film|movie)\b/;
           if (match.genre === 'FILM' || match.genre === 'OAV' ||
               skipKeywords.test(matchLower) || skipKeywords.test(matchUrlLower)) {
@@ -279,7 +279,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       }
 
       // Skip results explicitly for a different season, unless no match has the target season
-      if (mediaType === 'tv' && seasonForRanking !== undefined && seasonForRanking !== null) {
+      if (isTvMediaType(mediaType) && seasonForRanking !== undefined && seasonForRanking !== null) {
           const matchSn = getSeasonNumber(match.title + ' ' + match.url);
           if (matchSn !== null && matchSn !== seasonForRanking) {
               const hasCorrectSeason = allMatches.some(m => {

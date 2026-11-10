@@ -17,7 +17,7 @@
 const TMDB_API_KEY = '8265bd1679663a7ea12ac168da84d2e8';
 const TMDB_API_BASE = 'https://api.themoviedb.org/3';
 
-import { safeFetch } from './resolvers.js';
+import { safeFetch, isTvMediaType } from './resolvers.js';
 
 /**
  * Récupère le titre TMDB (français si disponible) d'un film ou d'une série.
@@ -30,7 +30,7 @@ import { safeFetch } from './resolvers.js';
  * pas besoin de wrapper withCache supplémentaire.
  */
 export async function getTmdbTitle(tmdbId, mediaType) {
-    const type = mediaType === 'tv' ? 'tv' : 'movie';
+    const type = isTvMediaType(mediaType) ? 'tv' : 'movie';
     const url = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=fr-FR`;
 
     try {
@@ -59,7 +59,7 @@ export async function getTmdbTitle(tmdbId, mediaType) {
  * @returns {Promise<{title: string|null, year: number|null}>}
  */
 export async function getTmdbTitleYear(tmdbId, mediaType) {
-    const type = mediaType === 'tv' ? 'tv' : 'movie';
+    const type = isTvMediaType(mediaType) ? 'tv' : 'movie';
     const url = `${TMDB_API_BASE}/${type}/${tmdbId}?api_key=${TMDB_API_KEY}&language=fr-FR`;
 
     try {

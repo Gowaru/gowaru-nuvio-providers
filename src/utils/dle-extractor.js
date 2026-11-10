@@ -87,7 +87,7 @@ function parseMaybeTruncatedJson(text) {
  * cinemeta produisait donc systématiquement le mauvais épisode sur les longues
  * séries.
  */
-async function getAbsoluteEpisodeFromTmdb(tmdbId, season, episode) {
+export async function getAbsoluteEpisodeFromTmdb(tmdbId, season, episode) {
   const targetSeason = parseInt(season, 10);
   const targetEpisode = parseInt(episode, 10);
   if (!tmdbId || !targetSeason || targetSeason <= 0) return null;
@@ -142,6 +142,54 @@ export async function getSeasonEpisodeFromAbsolute(tmdbId, absoluteEpisode) {
     console.warn(`[ArmSync] Reverse-map failed: ${e.message}`);
   }
   return null;
+}
+
+/**
+ * Normalise le couple (saison, épisode) reçu du plugin AVANT toute
+ * construction d'URL ou de page par saison.
+ *
+ * NuvioTV envoie `season = null` + numéro ABSOLU pour les videoId anime
+ * (kitsu:/mal:/anilist:/anidb: — cf. PluginEpisodeRequestRules.kt). Un
+ * provider qui fait `Number(season) || 1` interroge alors la saison 1 avec un
+ * numéro absolu (ex. absolu 30 sur une série où S1 compte 25 épisodes) →
+ * 0 stream, ou un faux épisode. Ce helper reverse-map l'absolu vers (S,E)
+ * TMDB via getSeasonEpisodeFromAbsolute(), avec repli (1, épisode).
+ *
+ * Coût : 1 requête TMDB, uniquement quand `season == null`.
+ *
+ * @param {string|number|null} season
+ * @param {string|number} episode
+ * @param {string|number} tmdbId
+ * @param {object} [opts]
+ * @param {'tv'|'series'|'movie'} [opts.mediaType='tv'] - 'movie' → passthrough
+ * @param {number} [opts.startTime] - début du budget provider (évite l'appel TMDB si dépassé)
+ * @param {number} [opts.budgetMs=PROVIDER_BUDGET_MS]
+ * @returns {Promise<{season:number, episode:number, absolute:number|null, normalized:boolean}>}
+ */
+export async function resolveSeasonEpisodeInputs(season, episode, tmdbId, opts = {}) {
+  const epNum = parseInt(episode, 10) || 1
+  const mediaType = opts.mediaType || 'tv'
+  const seasonNum = parseInt(season, 10)
+
+  if (mediaType === 'movie') {
+    return { season: seasonNum > 0 ? seasonNum : 1, episode: epNum, absolute: null, normalized: false }
+  }
+  if (seasonNum > 0) {
+    return { season: seasonNum, episode: epNum, absolute: null, normalized: false }
+  }
+  if (!tmdbId) {
+    return { season: 1, episode: epNum, absolute: epNum, normalized: false }
+  }
+  if (opts.startTime != null && isBudgetExhausted(opts.startTime, opts.budgetMs || PROVIDER_BUDGET_MS)) {
+    return { season: 1, episode: epNum, absolute: epNum, normalized: false }
+  }
+
+  const mapped = await getSeasonEpisodeFromAbsolute(tmdbId, epNum)
+  if (mapped && mapped.season > 0 && mapped.episode > 0) {
+    console.log(`[ArmSync] season=null: absolu ${epNum} -> S${mapped.season}E${mapped.episode} (TMDB ${tmdbId})`)
+    return { season: mapped.season, episode: mapped.episode, absolute: epNum, normalized: true }
+  }
+  return { season: 1, episode: epNum, absolute: epNum, normalized: false }
 }
 
 async function getAbsoluteEpisode(imdbId, season, episode) {
@@ -434,7 +482,8 @@ export function toStream(url, language, providerName, siteUrl, opts = {}) {
 export async function resolveTargetEpisodes(tmdbId, mediaType, season, episode, opts = {}) {
   const { startTime, budgetMs = PROVIDER_BUDGET_MS } = opts
   const epNum = parseInt(episode) || 1
-  if (mediaType !== 'tv' || !tmdbId) return [epNum]
+  // NuvioTV peut envoyer 'series' (manifeste) : tester l'inverse de 'movie'.
+  if (mediaType === 'movie' || !tmdbId) return [epNum]
 
   // Convention app TV (IDs anime kitsu:/mal:/anilist:) : season=null + numéro
   // ABSOLU. Dans ce cas, on ne peut pas calculer l'absolu via (S,E) ; on

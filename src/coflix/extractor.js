@@ -24,7 +24,7 @@
 import { fetchText, fetchTextSafe, ajaxGet, ajaxPost, setCurrentSignal, SITE } from './http.js';
 import { resolveStream, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { toStream } from '../utils/dle-extractor.js';
+import { toStream, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
 const withCache = createCache('cfw', 'Coflix');
@@ -212,8 +212,13 @@ async function resolveEmbedToStream(embedUrl, baseStream, signal) {
 // ─── Pipeline principal ─────────────────────────────────────────────────────
 export async function extractStreams(tmdbId, mediaType, season, episode, { signal } = {}) {
     const type = normalizeMediaType(mediaType);
-    const epNum = Math.max(1, parseInt(episode, 10) || 1);
-    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
+    // ABSOLU. Les pages Coflix sont par saison : sans reverse-map, l'absolu
+    // était cherché en saison 1 → 0 stream / faux épisode.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: type });
+    const epNum = Math.max(1, se.episode);
+    const seasonNum = Math.max(1, se.season);
 
     let titles = [];
     try {

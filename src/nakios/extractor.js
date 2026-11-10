@@ -21,6 +21,7 @@ import { fetchApi, BASE_URL, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
 import { getTmdbTitleYear } from '../utils/search-fallback.js';
 import { safeConfig, isAborted, normalizeLanguageCode } from '../utils/resolvers.js';
+import { resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 const withCache = createCache('nk', 'Nakios', { failureTtl: 120_000 }); // 2min failure
 
@@ -324,6 +325,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     setCurrentSignal(signal);
 
     console.log(`[Nakios] Looking up ${mediaType} ${tmdbId}`);
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
+    // ABSOLU. L'API Nakios est indexée par saison : sans reverse-map, on
+    // demandait /tv/{id}/1/{absolu} → 0 stream.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType });
+    season = se.season;
+    episode = se.episode;
 
     // Étape 1: Construire le chemin API direct
     let apiPath;

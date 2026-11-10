@@ -1,6 +1,6 @@
 import { fetchJson, setCurrentSignal } from './http.js';
 import { resolveStream, withTimeout, safeFetch, USER_AGENT, isAborted, getScraperSettings } from '../utils/resolvers.js';
-import { getUrlOrigin } from '../utils/dle-extractor.js';
+import { getUrlOrigin, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import { getTmdbTitle } from '../utils/search-fallback.js';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
@@ -474,6 +474,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     if (!tmdbId) { console.log('[Movix] Missing tmdbId'); return []; }
 
     const isMovie = mediaType === 'movie';
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
+    // ABSOLU. L'API Movix est indexée par saison : sans reverse-map, on
+    // demandait /season/1 avec un numéro absolu → 0 stream.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: isMovie ? 'movie' : 'tv' });
+    season = se.season;
+    episode = se.episode;
     const episodeNum = Number(episode) || 1;
 
     let allStreams = [];

@@ -420,7 +420,7 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
                 titles.push(titleOriginal);
             }
 
-            if (mediaType === 'tv' && opts.season) {
+            if (mediaType !== 'movie' && opts.season) {
                 const s = parseInt(opts.season, 10);
                 if (s > 0 && titleEn) {
                     for (const suffix of SEASON_SUFFIXES) {
@@ -459,7 +459,7 @@ async function getTMDBTitlesById(tmdbId, mediaType, opts = {}) {
             if (titleFr && !titles.some(existing => existing.toLowerCase() === titleFr.toLowerCase())) {
                 titles.splice(1, 0, titleFr);
             }
-            if (mediaType === 'tv' && opts.season && titleFr) {
+            if (mediaType !== 'movie' && opts.season && titleFr) {
                 const s = parseInt(opts.season, 10);
                 if (s > 0) {
                     const frVar = `${titleFr} Saison ${s}`;
@@ -642,7 +642,7 @@ export async function getTmdbTitles(id, mediaType, opts = {}) {
     const titles = await getTMDBTitlesById(contentId, mediaType, opts);
 
     // Validation intégrée via les métadonnées attachées par getTMDBTitlesById
-    if (mediaType === 'tv' && titles.length > 0 && titles._metadata) {
+    if (mediaType !== 'movie' && titles.length > 0 && titles._metadata) {
         const meta = titles._metadata;
         
         if (!meta.isAnime) {
