@@ -2204,6 +2204,21 @@ export async function resolveFsvidVidzy(url) {
             }
         }
 
+        // --- Pattern 3 (2026-11) : l'URL HLS est servie EN CLAIR dans le HTML
+        // (packé ou non), directement dans la config videojs :
+        //   var _fsvHls = "https://s1.fsvid.lol/troll/master.m3u8";  ← LEURRE
+        //   sources:[{src:"https://r1.fsvid.lol/hls2/02/00016/,id_n,.urlset/master.m3u8?t=…"}]
+        // vidzy.org : https://u14.vidzy.org/hls2/08/00024/,id_n,.urlset/master.m3u8?t=…
+        // Sans ce scan, la résolution échouait (ratio ~1/10) et les providers
+        // (Movix, VoirAnime…) perdaient ces sources.
+        if (!videoUrl) {
+            const all = html.match(/https?:\/\/[^\s"'<>\\)]+?\.m3u8[^\s"'<>\\)]*/g) || [];
+            const real = all.filter(u => !u.includes('/troll/') && !u.includes('_fsvHls') && !u.includes('troll.m3u8'));
+            // master.m3u8 d'abord : les variantes index-v1-a1.m3u8 n'ont pas
+            // toujours toutes les qualités (cf. expandStreamQualities).
+            videoUrl = real.find(u => u.includes('master.m3u8')) || real[0] || null;
+        }
+
         if (!videoUrl) return { url };
 
         // Referer requis par le CDN (vérifié en live : fsvid.lol → 200, vidzy.live → 200)
@@ -3178,7 +3193,12 @@ export async function resolveStream(stream, depth = 0) {
 
                 // Suivre les redirections JS window.location
                 if (!skipDirectScan) {
-                    const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
+                    // Trois formes rencontrées : affectation (window.location.href =
+                    // '…'), APPEL (window.location.replace('…'), utilisée par le
+                    // gateway oneupload/uqload) et document.location.href.
+                    const jsRedirect = html.match(/window\.location\.replace\s*\(\s*['"]([^'"]+)['"]\s*\)/) ||
+                                       html.match(/(?:window|document)\.location(?:\.[a-z]+)?\s*=\s*['"]([^'"]+)['"]/) ||
+                                       html.match(/location\.replace\s*\(\s*['"]([^'"]+)['"]\s*\)/);
                     if (jsRedirect && jsRedirect[1] !== originalUrl) {
                         const res2 = await safeFetch(jsRedirect[1], { headers: stream.headers });
                         if (res2) {

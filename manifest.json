@@ -125,7 +125,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.19",
+      "version": "1.0.20",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -317,7 +317,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "hasSettings": true,
       "author": "Gowaru",
       "supportedTypes": [
@@ -343,7 +343,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.20",
+      "version": "1.0.21",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

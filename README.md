@@ -38,14 +38,14 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 6 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.54 |
 | 7 | **AnimesUltra** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.39 |
 | 8 | **AnimeSama.co (DLE Mirror)** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
-| 9 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.19 |
+| 9 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.20 |
 | 10 | **Aniverse** | 🎬📺 | FR / JA | M3U8 | ✅ | ✅ | 0.2.2 |
 | 11 | **Franime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.3 |
 | 12 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
 | 13 | **French-Anime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.3 |
 | 14 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
 | 15 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.1.3 |
-| 16 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.20 |
+| 16 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.21 |
 | 17 | **Neko-Sama** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.4 |
 | 18 | **SenAnimes** ⁶ | 🎬📺 | FR / JA | — | ⚠️ | ⚠️ | 0.1.3 |
 | 19 | **Sekai** ² | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.26 |
@@ -65,7 +65,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 28 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
 | 29 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
 | 30 | **Frenchstream** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.24 |
-| 31 | **Movix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 0.1.5 |
+| 31 | **Movix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 0.1.6 |
 | 32 | **Nakios** | 🎬📺 | FR / EN | MP4 | ✅ | ✅ | 1.0.4 |
 | 33 | **Papadustream** | 🎬📺 | FR / EN | M3U8 | ✅ | ✅ | 1.1.1 |
 | 34 | **StreamZo** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 1.0.7 |

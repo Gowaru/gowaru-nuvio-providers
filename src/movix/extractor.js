@@ -8,8 +8,12 @@ import { getTmdbTitle } from '../utils/search-fallback.js';
 // l'instance axios `wl` utilise api.movix.fun avec baseURL /api/content,
 // et l'API scraper publique /api/fstream est servie sur api.movix.fun).
 // Les anciens domaines api.movix.cloud / api.movix.cash renvoient 404.
+// api.movix.fun = endpoint historique ; api.movix.miami = celui du SPA actuel
+// (vérifié live 2026-11 : les deux servent /api/fstream et /api/cpasmal, et
+// .miami rattrape les rafales 503 de .fun).
 const API_DOMAINS = [
-    'https://api.movix.fun'
+    'https://api.movix.fun',
+    'https://api.movix.miami',
 ];
 
 const SITE_ORIGIN = 'https://movix.fun';
@@ -29,7 +33,9 @@ const FAST_HOSTS = ['voe', 'uqload', 'fsvid', 'vidzy', 'netu', 'younetu', 'sendv
 // Tous sont déjà couverts par parseStreams (Format 1 players / Format 2 links).
 const FALLBACK_SOURCES = [
     { name: 'wiflix', movie: true, tv: false },
-    { name: 'j1f', movie: true, tv: false },
+    // j1f retiré : l'API répond systématiquement
+    // {"success":false,"error":"Source 1jour1film désactivée"} (vérifié live
+    // 2026-11) → une requête perdue à chaque run.
     { name: 'cpasmal', movie: true, tv: true },
 ];
 
@@ -50,6 +56,16 @@ function normalizeLangTagMovix(lang) {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Normalisation légère pour comparer des titres (accents, ponctuation). */
+function normalizeForMatch(s) {
+    return String(s || '')
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
 // ─── Settings (SCRAPER_SETTINGS injecté par l'app) ──────────────────────────
 
@@ -146,7 +162,10 @@ async function resolveForExo(stream) {
             headers: { ...(stream.headers || {}), Referer: stream.headers?.Referer || origin + '/', Origin: stream.headers?.Origin || origin, 'User-Agent': USER_AGENT },
         };
     } else {
-        try { resolved = await withTimeout(resolveStream(stream), 8000); }
+        // 10 s : uqload/fsvid peuvent dépasser 8 s sur un premier appel à froid
+        // (le résolveur uqload fait 1 à 3 fetches) → un timeout trop court
+        // supprimait la source alors qu'elle était résoluble.
+        try { resolved = await withTimeout(resolveStream(stream), 10000); }
         catch (e) { console.warn(`[Movix] resolveStream timeout: ${e?.message}`); }
     }
     if (!resolved || !resolved.url || !resolved.isDirect) return null;
@@ -319,12 +338,29 @@ async function searchFallback(baseUrl, tmdbId, mediaType, season, episode) {
         // Filtrer d'abord les candidats du bon type (évite de sonder des films
         // quand on cherche une série — l'API renvoie tout confondu).
         const wantedType = mediaType === 'movie' ? 'movie' : 'tv';
+        // Filtrer par type ET par ressemblance de titre : l'API renvoie 40+
+        // résultats (spinoffs, homonymes, autres langues) et sonder chacun
+        // consommait le budget sur des TMDB id sans rapport.
+        const wantedWords = normalizeForMatch(title).split(' ').filter(w => w.length >= 3);
+        const looksAlike = (r) => {
+            const cand = normalizeForMatch(r.title || r.name || r.original_title || '');
+            if (!cand || wantedWords.length === 0) return true;
+            const hit = wantedWords.filter(w => cand.includes(w)).length;
+            return hit >= Math.max(1, Math.ceil(wantedWords.length * 0.6));
+        };
         const candidates = results.filter(r => {
             let rt = r.media_type || r.type || '';
             if (rt === 'series' || rt === 'show') rt = 'tv';
-            return rt === wantedType || !rt;
+            return (rt === wantedType || !rt) && looksAlike(r);
         });
-        const ordered = (candidates.length > 0 ? candidates : results).slice(0, 6);
+        // ⚠ JAMAIS de repli sur `results` : quand aucun résultat n'a le bon
+        // type, on servait un FILM pour une série (ex. Solo Leveling S1 →
+        // TMDB 518880, le film récapitulatif) — contenu totalement étranger.
+        if (candidates.length === 0) {
+            console.log(`[Movix] No ${wantedType} match in search results for "${title}"`);
+            return null;
+        }
+        const ordered = candidates.slice(0, 6);
         for (const result of ordered) {
             const altId = result.tmdb_id || result.id;
             if (!altId) continue;
@@ -423,12 +459,15 @@ async function resolveStreamsToPlayable(streams, prefs, signal) {
     // Toujours traitées AVANT tout resolveStream. Élargit le plafond à 8 :
     // c'est la cause n°1 des "streams indisponibles" — des flux déjà jouables
     // restaient derrière les 2-3 premiers embeds en échec.
-    const MAX_RESOLVE = 8;      // résolutions réseau max (embeds uniquement)
-    const TARGET_PLAYABLE = 4;  // assez pour couvrir VF/VFF/VFQ + VOSTFR
+    const MAX_RESOLVE = 10;     // résolutions réseau max (embeds uniquement)
+    // 6 : les sources fstream exposent souvent 4-5 lecteurs VF + 0-3 VOSTFR ;
+    // avec 4 on perdait une langue entière (symptôme « les VF n'apparaissent
+    // pas » / « que du VOSTFR »).
+    const TARGET_PLAYABLE = 6;
     const playable = [];
     const seenPlayable = new Set();
     const startTime = Date.now();
-    const BUDGET_MS = 20000;    // budget max de la résolution
+    const BUDGET_MS = 25000;    // budget max de la résolution
 
     const addPlayable = (result) => {
         if (result && !seenPlayable.has(result.url)) {
@@ -447,16 +486,33 @@ async function resolveStreamsToPlayable(streams, prefs, signal) {
     console.log(`[Movix] Pass 1 (direct URLs): ${playable.length} playable from ${directCandidates.length} candidate(s)`);
 
     // ─── Passe 2 : embeds → resolveStream (8s max par host) ──────────────
+    // Round-robin par LANGUE : sans ça, l'ordre de priorité (VF d'abord)
+    // épuisait le budget sur les lecteurs VF et ne laissait aucune source
+    // VOSTFR (ou l'inverse). Chaque tour prend le meilleur candidat restant de
+    // chaque langue, jusqu'au plafond global.
     if (playable.length < TARGET_PLAYABLE && !isAborted(signalGuard)) {
-        const toResolve = unique.filter(s => !isDirectVideoUrl(s.url)).slice(0, MAX_RESOLVE);
-        for (const stream of toResolve) {
-            if (playable.length >= TARGET_PLAYABLE) break;
+        const pending = unique.filter(s => !isDirectVideoUrl(s.url)).slice(0, MAX_RESOLVE);
+        const buckets = new Map();
+        for (const s of pending) {
+            const key = String(s.language || 'OTHER').toUpperCase();
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(s);
+        }
+        const queues = [...buckets.values()];
+        let round = 0;
+        while (playable.length < TARGET_PLAYABLE && !isAborted(signalGuard)) {
             if (Date.now() - startTime > BUDGET_MS) break;
-            try {
+            let progressed = false;
+            for (const q of queues) {
+                if (playable.length >= TARGET_PLAYABLE) break;
+                if (Date.now() - startTime > BUDGET_MS) break;
+                const stream = q.shift();
+                if (!stream) continue;
+                progressed = true;
                 addPlayable(await resolveForExo(stream));
-            } catch (e) {
-                console.warn(`[Movix] resolveStream failed: ${e?.message}`);
             }
+            if (!progressed) break;
+            if (++round > MAX_RESOLVE) break;
         }
     }
 
