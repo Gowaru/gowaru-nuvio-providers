@@ -8,10 +8,18 @@ let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const DOMAIN = 'anime-sama.to';
+// ⚠ Vérifié live 2026-11 : `/catalogue/{slug}/{saison}/{lang}/episodes.js`
+// renvoie 403 (page « Attention Required! | Cloudflare ») à TOUTE requête
+// sans en-tête Referer, alors que la fiche `/catalogue/{slug}/` répond 200.
+// Sans lui, la vérification de slug ET la lecture des épisodes échouaient
+// silencieusement → 0 stream sur 100 % du catalogue.
+const SITE_REFERER = 'https://anime-sama.to/';
 const rateLimit = createProviderRateLimiter();
 
 export const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Referer": SITE_REFERER,
+    "Origin": "https://anime-sama.to",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "max-age=0",

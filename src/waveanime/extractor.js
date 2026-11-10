@@ -11,7 +11,7 @@
  */
 
 import { fetchJson, fetchText, setCurrentSignal } from './http.js';
-import { isBudgetExhausted, isAborted, normalizeLanguageCode } from '../utils/resolvers.js';
+import { isBudgetExhausted, isAborted, normalizeLanguageCode, isTvMediaType } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { normalize, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 
@@ -467,7 +467,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     // Fallback numérotation continue (uniquement entrées 'kai', S>1, match exact raté)
     let usedContinuous = false;
-    if (!ep && mediaType === 'tv' && serie.format === 'kai' && !isAborted(signal)) {
+    if (!ep && isTvMediaType(mediaType) && serie.format === 'kai' && !isAborted(signal)) {
         const seasonCounts = titles._metadata && titles._metadata.seasonEpisodeCounts;
         ep = findEpisodeContinuous(detail, seasonCounts, season, episode);
         usedContinuous = !!ep;

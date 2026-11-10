@@ -13,7 +13,7 @@
 
 import { fetchText, postForm, setCurrentSignal, BASE_URL } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
+import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted, isTvMediaType } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { toSlug, normalize, stripSeasonSuffix, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 
@@ -358,7 +358,7 @@ async function findSeriesForTitle(title, mediaType, season, signal, startTime) {
         if (r.score < 40) continue;
         // Pour une série TV, exclure OST/OAV/Film (faux positifs type OST "One Piece")
         const fmt = (r.format || '').toUpperCase();
-        if (mediaType === 'tv' && (fmt === 'OST' || fmt === 'OAV' || fmt === 'FILM')) continue;
+        if (isTvMediaType(mediaType) && (fmt === 'OST' || fmt === 'OAV' || fmt === 'FILM')) continue;
         if (mediaType === 'movie' && fmt !== 'FILM' && fmt !== 'EPISODE') continue;
         if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
         try {

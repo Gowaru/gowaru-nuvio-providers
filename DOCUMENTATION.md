@@ -84,7 +84,7 @@ User taps content → PluginManager.executeScrapers()
 | `console.log / warn / error / info / debug` | Native bridge → `Log.d/e/w/i("Plugin:<scraperId>", ...)` |
 | `fetch(url, options)` | JS polyfill → `__native_fetch` bridge → OkHttp |
 | `URL(url, base)` | JS polyfill → `__parse_url` bridge |
-| `URLSearchParams(init)` | JS polyfill (full implementation) |
+| `URLSearchParams(init)` | JS polyfill **partiel** : `append()` écrase, `getAll()` mono-valeur, `get()` → `null`, et `set()` ne met pas à jour `url.href` |
 | `AbortSignal / AbortController` | JS polyfill (minimal — `signal.aborted`, `addEventListener`, `abort()`) |
 | `atob / btoa` | JS polyfill |
 | `CryptoJS` (MD5, SHA1, SHA256, SHA512, HMAC\*, AES) | Real `crypto-js@4.2.0` from WebJars |
@@ -159,7 +159,7 @@ var result = await __native_fetch(url, method, /* … */);
 
 ### 2.4 `cheerio` API
 
-Full cheerio-compatible API via Jsoup. `require('cheerio')`, `require('cheerio-without-node-native')`, and `require('react-native-cheerio')` all return the same object.
+API **proche** de cheerio, implémentée au-dessus de Jsoup (le pont natif) — pas la vraie cheerio : voir les lacunes ci-dessous. `require('cheerio')`, `require('cheerio-without-node-native')` et `require('react-native-cheerio')` renvoient le même objet. Les bundles déployés **inlinent la vraie cheerio**, donc les lacunes ne s'appliquent qu'au chemin de secours (require dynamique).
 
 ```javascript
 const $ = cheerio.load('<html>...</html>');
@@ -178,7 +178,9 @@ $.html() / $.html(element)
 - `.children()` = **`find('*')`** → tous les descendants, pas seulement les enfants directs
 - `.text()` sur plusieurs éléments les joint par un **espace** (cheerio natif : sans séparateur)
 - `.map()` renvoie un objet `{ length, get(i), toArray() }` (pas un tableau)
-- `:contains("text")` selectors work (quotes are transpiled for Jsoup)
+- `$('<div>…</div>')` (fragment HTML) renvoie **`[]`** — parser la chaîne complète puis sélectionner
+- Cache de documents limité à **8** : un 9ᵉ `cheerio.load()` invalide les wrappers du 1er (extractions vides, sans erreur) → extraire les chaînes avant de charger une nouvelle page
+- `:contains("text")` selectors work (quotes are transpiled for Jsoup) — **insensible à la casse** côté jsoup, contrairement à cheerio
 
 ### 2.5 Available `require()` Modules
 
@@ -197,7 +199,7 @@ $.html() / $.html(element)
 ```javascript
 /**
  * @param {string}  tmdbId     - TMDB ID (e.g. "550"). Voir « formats d'ID » ci-dessous.
- * @param {string}  mediaType  - "movie" ou "tv". "series"/"show" sont normalisés en "tv".
+ * @param {string}  mediaType  - "movie" ou "tv" (Mobile normalise toujours). TV peut envoyer "series" (voir ci-dessous).
  * @param {number}  [season]   - 1-based ; **null pour un épisode ABSOLU** (anime)
  * @param {number}  [episode]  - 1-based, null/undefined pour un film
  * @returns {Promise<Array>}   - Array of stream objects
@@ -217,6 +219,18 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 | `"anidb:…"`, `"tvdb:…"` | rare | **non résolvable → échec rapide** (aucune requête TMDB) |
 | `"tt0245429"` | IMDb non convertible par l'app | résolu via TMDB `/find?external_source=imdb_id` |
 | `"tmdb:129"`, `"movie:129"` | préfixé (défensif) | préfixe retiré |
+
+#### `mediaType = "series"` (NuvioTV seulement, vérifié)
+
+`PluginManager.executeJsScraper()` passe `jsPluginMediaType(mediaType, supportedTypes, season, episode)` :
+si la requête est une série **et** que l'entrée du manifeste déclare `series` dans `supportedTypes`,
+le plugin reçoit **`"series"`** au lieu de `"tv"`. NuvioMobile normalise toujours en `tv`/`movie`
+(`normalizePluginType`).
+
+- Aucun provider de ce dépôt ne déclare `series` → le cas ne se produit pas aujourd'hui.
+- Si on en ajoute un, toute logique série doit tester **`mediaType !== 'movie'`** (helper `isTvMediaType()`
+  de `resolvers.js`), jamais `=== 'tv'` — sinon le provider bascule en mode film.
+- `resolveTargetEpisodes()` (`dle-extractor.js`) accepte désormais `tv` **et** `series`.
 
 **Épisodes absolus :** pour un ID traceur (`kitsu:`/`mal:`/…), NuvioTV envoie
 `season = null` et le numéro d'épisode absolu (`kitsu:6448:68` → `episode = 68`)
@@ -243,7 +257,15 @@ May be exported as `module.exports.getStreams` (CommonJS) or defined as a global
   "provider": "source_name",       // Source label
   "type": "hls",                   // "hls", "mp4", "mkv", etc.
   "seeders": 42, "peers": 10,      // For P2P
-  "infoHash": "abc..."             // For BitTorrent
+  "infoHash": "abc...",            // For BitTorrent
+  "subtitles": [                   // Lu par les DEUX apps (voir ci-dessous)
+    {
+      "url": "https://cdn.example.com/fr.vtt",
+      "language": "fra",
+      "name": "Français",
+      "headers": { "Referer": "https://source.com/" }
+    }
+  ]
 }
 ```
 
@@ -308,6 +330,31 @@ NuvioTV fonctionne. Le helper `formatSizeBytes(bytes)` de `resolvers.js` (appel�
 > **Convention : préférer `toStream()` à toute construction d'objet stream manuelle** —
 > un provider qui passe par cette fabrique a donc `name` même si aucun `name:` n'apparaît
 > dans son extracteur (voir aussi §9).
+
+#### `subtitles`, `language`, `type` — contrat réel (vérifié dans les sources des apps)
+
+| Champ | NuvioTV | NuvioMobile |
+|---|---|---|
+| `subtitles` | **Lu** : `PluginRuntime.parseSubtitles()` → `Stream.subtitles`, puis `applyStreamMetadata()` ; les `headers` sont appliqués **par sous-titre** | **Lu** : même contrat |
+| `language` | **Jamais filtré ni trié** : affiché (`description = "size • language"`) et utilisé pour les tokens `bingeGroup` | Idem (affichage + sous-titre de la ligne) |
+| `type` | **Sans effet** : le champ est parsé (`LocalScraperResult.type`) mais n'intervient pas dans la lecture — le type est déduit de l'URL par le player (un `.m3u8` reste lu en HLS) | **Utilisé** : `PlaybackMediaItems.android.kt` mappe `hls`/`m3u8` → HLS, `dash`/`mpd` → DASH, le reste → progressif |
+
+**Conséquences :**
+
+- `subtitles: [{ url, language, name, headers }]` est utile sur **les deux** apps : ne pas réserver la fonctionnalité à Mobile. Sans `language`, l'app affiche `"Unknown"` → toujours mettre un code (`fra`, `eng`, `jpn`).
+- `normalizeLanguageCode()` reste recommandé (affichage lisible, clé `bingeGroup`), mais **aucun filtre FR ne dépend de ce champ** : un `"VOSTFR"` brut ne casse pas le filtrage, il s'affiche simplement mal. Garder `VF`/`VOSTFR` dans le `title`.
+- `type` n'a d'effet **que sur Mobile** : le renseigner correctement (`hls`/`m3u8`, `dash`/`mpd`, `mp4`/`mkv`) ; sur TV, c'est l'URL qui décide — ne jamais compter sur `type` pour forcer un mode de lecture côté TV. Si l'URL ne porte aucune extension ni `format=`, TV peut faire un `HEAD` puis un `GET Range: bytes=0-2048` pour deviner le mime (2 requêtes de plus).
+- Sous-titres **en lecteur externe sur Mobile** : `SubtitleFileCache` télécharge l'URL **sans** les `headers` du sous-titre → préférer des URLs autonomes ; en lecture in-app, les headers sont bien appliqués.
+
+#### Plafonds, déduplication et qualité (vérifiés dans les sources)
+
+| Comportement | NuvioTV | NuvioMobile |
+|---|---|---|
+| Déduplication des streams | `distinctBy { url }` sur **tous les providers** réunis | **aucune** |
+| Plafond de résultats | `take(150)` **global** après dédup | aucun |
+| `quality` | `parseQualityValue()` ne reconnaît que `4k`/`2160`, `1080`, `800`, `720`, `480`, `360` — sinon `-1` | affichage brut dans `description` |
+
+Conséquences : une URL émise deux fois est **perdue** sur TV (seul le premier provider la garde) et **affichée en double** sur Mobile ; `"FHD"`/`"HD"` ne participent pas au tri par qualité. Côté plugins : `dedupeStreams()` (clé `URL|LANGUE`, rejet des URL vides/`[object`) est appliqué par `createProvider()` et par les 3 providers qui le contournent (`animesite`, `animevost-fr`, `voiranime-one`).
 
 ### 3.3 Headers Handling
 
@@ -496,6 +543,13 @@ Logcat filter: `adb logcat -s "Plugin:*"`
 | HTTP connect / read / write | **30s each** | **60s each** | `PluginRuntime.kt` / `AddonPlatform` |
 | Auto-play (default) | **10s** → au-delà, provider invisible en lecture auto | dépend du réglage utilisateur | `PlayerSettingsDataStore.kt` |
 
+> **Le cap 60 s est un mur dur, pas une cible.** `PLUGIN_TIMEOUT_MS` (TV) et
+> `evaluationTimeoutMillis` (Mobile) tuent l'exécution à 60 s **et jettent le résultat**,
+> partiel compris : un provider qui atteint 60 s ne renvoie **rien**. Les budgets internes
+> doivent donc rester en dessous — `PROVIDER_BUDGET_MS = 45 s` (défaut `createProvider`)
+> et `TV_BUDGET_MS = 50 s` pour les guards explicites (`isBudgetExhausted`). Le temps
+> passé en HTTP compte dans ce cap (30 s par requête côté TV).
+
 **Consequence:** NuvioTV a **30 s max par requête** (vs 60 s sur mobile), **aucun timer JS**
 (donc aucun timeout côté plugin : ni `safeFetch({timeout})` ni `withTimeout()`),
 et un **bridge fetch bloquant** (donc aucune parallélisation). Pour rester sous les
@@ -674,7 +728,7 @@ Helpers disponibles dans `src/utils/resolvers.js` :
 | `fetchVideoSize(url, headers)` | Taille via HEAD — **retourne `null` sans timers** (TV) pour ne pas risquer 30 s sur une étiquette cosmétique |
 | `isBudgetExhausted(startTime, budgetMs)` / `TV_BUDGET_MS` | Garde-fou budget : sortir avec du partiel plutôt que de risquer le 60 s qui jette tout |
 | `getResponseHeader(headers, name)` | Lit un en-tête quel que soit le conteneur (`Headers.get()` ou objet du cache) |
-| `normalizeLanguageCode(raw)` | Code langue compris par les filtres des apps (`fr`/`en`/`ja`/`multi`) — c'est ce champ qui rend le filtre FR opérationnel |
+| `normalizeLanguageCode(raw)` | Code langue normalisé (`fr`/`en`/`ja`/`multi`) pour l'affichage et la clé `bingeGroup` — **aucune app ne filtre sur `language`** |
 | `expandStreamQualities(streams, opts)` | Dédup URL+langue, type déduit, variants HLS. Options : `budgetDeadline`, `maxManifestFetches`, `skipManifestExpansion`, `sizeProbe`, `preferredCodec` |
 | `createProvider(name, extractFn, { maxStreams, timeout, quality })` | Wrapper standard : timeout, dédup URL+langue, filtre `[object`, cap `MAX_STREAMS_PER_PROVIDER` (80), expansion qualité |
 | `BUILD_ID` | Hash court injecté à la build (visible en logs : `[Name] Request: … (build abc12345)`) |
@@ -711,6 +765,53 @@ qui répond **200 avec un UA court** (`Nuvio-Providers/1.0`, `okhttp/…`, même
 `Mozilla/5.0`). Toujours surcharger le UA par requête dans ce cas
 (`safeFetch` fusionne `BASE_HEADERS` avant `rest.headers`, donc l'override gagne).
 
+**Rate-limit Cloudflare (429/503) : couper au lieu de réessayer.** Sur les sites qui
+limitent par IP (VoirAnime : ~4 à 10 HEAD de sondage + 1 recherche WP déclenchent
+le blocage en ~2 min ; l'oracle de slug ci-dessous a divisé le sondage par 4), les retries transforment un échec en ~45 s de budget
+brûlé pour 0 stream. Mémoriser l'état et court-circuiter les requêtes suivantes de la
+**même exécution** :
+```javascript
+let _rateLimitedUntil = 0;
+export function isRateLimited() { return Date.now() < _rateLimitedUntil; }
+export function markRateLimited(ms = 25000) { _rateLimitedUntil = Date.now() + ms; }
+// dans fetchText(), AVANT l'attente du rate limiter :
+if (isRateLimited()) throw new Error(`Rate limited (Cloudflare) for ${url.slice(0, 60)}`);
+```
+Le flag vit dans l'instance QuickJS courante (une par `getStreams`) : le blocage reste
+local à **une** tentative et l'appel suivant repart à neuf. Le réinitialiser en tête
+d'`extractStreams` (`resetRateLimit()`) si le provider enchaîne plusieurs passes.
+
+**Sondage de slugs : utiliser la recherche du site comme oracle.** Sur NuvioTV le
+réseau est **sérialisé** : chaque HEAD coûte un aller-retour, donc un sondage
+aveugle de 40 URLs coûte ~15 s. Une seule page de résultats WordPress
+(`/?s=<titre>`) donne les **titres réels** des fiches — souvent en romaji
+(`shingeki-no-kyojin`) quand le slug TMDB est anglais (`attack-on-titan`).
+Dériver le slug de base de ces titres (retirer `(VF)`, `Saison N`, `Final
+Season`, numéro final), classer par fréquence, puis sonder `{base}` et
+`{base}-{N}` : 1 GET + 2 à 6 HEAD au lieu de 40 HEAD (mesuré : AOT S1 16 → 6,
+S4 16 → 4). Toujours garder 2 slugs sondés **avant** l'oracle (slug exact
+gratuit) et un repli aveugle borné si la recherche est bloquée. Ne jamais
+servir une fiche dérivée pour la mauvaise saison : exiger le numéro dans l'URL
+**ou** dans le titre, et pour S1 refuser tout titre portant saison/OAV/`Final
+Season`.
+
+**Portail « vérification humaine » (Turnstile) : arrêter net.** Certains sites exigent
+un jeton Turnstile validé **côté serveur** avant de servir une source (SenAnimes :
+`GET /api/episode/source` → `403 {"error":"verification-humaine"}`, sitekey
+`0x4AAAAAAFS9VBp2M62FSgY3`, POST `/api/humain`). Aucun en-tête ni cookie n'est
+forgeable — vérifié live : `Referer` + `Origin` + `Sec-Fetch-*` corrects → 403 quand
+même, pour tous les slugs du catalogue. Un plugin ne peut donc **pas** résoudre ces
+streams : détecter la valeur d'erreur dès la première réponse API et abandonner, au
+lieu d'enchaîner retries + page watch (~6 s et 200 Ko pour rien) :
+```javascript
+export const HUMAN_GATE = 'verification-humaine';
+let _humanGate = false;
+// dans fetchApi() : if (json.error === HUMAN_GATE) _humanGate = true;
+// dans l'extracteur  : if (isHumanGateActive()) return null;   // plus de fallback
+```
+Journaliser une fois côté extracteur (`Portail « verification-humaine » : …`) : le
+diagnostic est actionnable, alors qu'un 0 stream silencieux ressemble à une panne.
+
 **Ne jamais manipuler un objet `URL` avant de fetcher.** `new URL(u).searchParams.set(...)`
 ne met **pas** à jour `.href` dans le polyfill, et passer un objet à `fetch()` dépend
 du `toString()` du bridge. Construire la chaîne finale explicitement.
@@ -721,11 +822,12 @@ const data = await resp.json();
 if (!data) return [];
 ```
 
-**Body truncated at 1 MB.** Le runtime coupe à 1 MB d'octets. Mobile ajoute le
-suffixe `\n...[truncated]` (détecté par `isTruncatedBody()`), **TV ne l'ajoute que
-si le texte dépasse 1 M de caractères** — un corps multi-octets tronqué côté TV peut
-donc passer inaperçu. `safeFetch()` refuse un HTML tronqué (return `null`) plutôt que
-de parser un préfixe ; ne jamais parser un body tronqué avec cheerio.
+**Body truncated at 1 MB.** Le runtime coupe à 1 MB d'octets. Mobile ajoute **toujours**
+le suffixe `\n...[truncated]` (détecté par `isTruncatedBody()`), **TV ne l'ajoute que si le
+texte dépasse 1 M de caractères** : un HTML UTF-8 coupé à 1 MB d'octets arrive à ~950 k
+caractères, **sans marqueur**. `safeFetch()` couvre les deux cas (suffixe **et** heuristique
+« HTML ≥ 700 k caractères ouvrant `<html>` sans `</html>` ») et refuse un HTML tronqué
+(return `null`) plutôt que de parser un préfixe ; ne jamais parser un body tronqué avec cheerio.
 
 **`require('unknown-module')` throws.** Bundle all dependencies with esbuild `bundle: true`. Only `cheerio` and `crypto-js` are available at runtime.
 
@@ -750,6 +852,27 @@ la taille dans le même texte le fait échouer silencieusement (taille absente d
 - Pas de `Array.prototype.at`, `findLast`, `Object.groupBy`, `structuredClone` (polyfills fournis : `flat`, `flatMap`, `Object.entries`, `Object.fromEntries`, `String.replaceAll`)
 - `Error.stack` format differs
 - Always test in-app
+
+### 9.5 Blocages spécifiques aux sites FR (diagnostics live 2026-11)
+
+| Site | Symptôme | Cause réelle | Traitement dans le provider |
+|---|---|---|---|
+| Anime-Sama | 0 stream sur tout le catalogue | `/catalogue/{slug}/{saison}/{lang}/episodes.js` renvoie **403 Cloudflare** sans en-tête `Referer` (la fiche, elle, répond 200 sans Referer) | `http.js` envoie `Referer`/`Origin` sur **toutes** les requêtes ; la recherche se fait aussi sur le `subtitle` des résultats (titres alternatifs FR/EN/romaji) |
+| Anime-Sama | mauvais épisode / épisode absent | le slug du site est romaji (`shingeki-no-kyojin`) et absent des premiers titres TMDB (EN/FR) | recherche `fetch.php` + garde `h1` + passe `toSlug()` de tous les titres, puis mapping absolu (sagas) |
+| VoirAnime | épisode d'une autre saison / OAV servi | la recherche WP classe au titre : `shingeki-no-kyojin-lost-girls` sortait 1er pour « Attack on Titan S4 » ; une fiche sans marqueur de saison (`shingeki-no-kyojin`) servait la S1 pour une demande S2+ | garde œuvre dérivée (OAV/recap/spinoff), garde de volume d'épisodes vs `seasonEpisodeCounts` TMDB, exclusion des fiches portant une autre saison |
+| VoirAnime | VF absente | fiches VF plus rares + budget lecteurs consommé par la VOSTFR d'abord ; `voe.sx` était classé « non résolvable » alors que `resolveVoe()` le résout (SPA Byse) | VF traitée en premier dans `pickBalanced`, `voe` réintégré aux lecteurs résolvables, `MAX_HOSTS = 4` |
+| AnimoFlix | 0 stream sur des titres pourtant présents (`Demon Slayer: Kimetsu no Yaiba`) | `search-autocomplete.php` matche un **préfixe de `title` ou d'un alias de `title2`** : un titre complet avec `:` ou mélangeant les deux (`Demon Slayer Kimetsu`) renvoie `[]` ; le fallback HTML `/?s=` n'est pas une page de recherche (c'est l'accueil, 590 Ko, liens « derniers épisodes ») | requêtes découpées (`queryVariants` : segment avant `:`, sans suffixe saison, préfixes 2/3 mots) **+ oracle `sitemap-animes.xml`** (2 339 fiches, 1 GET) qui couvre tout le catalogue ; fallback `?s=` supprimé |
+| AnimoFlix | mauvais film servi (saga à plusieurs films) | `$('.season-card')` gardait **un seul** `filmSeasonHref` (le dernier de la page) → « Forteresse infinie » servie pour « Train de l'infini » | collecte de toutes les cartes film + choix par score de mots du titre TMDB (`pickFilm`), URL `…/film-<titre>/vf/episode-1/` vérifiée |
+| AnimoFlix | 15 s perdues par épisode, lecteurs jamais résolus | `lpayer.embed4me.com` = SPA React (timeout), `smoothpre.com` (EarnVids) répond `Video embed restricted for this domain` quel que soit le Referer, `oneupload.to` = gateway JS `window.location.replace('…?ch=1&js=<JWT>&sid=…')` + pub + cookie jar (impossible en QuickJS) | `DEAD_HOST_RE` les écarte avant `resolveStream` ; seuls `ansembed` (vidmoly) et les lecteurs résolubles sont sondés |
+| Movix | streams trouvés mais non jouables | `fsvid.lol`/`vidzy.org` publient l'URL HLS **en clair** après unpack videojs (`sources:[{src:"https://r1.fsvid.lol/hls2/…/master.m3u8?t=…"}]`), alors que le résolveur ne cherchait que l'ancien motif base64+XOR → `isDirect:false` | `resolveFsvidVidzy` scanne le HTML (packé ou non) pour le `master.m3u8` réel en excluant le leurre `s1.<host>/troll/master.m3u8` |
+| Movix | une seule langue servie / contenu étranger | `TARGET_PLAYABLE = 4` atteint par 4 lecteurs VF ; `searchFallback` sondait les résultats **sans le bon `media_type`** (film récapitulatif servi pour une série) | résolution **round-robin par langue**, 6 playable / 25 s ; résultats de recherche filtrés par type + ressemblance de titre, abandon si aucun candidat du bon type |
+| MugiwaraStream | VF absente | `resolveStreams` faisait `break` à **3** streams directs : les 3 premiers lecteurs VOSTFR épuisaient le quota ; le label VF/VOSTFR n'était pas dans le `title` et `language` valait `ja` pour le VOSTFR | résolution round-robin par langue (2 lecteurs/langue max), `title` préfixé `[VF]`/`[VOSTFR]`, `language: 'fr'` (VOSTFR = version FR sous-titrée) |
+| SenAnimes | 0 stream | portail **Cloudflare Turnstile vérifié côté serveur** : `/api/episode/source` renvoie `403 {"error":"verification-humaine"}` sans jeton résolu dans un navigateur. Ni cookie (`sa_humain_vu=1`), ni Referer, ni UA navigateur ne passent ; `/api/humain` refuse tout jeton invalide | détection immédiate (`isHumanGateActive`) et sortie rapide ; **aucun contournement possible depuis QuickJS** — le provider reste présent pour le jour où le portail sera retiré |
+
+> **Anime (NuvioTV) :** les videoId `kitsu:`/`mal:`/`anilist:`/`anidb:` arrivent avec `season = null`
+> et un numéro **absolu**. `anime-sama` et `voiranime` appellent désormais
+> `resolveSeasonEpisodeInputs()` (dle-extractor.js) en entrée : sans ce reverse-map,
+> `effectiveSeason` restait `null` → `saisonnull` / fiches S1 → 0 stream ou mauvais épisode.
 
 ---
 

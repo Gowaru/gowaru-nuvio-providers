@@ -3,10 +3,12 @@
  * Avec détection Cloudflare et retry avec backoff pour réduire les timeouts.
  */
 
-import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, sleep, isAborted, USER_AGENT } from '../utils/resolvers.js';
 
 export const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    // UA Chrome complet partagé (le UA court injecté par le runtime et les
+    // versions anciennes se font filtrer par Cloudflare).
+    "User-Agent": USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "max-age=0",
@@ -19,6 +21,20 @@ let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 const DOMAIN = 'voir-anime.to';
+
+// ─── Coupe-circuit anti rate-limit Cloudflare ───────────────────────────────
+// Constaté live : le sondage de slugs (16 à 56 HEAD) + les recherches WP
+// déclenchent la limite du site en ~2 min → TOUTES les requêtes suivantes
+// renvoient 503. Sans coupe-circuit, chaque appel rejoue ses 2 retries
+// (1 s + 2 s + 4 s) : le provider brûle alors ses 40 s de budget et rend
+// 0 stream en 46 s au lieu d'abandonner net en quelques secondes.
+// L'état est pur (une instance QuickJS fraîche par getStreams côté app) :
+// on le réinitialise au début de chaque exécution, le blocage reste donc
+// local à UNE tentative et la suivante repart d'un pied neuf.
+let _rateLimitedUntil = 0;
+export function isRateLimited() { return Date.now() < _rateLimitedUntil; }
+export function markRateLimited(ms = 25000) { _rateLimitedUntil = Date.now() + ms; }
+export function resetRateLimit() { _rateLimitedUntil = 0; }
 
 /** Délais de retry pour Cloudflare (backoff progressif) */
 const RETRY_DELAYS = [1000, 2000, 4000];
@@ -49,6 +65,8 @@ function isCloudflareBlock(text) {
 export async function fetchText(url, options = {}) {
     const signal = options.signal || _currentSignal;
     if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+    // Blocage en cours → pas de requête, pas de retry : échec immédiat.
+    if (isRateLimited()) throw new Error(`Rate limited (Cloudflare) for ${url.slice(0, 60)}`);
 
     await rateLimit(DOMAIN);
 
@@ -95,11 +113,17 @@ export async function fetchText(url, options = {}) {
 
             const status = typeof res.status === 'number' ? res.status : 0;
 
+            // Limite de débit atteinte (429) : on coupe pour toute l'exécution.
+            if (status === 429 || status === 503) {
+                markRateLimited();
+            }
+
             // Cloudflare challenge (503/403) → retry avec backoff
             if (status === 503 || status === 403) {
                 const text = await res.text();
                 if (isCloudflareBlock(text)) {
                     console.log(`[VoirAnime] Cloudflare block (${status}), attempt ${attempt + 1}/${maxRetries + 1}`);
+                    markRateLimited();
                     lastError = new Error(`Cloudflare block (${status})`);
                     continue;
                 }

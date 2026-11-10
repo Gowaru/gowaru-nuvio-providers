@@ -1,20 +1,86 @@
 /**
- * Extractor Logic for Anime-Sama
- * Optimisé : réduit le slug probing, fetchJs séquentiel, budget check renforcé
+ * Extractor Logic for Anime-Sama (anime-sama.to) — diag live 2026-10.
+ *
+ * Chaîne réelle du site (vérifiée en live) :
+ *  1. Recherche : POST /template-php/defaut/fetch.php {query} → liens
+ *     /catalogue/{slug} avec titre + sous-titres (`.asn-search-result-*`).
+ *  2. Fiche   : GET /catalogue/{slug}/ → les panneaux sont déclarés par
+ *     `panneauAnime("Titre [Episode 1 à 61]", "saison1/vostfr")`. C'est
+ *     l'INDEX AUTORITAIRE du site : liste des saisons/sagas/films/OAV avec,
+ *     pour les longues séries, la PLAGE D'ÉPISODES ABSOLUS. Il contient aussi
+ *     les entrées que le provider ignorait (`film1`, `film2`, `oav`,
+ *     `saison1hs` sans fillers, `kai*` recuts).
+ *  3. Épisodes: GET /catalogue/{slug}/{saison}/{lang}/episodes.js
+ *     → `var epsN = ['https://player/embed-xxx', ...]` (un var par groupe de
+ *     lecteurs). L'INDEX DU TABLEAU = numéro d'épisode LOCAL À LA SAISON.
+ *  4. Langues : le dossier `{lang}` existe ou non (404/soft-404 « Accès
+ *     Introuvable »). Le site propose `vostfr`, `vf`, `vf1`, `vf2` (2ᵉ/3ᵉ
+ *     doublage FR), `vqc` (VF québécoise), `va` (anglais), `var` (arabe),
+ *     `vkr` (coréen), `vcn` (chinois). Les boutons `switchXXX` de la page
+ *     sont TOUJOURS présents (masqués en JS) → seule la sonde du dossier
+ *     tranche.
+ *
+ * Deux bugs structurels corrigés ici :
+ *  A. MAPPING DES ÉPISODES — le provider supposait `saison TMDB N == saison N`
+ *     du site et `épisode TMDB == index du tableau`. Faux dès que le site
+ *     découpe en sagas : One Piece (TMDB S3E1 = absolu 78) tombait dans
+ *     `saison3` (site 144-206) → épisode 144 servi. Détective Conan (TMDB
+ *     S1 de 1100+ épisodes) tombait dans `saison1` (1-42) → 0 stream.
+ *     On mappe désormais l'épisode ABSOLU (somme TMDB des saisons
+ *     précédentes) sur la plage de la saga → index local exact.
+ *  B. LANGUES — seuls `vostfr` et `vf` étaient sondés, alors que `vf2`
+ *     (One Piece S1), `va`, `var`, `vqc`… contiennent du contenu réel.
+ *     Les 9 dossiers sont sondés (français d'abord, puis le reste si peu de
+ *     résultats) et chaque piste est étiquetée dans le titre.
  */
 
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
 import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { hasForeignLeadingTokens } from '../utils/dle-extractor.js';
-import { toSlug, stripSeasonSuffix, resolveTargetEpisodes, normalize } from '../utils/dle-extractor.js';
+import {
+    hasForeignLeadingTokens, toSlug, stripSeasonSuffix, resolveTargetEpisodes,
+    getAbsoluteEpisodeFromTmdb, normalize, resolveSeasonEpisodeInputs
+} from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://anime-sama.to";
 const MAX_FALLBACK_TITLES = 5;
-const MAX_FALLBACK_SLUGS = 2;
-const MAX_VERIFIED_SLUGS = 12;
+const MAX_FALLBACK_SLUGS = 4;
+// Passe 3 (discovery vérifiée) : chaque candidat coûte 1 GET JSON + 1 GET HTML.
+// 6 suffit très largement — les titres sont déjà ordonnés par pertinence, et
+// le budget réseau de NuvioTV est sérialisé (12 candidats = 24 GET).
+const MAX_VERIFIED_SLUGS = 6;
+const VERIFY_BUDGET_MS = 12000;
 const BUDGET_MS = 40000;
+// Budget dédié à la résolution des lecteurs (la partie lourde : chaque
+// player = 1 à 4 requêtes). Au-delà, on garde ce qui est déjà résolu.
+const PLAYER_BUDGET_MS = 20000;
+// Dès qu'un slug a fourni du contenu pour l'épisode demandé, on ARRÊTE :
+// toutes les langues sont déjà couvertes par les dossiers de la saison du
+// site. Continuer revient à interroger des slugs homonymes — c'est ainsi que
+// `naruto-shippuden` (saison SUIVANTE) se retrouvait servi pour « Naruto »
+// (TMDB 46260), la garde titre acceptant l'inclusion à frontières de mots.
+const ENOUGH_STREAMS = 1;
+const TARGET_STREAMS = 6;
+const TARGET_DIRECT_PER_LANG = 2;
+const EPISODES_TIMEOUT = 8000;
+const INDEX_TIMEOUT = 9000;
+
+// ─── Langues disponibles sur le site ─────────────────────────────────────────
+// `vostfr`/`vf` couvrent la majorité du catalogue ; `vf1`/`vf2`/`vqc`/`va`/
+// `var`/`vkr`/`vcn` existent réellement (ex. One Piece S1 → `vf2`) et étaient
+// purement inaccessibles.
+const LANGS_FR = ['vostfr', 'vf', 'vf1', 'vf2'];
+const LANGS_EXTRA = ['vqc', 'va', 'var', 'vkr', 'vcn'];
+const LANG_LABEL = {
+    vostfr: 'VOSTFR', vf: 'VF', vf1: 'VF1', vf2: 'VF2', vqc: 'VFQ',
+    va: 'VA', var: 'VAR', vkr: 'VKR', vcn: 'VCN',
+};
+// Codes de langue compris par les apps Nuvio (fr/en/multi/ja + codes ISO).
+const LANG_CODE = {
+    vostfr: 'fr', vf: 'fr', vf1: 'fr', vf2: 'fr', vqc: 'fr',
+    va: 'en', var: 'ar', vkr: 'ko', vcn: 'zh',
+};
 
 /**
  * Search for slugs on Anime-Sama, scored by relevance to the query
@@ -77,6 +143,20 @@ function scoreSearchResult(resultTitle, resultSubtitle, query) {
 
     const qWords = q.split(/[^a-z0-9]+/).filter(w => w.length > 3);
     const tWords = t.split(/[^a-z0-9]+/).filter(w => w.length > 3);
+
+    // Le résultat de recherche du site expose dans `.asn-search-result-subtitle`
+    // la liste des titres alternatifs (FR/EN/romaji). C'est LA source de
+    // vérité pour les œuvres dont le titre site est en romaji : « Attack on
+    // Titan » ne matche pas le title « Shingeki no Kyojin », mais figure dans
+    // le subtitle — sans ce test, la recherche ne proposait jamais la fiche
+    // (0 stream sur AOT et tous les titres à double nomenclature).
+    // Le garde anti-faux-match de la passe 2 (`passesTitleGuard`) tranche
+    // ensuite sur le vrai <h1>, on peut donc se montrer large ici.
+    if (s && q.length >= 4) {
+        if (s === q) return 100;
+        if (s.includes(q)) score = Math.max(score, 80);
+        else if (q.includes(s) && s.length >= 4) score = Math.max(score, 60);
+    }
 
     for (const w of qWords) {
         if (tWords.includes(w)) score += 15;
@@ -157,6 +237,10 @@ async function fetchCatalogueTitle(slug) {
     try {
         html = await fetchText(`${BASE_URL}/catalogue/${slug}/`);
     } catch (_) { return null; }
+    return extractPageTitle(html);
+}
+
+function extractPageTitle(html) {
     if (!html || html.length < 500 || /acc[eè]s\s+introuvable/i.test(html)) return null;
     try {
         const $ = cheerio.load(html);
@@ -164,7 +248,7 @@ async function fetchCatalogueTitle(slug) {
         if (h1) return h1;
         const t = $('title').first().text().trim();
         if (t) return t.split('|')[0].trim();
-    } catch (_) {}
+    } catch (_) { }
     return null;
 }
 
@@ -186,7 +270,162 @@ async function passesTitleGuard(slug, titles, signal, startTime) {
     return true;
 }
 
+// ─── Index du catalogue (panneauAnime) ───────────────────────────────────────
 
+/**
+ * « Saga 2 Alabasta [Episode 62 à 143] » → { start: 62, end: 143 }
+ * « Saison 31 [Episode 1187 à ...] »     → { start: 1187, end: null }
+ * « Saison 1 »                           → null (pas de plage → index = épisode)
+ */
+function parseEpisodeRange(label) {
+    if (!label) return null;
+    const m = label.match(/\[\s*[EÉeé]pisodes?\s*(\d+)\s*(?:à|a|au|-|–|—|to)\s*(\d+)/i);
+    if (m) return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
+    const open = label.match(/\[\s*[EÉeé]pisodes?\s*(\d+)\s*(?:à|a|-|–|—|to)?\s*(?:\.\.\.|…)/i);
+    if (open) return { start: parseInt(open[1], 10), end: null };
+    const single = label.match(/\[\s*[EÉeé]pisodes?\s*(\d+)\s*\]/i);
+    if (single) return { start: parseInt(single[1], 10), end: parseInt(single[1], 10) };
+    return null;
+}
+
+/**
+ * Parse la fiche catalogue : lignes `panneauAnime("Titre", "chemin")`.
+ * Retourne [{ label, season, lang, start, end }] dédupliqué par `season`.
+ * `season` = dossier réel du site (`saison1`, `saison2-3`, `film1`, `kai`…).
+ */
+export function parseCatalogueIndex(html) {
+    if (!html || typeof html !== 'string') return [];
+    const entries = [];
+    const seen = new Set();
+    const re = /panneauAnime\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const label = m[1];
+        const path = m[2];
+        const pm = path.match(/^([a-z0-9][a-z0-9-]*)(?:\/([a-z0-9]+))?$/i);
+        if (!pm) continue;                     // en-tête d'exemple ("nom","url")
+        const season = pm[1];
+        if (season === 'url' || label === 'nom') continue;
+        if (seen.has(season)) continue;
+        seen.add(season);
+        const range = parseEpisodeRange(label);
+        entries.push({
+            label: (label || '').trim(),
+            season,
+            lang: pm[2] || 'vostfr',
+            start: range ? range.start : null,
+            end: range ? range.end : null,
+        });
+    }
+    return entries;
+}
+
+// Cache par exécution : la fiche est réutilisée entre les candidats de slug.
+const INDEX_CACHE = new Map();
+
+// MISSING = la fiche n'existe pas (404 / soft-404 / aucun panneau)
+// FAILED  = la requête a échoué (réseau, timeout) → état inconnu, on garde
+//           le chemin historique comme filet de sécurité.
+const MISSING = { missing: true };
+const FAILED = { failed: true };
+
+async function getCatalogueIndex(slug, signal) {
+    if (INDEX_CACHE.has(slug)) return INDEX_CACHE.get(slug);
+    let result = FAILED;
+    if (!isAborted(signal)) {
+        let html = null;
+        try {
+            html = await withTimeout(fetchText(`${BASE_URL}/catalogue/${slug}/`), INDEX_TIMEOUT, `index ${slug}`);
+        } catch (_) { html = null; }
+        if (typeof html === 'string') {
+            if (/acc[eè]s\s+introuvable/i.test(html) || html.length < 500) {
+                result = MISSING;
+            } else {
+                const entries = parseCatalogueIndex(html);
+                if (entries.length === 0) {
+                    result = MISSING;
+                } else {
+                    console.log(`[Anime-Sama] Index ${slug}: ${entries.map(e => e.season).join(', ')}`);
+                    result = { entries };
+                }
+            }
+        }
+    }
+    INDEX_CACHE.set(slug, result);
+    return result;
+}
+
+const FILM_RE = /^(film\d*|movie\d*|oav\d*|ona\d*)$/i;
+
+/**
+ * Saisons candidates pour une série, par ordre de pertinence.
+ *  - `base` = premier épisode absolu de la saison (null si inconnu).
+ *  - `idx`  = index 0-based à lire dans episodes.js.
+ * Une plage connue prime sur le numéro de saison TMDB (cas One Piece/Conan).
+ */
+export function selectSeasonCandidates(index, { effectiveSeason, absEpisode, episode }) {
+    const list = Array.isArray(index) ? index : [];
+    const out = [];
+    const seen = new Set();
+    const push = (season, base, label) => {
+        if (!season || seen.has(season)) return;
+        seen.add(season);
+        out.push({ season, base, label: label || '' });
+    };
+
+    // 1. Sagas dont la plage contient l'épisode absolu (mapping exact)
+    for (const e of list) {
+        if (e.start == null) continue;
+        if (absEpisode >= e.start && (e.end == null || absEpisode <= e.end)) {
+            push(e.season, e.start, e.label);
+        }
+    }
+    // 2. Saison du même numéro que la saison TMDB (structure identique)
+    const exact = list.find(e => e.season === `saison${effectiveSeason}`);
+    if (exact) push(exact.season, exact.start, exact.label);
+    // 3. Une seule saison « épisodes » sur le site (saisons TMDB fusionnées) :
+    //    on lit l'épisode absolu dedans.
+    const episodeSeasons = list.filter(e => /^saison\d+$/i.test(e.season));
+    if (episodeSeasons.length === 1 && !list.some(e => e.season === `saison${effectiveSeason}`)) {
+        push(episodeSeasons[0].season, 1, episodeSeasons[0].label);
+    }
+    // 4. Dernier repli : les saisons à plage (lecture par l'absolu)
+    for (const e of list) {
+        if (e.start != null) push(e.season, e.start, e.label);
+    }
+    // On borne : chaque candidat coûte au moins une requête.
+    return out.slice(0, 4);
+}
+
+/**
+ * Entrées « film » du catalogue (film, film1, film2, oav…), ordonnées par
+ * ressemblance entre le libellé du panneau et les titres TMDB. Le site ne
+ * donne pas le nom du film dans l'URL (`film1`, `film2`) mais le libellé
+ * porte la précision (« Film - Train de l'infini »).
+ */
+export function selectMovieCandidates(index, titles) {
+    const list = Array.isArray(index) ? index : [];
+    const films = list.filter(e => FILM_RE.test(e.season));
+    if (films.length === 0) return [];
+    const scored = films.map(e => {
+        const label = normalize(e.label);
+        let best = 0;
+        for (const t of titles || []) {
+            const nt = normalize(t);
+            if (!nt) continue;
+            const words = nt.split(' ').filter(w => w.length > 3);
+            if (words.length === 0) continue;
+            let hits = 0;
+            for (const w of words) if (label.includes(w)) hits++;
+            best = Math.max(best, hits);
+        }
+        return { ...e, score: best };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored;
+}
+
+// ─── Lecture des pistes ──────────────────────────────────────────────────────
 
 function getPlayerName(varName, url) {
     const u = (url || '').toLowerCase();
@@ -199,7 +438,9 @@ function getPlayerName(varName, url) {
     if (u.includes('dood')) return 'Doodstream';
     if (u.includes('uqload') || u.includes('oneupload')) return 'Uqload';
     if (u.includes('ansembed')) return 'AnsEmbed';
+    if (u.includes('vk.com') || u.includes('vkvideo')) return 'VK';
     if (u.includes('embed4me')) return 'Embed4Me';
+    if (u.includes('sibnet')) return 'Sibnet';
     return 'Player';
 }
 
@@ -217,19 +458,28 @@ function parseUrls(jsContent) {
 async function fetchJs(slug, seasonPath, lang) {
     const url = `${BASE_URL}/catalogue/${slug}${seasonPath ? '/' + seasonPath : ''}/${lang}/episodes.js`;
     try {
-        const content = await withTimeout(fetchText(url), 8000, `fetchJs ${slug}`);
+        const content = await withTimeout(fetchText(url), EPISODES_TIMEOUT, `fetchJs ${slug}`);
         return content || null;
     } catch (e) { return null; }
 }
 
-// Slots morts (SPA React irrésolubles : budget brûlé pour rien) — exclus AVANT resolveStream
-const DEAD_HOSTS = /embed4me|sendvid/i;
+// Slots morts — exclus AVANT resolveStream pour ne pas brûler le budget.
+// ⚠️ sendvid N'EST PLUS ici (vérifié live 2026-10 : resolveSendvid extrait bien
+// le MP4 signé quand le fichier est vivant — `videos2.sendvid.com/…mp4` → 200
+// video/mp4 ; sendvid apparaît 606 fois sur 14 titres scannés). L'exclure
+// supprimait de vraies pistes (dont des VF). Ne reste que la famille embed4me :
+// pages qui ne répondent jamais (timeout constaté à 15 s sur lpayer.embed4me.com,
+// y compris en fetch direct) → pire cas de gaspillage de budget.
+const DEAD_HOSTS = /embed4me/i;
 // Hosts avec résolveur dédié d'abord (évite de brûler le budget 12s sur des players génériques)
+// VK (18 embeds sur 14 titres) : l'embed n'expose aucun flux, l'API al_video.php
+// donne un master HLS okcdn.ru (144→1080p) en 1 requête → priorité haute.
 const HOST_PRIORITY = [
     [/sibnet/i, 0],
+    [/vk\.com|vkvideo/i, 1],
     [/uqload|oneupload/i, 1],
     [/vidmoly|ansembed/i, 2],
-    [/voe|jeremy|teresa|smoothpre/i, 3]
+    [/voe|jeremy|teresa|smoothpre|megankiddifference/i, 3]
 ];
 function hostScore(url) {
     const u = url || '';
@@ -311,9 +561,9 @@ async function verifySlugTv(slug, season, signal, startTime) {
     return null;
 }
 
-// Sonde d'existence film : /film/ puis /film2/ (le site utilise l'un ou l'autre).
+// Sonde d'existence film : toutes les variantes utilisées par le site.
 async function verifySlugMovie(slug, signal, startTime) {
-    for (const seasonPath of ['film', 'film2']) {
+    for (const seasonPath of ['film', 'film1', 'film2']) {
         for (const lang of ['vostfr', 'vf']) {
             if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return null;
             const js = await fetchJs(slug, seasonPath, lang);
@@ -323,13 +573,16 @@ async function verifySlugMovie(slug, signal, startTime) {
     return null;
 }
 
-async function buildStreams(parsed, lang, episode, idx) {
-    // OPTIMISATION: Résolution séquentielle avec early-exit
-    // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
-    const TARGET_DIRECT = 2;
+// ─── Résolution des lecteurs ─────────────────────────────────────────────────
+
+const PLAYER_TIMEOUT = 8000;
+
+async function buildStreams(parsed, lang, episode, idx, ctx, deadline) {
+    // Résolution séquentielle avec early-exit (le fetch QuickJS est bloquant :
+    // paralléliser ne fait que multiplier le pic de timeout de l'app).
+    const label = LANG_LABEL[lang] || lang.toUpperCase();
+    const code = LANG_CODE[lang] || 'fr';
     const playable = [];
-    const startTime = Date.now();
-    const BUDGET_MS = 12000;
 
     // Ordonner les vars en favorisant les hosts à résolveur dédié
     // (tri stable : l'ordre du site est préservé à priorité égale)
@@ -337,8 +590,8 @@ async function buildStreams(parsed, lang, episode, idx) {
         hostScore(a.urls[idx] || '') - hostScore(b.urls[idx] || ''));
 
     for (const { varName, urls } of ordered) {
-        if (playable.length >= TARGET_DIRECT) break;
-        if (Date.now() - startTime > BUDGET_MS) break;
+        if (playable.length >= TARGET_DIRECT_PER_LANG) break;
+        if (Date.now() > deadline) break;
 
         const playerUrl = urls[idx];
         if (!playerUrl || !playerUrl.startsWith('http')) continue;
@@ -348,126 +601,260 @@ async function buildStreams(parsed, lang, episode, idx) {
         try {
             const stream = await withTimeout(
                 resolveStream({
-                    name: `Anime-Sama (${lang.toUpperCase()})`,
-                    title: `${getPlayerName(varName, playerUrl)} - ${epLabel}${lang.toUpperCase()}`,
+                    name: `Anime-Sama (${label})`,
+                    title: `${getPlayerName(varName, playerUrl)} - ${epLabel}${label}`,
                     url: playerUrl,
                     quality: "HD",
+                    language: code,
                     headers: { "Referer": BASE_URL }
                 }),
-                8000,
+                PLAYER_TIMEOUT,
                 `AnimeSama player ${getPlayerName(varName, playerUrl)}`
             );
-            if (stream) playable.push(stream);
+            if (stream && stream.isDirect) playable.push(stream);
         } catch (e) { /* skip failed player */ }
     }
     return playable;
 }
 
-async function fetchAndGetUrl(slug, lang, season, episode, mediaType, altEpisodes = []) {
-    const episodesToTry = [episode, ...altEpisodes.filter(e => e !== episode)];
-
-    if (mediaType === 'movie') {
-        // Les films vivent sous le catalogue de la série, en /film/ OU /film2/
-        // (constaté en live 09/2026 : demon-slayer/film2/, tensei-slime/film2/…
-        // — /film/ renvoie une soft-404 HTML sans `var` → parseUrls vide).
-        for (const seasonPath of ['film', 'film2']) {
-            const jsContent = await fetchJs(slug, seasonPath, lang);
-            if (!jsContent) continue;
-            const parsed = parseUrls(jsContent);
+/**
+ * Sonde les dossiers de langue d'une saison et retourne les pistes valides.
+ * `idx` = index 0-based de l'épisode dans la saison.
+ * Les langues FR sont sondées d'abord ; les langues « extra » (VA/VAR/VKR/
+ * VCN/VFQ) seulement si le français n'a pas suffi — chaque sonde est un GET.
+ */
+async function probeLanguages(slug, season, idx, ctx) {
+    const valid = [];
+    let maxTotal = 0;
+    const probe = async (langs) => {
+        for (const lang of langs) {
+            if (isAborted(ctx.signal) || isBudgetExhausted(ctx.startTime, BUDGET_MS)) return;
+            if (ctx.streams.length + valid.length >= TARGET_STREAMS) return;
+            const js = await fetchJs(slug, season, lang);
+            if (!isValidEpisodesJs(js)) continue;
+            const parsed = parseUrls(js);
             if (parsed.length === 0) continue;
-            const streams = await buildStreams(parsed, lang, null, 0);
-            if (streams.length > 0) return streams;
+            const total = Math.max(...parsed.map(p => p.urls.length));
+            if (total > maxTotal) maxTotal = total;
+            if (idx < 0 || idx >= total) continue;
+            valid.push({ lang, parsed, total });
         }
-        return [];
+    };
+    await probe(LANGS_FR);
+    // Épisode nettement hors plage de la saison (saga voisine, saison
+    // découpée en parties) : inutile de sonder les 5 langues restantes.
+    const clearlyOutOfRange = valid.length === 0 && maxTotal > 0 && idx >= maxTotal + 2;
+    // Les langues extra (VA/VAR/VKR/VCN/VFQ) coûtent 1 GET chacune : on ne les
+    // sonde que si le français n'a pas déjà donné au moins 2 pistes (VF et
+    // VOSTFR). Sinon on garde le budget pour la résolution des lecteurs.
+    if (!clearlyOutOfRange && valid.length < 2 && ctx.streams.length + valid.length < TARGET_STREAMS) {
+        await probe(LANGS_EXTRA);
     }
-
-    for (const ep of episodesToTry) {
-        const result = await tryFetchEpisode(slug, lang, season, ep);
-        if (result.length > 0) return result;
-    }
-    return [];
+    return valid;
 }
 
 /**
- * Récupère les épisodes pour un slug/lang/saison.
- * Optimisé : fetch d'abord main+root, puis sub-seasons seulement si nécessaire.
+ * Résout une saison du site pour l'épisode voulu.
+ * Retourne les streams (tableau éventuellement vide).
  */
-async function tryFetchEpisode(slug, lang, season, episode) {
-    // OPTIMISATION: Fetch séquentiel (fetch synchrone en QuickJS)
-    // Essayer main season d'abord (le plus probable), root en fallback
-    const mainJs = await fetchJs(slug, `saison${season}`, lang);
+async function resolveSeason(slug, season, idx, ctx) {
+    const tracks = await probeLanguages(slug, season, idx, ctx);
+    if (tracks.length === 0) return [];
+    // Budget lecteurs : 20 s max par saison, borné par le budget global.
+    const deadline = Math.min(Date.now() + PLAYER_BUDGET_MS, ctx.startTime + BUDGET_MS - 3000);
+    const out = [];
+    for (const track of tracks) {
+        if (Date.now() > deadline) break;
+        if (isAborted(ctx.signal)) break;
+        if (ctx.streams.length + out.length >= TARGET_STREAMS) break;
+        const streams = await buildStreams(track.parsed, track.lang, ctx.episodeLabel, idx, ctx, deadline);
+        out.push(...streams);
+    }
+    if (out.length > 0) {
+        console.log(`[Anime-Sama] ${slug}/${season}: ${out.length} stream(s) [${tracks.map(t => t.lang).join(',')}]`);
+    }
+    return out;
+}
 
-    // Traiter le main season d'abord
-    if (mainJs) {
-        const parsed = parseUrls(mainJs);
-        if (parsed.length > 0) {
-            const totalEps = parsed[0].urls.length;
-            if (episode >= 1 && episode <= totalEps) {
-                return buildStreams(parsed, lang, episode, episode - 1);
-            }
+// ─── Chemin historique (fallback) ────────────────────────────────────────────
+// Conservé tel quel : il couvre les saisons découpées en parties
+// (`saison4`, `saison4-2`, `saison4-3` — cas Attack on Titan) qui n'exposent
+// aucune plage d'épisodes dans l'index, ainsi que les fiches absentes du
+// catalogue parsé. Les numéros d'épisode y sont cumulatifs.
+async function tryFetchEpisodeLegacy(slug, lang, season, episode, ctx) {
+    const deadline = ctx.startTime + BUDGET_MS - 3000;
+    const outOfBudget = () => isAborted(ctx.signal) || isBudgetExhausted(ctx.startTime, BUDGET_MS) || Date.now() > deadline;
+    const fetchAndBuild = async (seasonPath) => {
+        if (outOfBudget()) return null;
+        const js = await fetchJs(slug, seasonPath, lang);
+        if (!isValidEpisodesJs(js)) return null;
+        const parsed = parseUrls(js);
+        if (parsed.length === 0) return null;
+        return parsed;
+    };
 
-            // Le épisode n'est pas dans le main season : chercher dans les sub-seasons
-            let cumulativeEps = totalEps;
-            const subSeasons = ['2', '3', '4', '5'];
-            for (const subNum of subSeasons) {
-                const subJs = await fetchJs(slug, `saison${season}-${subNum}`, lang);
-                if (!subJs) continue;
-                const subParsed = parseUrls(subJs);
-                if (subParsed.length === 0) continue;
-                const subTotal = subParsed[0].urls.length;
-                const localEp = episode - cumulativeEps;
-                if (localEp >= 1 && localEp <= subTotal) {
-                    return buildStreams(subParsed, lang, episode, localEp - 1);
-                }
-                cumulativeEps += subTotal;
+    const totalOf = (parsed) => Math.max(...parsed.map(p => p.urls.length));
+
+    const mainParsed = await fetchAndBuild(`saison${season}`);
+    if (mainParsed) {
+        const totalEps = totalOf(mainParsed);
+        if (episode >= 1 && episode <= totalEps) {
+            return buildStreams(mainParsed, lang, ctx.episodeLabel, episode - 1, ctx, deadline);
+        }
+        // L'épisode n'est pas dans la saison principale : sous-saisons
+        // (le site découpe « saison N partie K » en `saison{N}-{K}`)
+        let cumulativeEps = totalEps;
+        for (const subNum of ['2', '3', '4', '5', '6']) {
+            const subParsed = await fetchAndBuild(`saison${season}-${subNum}`);
+            if (!subParsed) continue;
+            const subTotal = totalOf(subParsed);
+            const localEp = episode - cumulativeEps;
+            if (localEp >= 1 && localEp <= subTotal) {
+                return buildStreams(subParsed, lang, ctx.episodeLabel, localEp - 1, ctx, deadline);
             }
+            cumulativeEps += subTotal;
         }
     }
 
-    // Essayer le root path (sans préfixe de saison) - fetch en fallback
-    const rootJs = await fetchJs(slug, '', lang);
-    if (rootJs) {
-        const parsed = parseUrls(rootJs);
-        if (parsed.length > 0) {
-            const idx = episode - 1;
-            if (idx >= 0 && idx < parsed[0].urls.length) {
-                return buildStreams(parsed, lang, episode, idx);
-            }
+    // Chemin racine (sans préfixe de saison)
+    const rootParsed = await fetchAndBuild('');
+    if (rootParsed) {
+        const idx = episode - 1;
+        if (idx >= 0 && idx < totalOf(rootParsed)) {
+            return buildStreams(rootParsed, lang, ctx.episodeLabel, idx, ctx, deadline);
         }
     }
-
     return [];
 }
+
+async function legacyResolve(slug, season, ctx) {
+    const out = [];
+    // Filet de sécurité uniquement : 2 langues × (saison + sous-saisons +
+    // racine) requêtes — on ne l'étend pas aux 9 langues du site.
+    for (const lang of ['vostfr', 'vf']) {
+        if (isAborted(ctx.signal) || isBudgetExhausted(ctx.startTime, BUDGET_MS)) break;
+        if (ctx.streams.length + out.length >= TARGET_STREAMS) break;
+        const streams = await tryFetchEpisodeLegacy(slug, lang, season, ctx.episode, ctx);
+        if (streams && streams.length > 0) out.push(...streams);
+    }
+    return out;
+}
+
+/**
+ * Collecte les streams d'un slug validé : index du catalogue d'abord
+ * (mapping exact des épisodes + toutes les langues), puis chemin historique.
+ */
+async function collectFromSlug(slug, ctx) {
+    const index = await getCatalogueIndex(slug, ctx.signal);
+    // Fiche absente : le slug n'existe pas → inutile de sonder des dossiers.
+    if (index === MISSING) return false;
+    const entries = index && Array.isArray(index.entries) ? index.entries : [];
+
+    const candidates = ctx.mediaType === 'movie'
+        ? selectMovieCandidates(entries, ctx.titles)
+        : selectSeasonCandidates(entries, {
+            effectiveSeason: ctx.effectiveSeason,
+            absEpisode: ctx.absEpisode,
+            episode: ctx.episode,
+        });
+
+    for (const cand of candidates) {
+        if (isAborted(ctx.signal) || isBudgetExhausted(ctx.startTime, BUDGET_MS)) break;
+        if (ctx.streams.length >= TARGET_STREAMS) break;
+        const base = cand.base != null
+            ? cand.base
+            : (ctx.mediaType === 'movie' ? 1 : null);
+        const idx = base != null ? ctx.absEpisode - base : ctx.episode - 1;
+        // Diagnostic mapping épisode : "absolu du site" = base + idx ; sert à
+        // vérifier qu'on lit la bonne position (épisode ↔ titre).
+        console.log(`[Anime-Sama] ${slug}: candidat ${cand.season}` +
+            `${cand.label ? ` [${cand.label}]` : ''} → idx=${idx}` +
+            ` (absolu site ${base != null ? base + '+' + ctx.absEpisode : 'n/a'}, TMDB S${ctx.effectiveSeason}E${ctx.episode})`);
+        const streams = await resolveSeason(slug, cand.season, idx, ctx);
+        if (streams.length > 0) {
+            ctx.streams.push(...streams);
+            return true;
+        }
+    }
+
+    // Films : le site les héberge dans le catalogue de la SÉRIE sous
+    // `film`, `film1`, `film2`… — on retente les dossiers bruts quand
+    // l'index ne les a pas listés.
+    if (ctx.mediaType === 'movie') {
+        for (const season of ['film', 'film1', 'film2']) {
+            if (isAborted(ctx.signal) || isBudgetExhausted(ctx.startTime, BUDGET_MS)) break;
+            const streams = await resolveSeason(slug, season, 0, ctx);
+            if (streams.length > 0) {
+                ctx.streams.push(...streams);
+                return true;
+            }
+        }
+    }
+
+    // Repli historique : saisons découpées en parties (le site ne publie
+    // aucune plage pour `saison4` / `saison4-2` — cas Attack on Titan) et
+    // fiches sans panneau. L'index prime, il ne remplace pas ce filet.
+    const legacy = await legacyResolve(slug, ctx.effectiveSeason, ctx);
+    if (legacy.length > 0) {
+        ctx.streams.push(...legacy);
+        return true;
+    }
+    return false;
+}
+
+// ─── Point d'entrée ──────────────────────────────────────────────────────────
 
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
     const signal = options?.signal || null;
     if (isAborted(signal)) return [];
     setCurrentSignal(signal);
+    INDEX_CACHE.clear();
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:/anidb:) envoie season=null +
+    // un numéro d'épisode ABSOLU. Sans reverse-map, `effectiveSeason` restait
+    // null → candidats `saisonnull` → 0 stream sur TOUT le catalogue anime.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, {
+        mediaType: mediaType === 'movie' ? 'movie' : 'tv',
+    });
+    season = se.season;
+    episode = se.episode;
+
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (titles.length === 0) return [];
 
     const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
     const startTime = Date.now();
 
-    // --- ArmSync: resolve absolute episode for TV series ---
+    // --- ArmSync: numéro d'épisode absolu (source de vérité du mapping) ---
     const episodes = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
     const altEpisodes = episodes.length > 1 ? [episodes[1]] : [];
-    // ------------------------------------
+    let absEpisode = parseInt(episodes[0], 10) || 1;
+    if (mediaType !== 'movie') {
+        // TMDB est autoritaire pour la structure saisonnière (contrairement à
+        // cinemeta/ARM, qui regroupent par arcs TVDB — cf. dle-extractor).
+        const tmdbAbs = await getAbsoluteEpisodeFromTmdb(tmdbId, effectiveSeason, episode);
+        if (tmdbAbs && tmdbAbs > 0) absEpisode = tmdbAbs;
+    }
 
-    const title = titles[0];
-    const slug = toSlug(title);
-    const languages = ['vostfr', 'vf'];
-    const streams = [];
+    const ctx = {
+        signal,
+        startTime,
+        mediaType,
+        titles,
+        effectiveSeason,
+        episode,
+        episodeLabel: mediaType === 'movie' ? '' : (parseInt(episode, 10) || 1),
+        absEpisode,
+        streams: [],
+        altEpisodes,
+    };
 
-    // OPTIMISATION: Traitement séquentiel des langues avec early-exit
-    // (fetch synchrone en QuickJS = Promise.all ne parallélise pas)
-    const TARGET_STREAMS = 3;
-
-    // FILMS : le site classe les films sous le catalogue de la SÉRIE (demon-slayer/film2/)
-    // → le slug dérivé du titre TMDB du film est un soft-404 garanti. Aller directement
-    // à la recherche (titres de série dérivés en premier) au lieu de brûler 4 fetchJs.
+    const baseSlug = toSlug(titles[0]);
     const searchTitles = titles.slice(0, MAX_FALLBACK_TITLES).map(t => stripSeasonSuffix(t));
     if (mediaType === 'movie') {
+        // Le site classe les films sous le catalogue de la SÉRIE
+        // (demon-slayer/film1/) → le slug du titre TMDB du film est un
+        // soft-404 garanti. Les dérivés « titre de série » passent en tête.
         for (const t of [...searchTitles]) {
             const seriesTitle = t
                 .replace(/\s*[-–:]?\s*(?:the\s+)?movie\b.*$/i, '')
@@ -478,45 +865,33 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    // Primary: try the generated slug for each language (skip for movies — see above)
     // testedSlugs suit les slugs VRAIMENT sondés (un slug trouvé par la
     // recherche mais jamais testé — cas films — doit rester candidat).
     const testedSlugs = new Set();
-    if (mediaType !== 'movie' && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    const enough = () => ctx.streams.length >= ENOUGH_STREAMS;
+
+    // ── Passe 1 : slug dérivé du titre TMDB (+ variantes de saison) ──────────
+    // Les films sont exclus (voir plus haut : le slug du film n'existe pas).
+    const directSlugs = [];
+    if (mediaType !== 'movie') {
+        directSlugs.push(baseSlug);
+        // Variantes de saison : uniquement si le slug de base n'a rien donné
+        // (le slug de base couvre déjà la saison demandée dans la majorité
+        // des cas — le sonder coûte 1 fiche + 4 sondes de langue).
+        if (effectiveSeason > 1 && !enough()) {
+            directSlugs.push(`${baseSlug}-saison-${effectiveSeason}`);
+            directSlugs.push(`${baseSlug}-${effectiveSeason}`);
+        }
+    }
+    for (const slug of directSlugs) {
+        if (enough() || isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
         testedSlugs.add(slug);
-        for (const lang of languages) {
-            if (streams.length >= TARGET_STREAMS) break;
-            const result = await fetchAndGetUrl(slug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-            streams.push(...result);
-        }
+        await collectFromSlug(slug, ctx);
     }
 
-    // If primary failed, try slug with season suffix (e.g., "overlord-saison-3")
-    if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const seasonSlug = `${slug}-saison-${effectiveSeason}`;
-        testedSlugs.add(seasonSlug);
-        for (const lang of languages) {
-            if (streams.length >= TARGET_STREAMS) break;
-            const result = await fetchAndGetUrl(seasonSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-            streams.push(...result);
-        }
-    }
-
-    // If still empty, try season numeric slug (e.g., "overlord-3")
-    if (streams.length === 0 && effectiveSeason > 1 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        const numSlug = `${slug}-${effectiveSeason}`;
-        testedSlugs.add(numSlug);
-        for (const lang of languages) {
-            if (streams.length >= TARGET_STREAMS) break;
-            const result = await fetchAndGetUrl(numSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-            streams.push(...result);
-        }
-    }
-
-    // If primary failed, try search API to find correct slug (much faster than alt slug probing)
-    // Passe 1 — recherche scorée (seuil 15 : protège des homonymes, inchangé)
+    // ── Passe 2 : recherche scorée (seuil 15, protège des homonymes) ─────────
     const foundSlugs = [];
-    if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+    if (!enough() && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         for (const t of searchTitles) {
             const slugs = await searchSlugsScored(t);
             for (const s of slugs) {
@@ -527,32 +902,22 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
 
         for (const fSlug of foundSlugs) {
+            if (enough() || isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
             if (testedSlugs.has(fSlug)) continue;
             testedSlugs.add(fSlug);
-            if (streams.length >= TARGET_STREAMS) break;
             // Garde anti-faux-match : la recherche floue peut renvoyer une
             // AUTRE œuvre (`black-torch` pour "Kamen Rider", `great-pretender`
             // pour "Great Mazinger" — episodes.js valides). Titre réel exigé.
             if (!(await passesTitleGuard(fSlug, titles, signal, startTime))) continue;
-
-            for (const lang of languages) {
-                if (streams.length >= TARGET_STREAMS) break;
-                const result = await fetchAndGetUrl(fSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-                streams.push(...result);
-            }
+            await collectFromSlug(fSlug, ctx);
         }
     }
 
-    // Passe 2 — discovery vérifiée : le seuil 15 de la passe 1 rejette les
-    // vrais matchs quand le titre TMDB (EN) ne recoupe pas le titre site
-    // (romaji/FR), ex. « attack on titan » vs slug `shingeki-no-kyojin`.
-    // On sonde toSlug() des titres TMDB (dérivés série, FR, courts, reste)
-    // et on accepte au premier episodes.js valide + garde titre (un
-    // episodes.js valide seul n'exclut PAS les faux positifs : `black-torch`
-    // a servi des streams pour "Kamen Rider").
-    if (streams.length === 0 && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
-        // Seuls les slugs VRAIMENT sondés sont exclus (le primaire film,
-        // jamais testé, reste candidat — ex. `suzume` trouvé en passe 1).
+    // ── Passe 3 : discovery vérifiée (toSlug des titres TMDB) ────────────────
+    // Le seuil 15 de la passe 2 rejette les vrais matchs quand le titre TMDB
+    // (EN) ne recoupe pas le titre site (romaji/FR), ex. « attack on titan »
+    // vs slug `shingeki-no-kyojin`.
+    if (!enough() && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
         const seen = new Set(testedSlugs);
         const candidates = [];
         for (const b of orderVerificationTitles(titles, searchTitles, mediaType)) {
@@ -561,27 +926,24 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             if (s && !seen.has(s)) { seen.add(s); candidates.push(s); }
         }
 
+        const verifyDeadline = startTime + VERIFY_BUDGET_MS;
         for (const cSlug of candidates) {
-            if (streams.length >= TARGET_STREAMS) break;
-            if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+            if (enough() || isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+            if (Date.now() > verifyDeadline) break;
+            testedSlugs.add(cSlug);
             const verified = mediaType === 'movie'
                 ? await verifySlugMovie(cSlug, signal, startTime)
                 : await verifySlugTv(cSlug, effectiveSeason, signal, startTime);
             if (!verified) continue;
             // Garde anti-faux-match sur le slug vérifié gagnant (1 fetch HTML
-            // supp.) : échec → slug rejeté, on continue la passe 2 (pas
-            // d'arrêt) ; si aucun slug ne passe → 0 propre.
+            // supp.) : échec → slug rejeté, on continue la passe 3.
             if (!(await passesTitleGuard(cSlug, titles, signal, startTime))) continue;
             console.log(`[Anime-Sama] Verified slug: ${cSlug}`);
-            for (const lang of languages) {
-                if (streams.length >= TARGET_STREAMS) break;
-                const result = await fetchAndGetUrl(cSlug, lang, effectiveSeason, episode, mediaType, altEpisodes);
-                streams.push(...result);
-            }
+            await collectFromSlug(cSlug, ctx);
         }
     }
 
-    const validStreams = streams.filter(s => s && s.isDirect);
+    const validStreams = ctx.streams.filter(s => s && s.isDirect);
     console.log(`[Anime-Sama] Total streams found: ${validStreams.length}`);
 
     return sortStreamsByLanguage(validStreams);

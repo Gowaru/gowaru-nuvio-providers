@@ -22,7 +22,7 @@
 
 import { fetchText, setCurrentSignal, BASE_URL_WWW } from './http.js';
 import { safeFetch, isAborted } from '../utils/resolvers.js';
-import { toStream, resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { toStream, resolveTargetEpisodes, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
 const TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8";
@@ -292,6 +292,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         console.log(`[Papadustream] Unsupported: ${mediaType} (TV/movies only)`);
         return [];
     }
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
+    // ABSOLU. targetSeason plus bas vaut Number(season)||1 → sans reverse-map,
+    // l'absolu était cherché en saison 1 (aucun candidat correspondant).
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, {
+        mediaType: isMovie ? 'movie' : 'tv',
+        startTime: Date.now(),
+        budgetMs: 40000,
+    });
+    season = se.season;
+    episode = se.episode;
 
     const startTime = Date.now();
     console.log(`[Papadustream] Looking for S${season || 1}E${episode || 1} (TMDB: ${tmdbId})`);

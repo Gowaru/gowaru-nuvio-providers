@@ -29,7 +29,7 @@
  *    le code normalisé dans language ;
  *  - garde anti-homonymes stricte (hasForeignLeadingTokens).
  */
-import { fetchPage, fetchApi, cdnHeaders, sleep } from './http.js'
+import { fetchPage, fetchApi, cdnHeaders, sleep, isHumanGateActive, resetHumanGate, HUMAN_GATE } from './http.js'
 import {
   resolveStream,
   isAborted,
@@ -193,6 +193,11 @@ async function resolveEpisode(slug, seasonMap, displaySeason, episode, mediaType
   // 2. Résolution directe API
   let source = await resolveSource(slug, internalSeason, episode, signal)
   if (source) return source
+  // Portail humain actif : la page watch ne contient qu'une référence
+  // `ref:slug/s/e` à re-soumettre à la MÊME API bloquée → inutile de payer
+  // un GET de 200 Ko (l'ancien code le faisait puis rendait `null` de toute
+  // façon quand la référence correspondait à l'épisode demandé).
+  if (isHumanGateActive()) return null
   // 3. Fallback : page watch (307 redirect suivi) → ref courant → re-API
   const watchPath =
     mediaType === 'movie'
@@ -201,12 +206,12 @@ async function resolveEpisode(slug, seasonMap, displaySeason, episode, mediaType
   const html = await fetchPage(`${BASE_URL}${watchPath}`, { signal })
   const ref = extractCurrentRef(html, slug, internalSeason, episode)
   if (!ref) return null
-  if (ref.season !== internalSeason || ref.episode !== episode) {
-    await sleep(1500)
-    source = await resolveSource(slug, ref.season, ref.episode, signal)
-    if (source) return source
-  }
-  return null
+  // La référence peut désigner un autre couple (saison interne inversée,
+  // épisode renuméroté) : on la re-soumet dans TOUS les cas, y compris quand
+  // elle coïncide — l'appel direct a déjà échoué (404/JSON invalide).
+  if (ref.season !== internalSeason || ref.episode !== episode) await sleep(1200)
+  source = await resolveSource(slug, ref.season, ref.episode, signal)
+  return source || null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -216,6 +221,7 @@ async function resolveEpisode(slug, seasonMap, displaySeason, episode, mediaType
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
   const signal = options?.signal || null
   if (isAborted(signal)) return []
+  resetHumanGate()
   const startTime = Date.now()
 
   const titles = await getTmdbTitles(tmdbId, mediaType === 'movie' ? 'movie' : 'tv', { season })
@@ -251,7 +257,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
   const source = await resolveEpisode(slug, seasonMap, displaySeason, displayEpisode, isMovie ? 'movie' : 'series', signal)
   if (!source || !source.url) {
-    console.log(`[${PROVIDER}] No source for S${displaySeason}E${displayEpisode}`)
+    if (isHumanGateActive()) {
+      // Diagnostic actionnable : sans résolution du Turnstile par UNS
+      // NAVIGATEUR, /api/episode/source reste fermé pour ce client.
+      console.log(`[${PROVIDER}] Portail « ${HUMAN_GATE} » : le site exige une vérification Cloudflare Turnstile (/api/humain) avant de servir toute source. Aucun stream possible depuis le runtime du plugin.`)
+    } else {
+      console.log(`[${PROVIDER}] No source for S${displaySeason}E${displayEpisode}`)
+    }
     return []
   }
   console.log(`[${PROVIDER}] Source OK (${source.type}): ${source.url.slice(0, 70)}...`)

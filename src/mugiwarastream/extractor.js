@@ -231,12 +231,17 @@ function buildStreamEntry(url, label, langLabel, title, quality) {
     if (typeof resolvedUrl === 'string' && resolvedUrl.startsWith('//')) resolvedUrl = 'https:' + resolvedUrl;
     // Détecter le vrai hébergeur depuis l'URL
     const hostLabel = detectHostLabel(resolvedUrl);
-    // FIX : language = code normalisé (fr/ja) pour les filtres/tri NuvioTV.
-    // Les labels VF/VOSTFR restaient classés "Unknown" côté app.
-    const language = langLabel === 'VF' ? 'fr' : 'ja';
+    // language = code app (fr/ja) ; VOSTFR est une version FRANÇAISE sous-titrée
+    // (LANGUAGE_CODE_MAP: VOSTFR → 'fr'), pas une VO japonaise. L'ancien 'ja'
+    // affichait du VOSTFR étiqueté japonais dans l'app. Le label VF/VOSTFR
+    // reste dans le titre pour l'affichage.
+    const language = 'fr';
     return {
         name: `Mugiwara (${langLabel})`,
-        title: `${title} - ${hostLabel}`,
+        // Le label de langue DOIT être dans le titre : c'est lui que l'utilisateur
+        // voit dans la liste des sources (sans lui, VF et VOSTFR sont
+        // indistinguables → « des fois les VF n'apparaissent pas »).
+        title: `[${langLabel}] ${title} - ${hostLabel}`,
         url: resolvedUrl,
         quality: quality || 'HD',
         language,
@@ -245,23 +250,49 @@ function buildStreamEntry(url, label, langLabel, title, quality) {
 }
 
 async function resolveStreams(streams) {
-    // Sequential resolution with early-exit (QuickJS: fetch synchrone)
-    // FIX "ne se lance jamais" : plus AUCUN fallback embed. Un embed non
-    // résolu = page HTML d'hébergeur que l'app ne peut pas lire. Convention
-    // repo (wookafr/fluneo/franime/coflix) : isDirect:false est rejeté.
+    // Résolution séquentielle (fetch bloquant en QuickJS) mais ROUND-ROBIN par
+    // langue : l'ancien early-exit à 3 streams coupait après les 3 premiers
+    // lecteurs d'une seule langue → « des fois les VF n'apparaissent pas »
+    // (les 3 sources VOSTFR étaient résolues, les VF jamais atteintes).
+    // On prend au plus 2 lecteurs par langue (budget ~6 résolutions), un par
+    // tour, et on s'arrête dès que chaque langue a du playable.
+    const MAX_PER_LANG = 2;
+    const buckets = new Map();
+    for (const s of streams) {
+        // Bucket = ÉTIQUETTE de langue (VF/VOSTFR dans `name`), pas le code
+        // app `fr` : VF et VOSTFR partagent `language:'fr'` et tombaient dans
+        // le même seau → les 2 résolutions autorisées étaient consommées par
+        // le VOSTFR et aucune VF n'était résolue.
+        const key = String(s.name || s.language || 'other').toLowerCase();
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(s);
+    }
+    const queues = [...buckets.entries()].map(([lang, list]) => ({ lang, list: list.slice(0, MAX_PER_LANG), done: 0 }));
+
     const direct = [];
-    for (const stream of streams) {
-        try {
-            const r = await resolveStream(stream);
-            if (r && r.url && r.isDirect) {
-                // Ne PAS stripper isDirect : test_providers.js et les apps
-                // filtrent sur ce flag (isDirect:false/undefined = rejeté).
-                const { originalUrl, ...clean } = r;
-                direct.push({ ...stream, ...clean, isDirect: true, quality: r.quality || stream.quality });
-            }
-        } catch { /* skip failed candidate */ }
-        // Early exit: 3 direct streams is enough
-        if (direct.length >= 3) break;
+    const seen = new Set();
+    let progressed = true;
+    while (progressed) {
+        progressed = false;
+        for (const q of queues) {
+            if (q.list.length === 0) continue;
+            progressed = true;
+            const stream = q.list.shift();
+            try {
+                const r = await resolveStream(stream);
+                if (r && r.url && r.isDirect) {
+                    const key = (stream.name || r.language || '') + '::' + r.url.replace(/\?.*$/, '');
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        // Ne PAS stripper isDirect : test_providers.js et les apps
+                        // filtrent sur ce flag (isDirect:false/undefined = rejeté).
+                        const { originalUrl, ...clean } = r;
+                        direct.push({ ...stream, ...clean, isDirect: true, quality: r.quality || stream.quality });
+                        q.done++;
+                    }
+                }
+            } catch { /* skip failed candidate */ }
+        }
     }
     return direct;
 }

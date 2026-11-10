@@ -66,6 +66,41 @@ function responseLooksHtml(response, bodyText) {
 }
 
 /**
+ * Seuil de détection de la troncature SILENCIEUSE de NuvioTV.
+ *
+ * NuvioTV coupe le body à `MAX_FETCH_RESPONSE_BYTES` (1 MB d'**octets**) sans
+ * ajouter le suffixe `...[truncated]` : celui-ci n'est ajouté que par la
+ * seconde troncature, en **caractères** (1 M). Un HTML UTF-8 de 1 MB d'octets
+ * fait ~950 k caractères → le test `length >= 1 MB` ne voit rien et on parserait
+ * un préfixe coupé au milieu d'une balise (sélecteurs faux, silencieux).
+ */
+const SILENT_TRUNCATION_MIN_CHARS = 700 * 1024;
+
+function looksSilentlyTruncatedHtml(response, bodyText) {
+    if (typeof bodyText !== 'string' || bodyText.length < SILENT_TRUNCATION_MIN_CHARS) return false;
+    if (!responseLooksHtml(response, bodyText)) return false;
+    // Une page qui ouvre <html> sans jamais le fermer et pèse ~1 MB a été
+    // coupée par le runtime. Les fragments HTML (sans <html>) sont ignorés.
+    if (!/<html[\s>]/i.test(bodyText)) return false;
+    return !/<\/html\s*>/i.test(bodyText);
+}
+
+/**
+ * Normalise le type de média reçu de l'app.
+ *
+ * NuvioTV envoie `mediaType = 'series'` quand le manifeste du provider
+ * déclare ce type (PluginMediaType.kt : `jsPluginMediaType`), alors que
+ * NuvioMobile envoie toujours `'tv'`. Toute logique « série » doit donc
+ * tester `mediaType !== 'movie'` — jamais `=== 'tv'`.
+ *
+ * @param {string} mediaType
+ * @returns {boolean} true pour une série (tv/series/…), false pour un film
+ */
+export function isTvMediaType(mediaType) {
+    return String(mediaType || '').toLowerCase() !== 'movie';
+}
+
+/**
  * Hash de build court, injecté par build.js au moment du bundling
  * (define esbuild : __NUVIO_BUILD_HASH__ → "abc12345").
  * Permet de vérifier en logs quelle version du bundle tourne réellement
@@ -466,6 +501,39 @@ export function safeJson(data) {
 }
 
 /**
+ * Déduplique et filtre les streams d'un provider avant retour à l'app.
+ *
+ * Clé = URL + langue BRUTE : deux langues différentes sur la même URL sont
+ * conservées (VF/VOSTFR), mais un doublon strict est supprimé. Les url vides
+ * ou contenant `[object` sont rejetées : NuvioTV les filtre silencieusement
+ * (`parseJsonResults`) et NuvioMobile ne vérifie que `isNotBlank`.
+ *
+ * Indispensable sur NuvioTV qui déduplique ensuite **par URL seule** et
+ * plafonne à 150 résultats TOUS providers confondus : chaque doublon émis
+ * gaspille un slot et évince un flux d'un autre provider.
+ *
+ * @param {Array} streams
+ * @returns {Array}
+ */
+export function dedupeStreams(streams) {
+  const rawList = Array.isArray(streams) ? streams : [];
+  const seenUrls = new Set();
+  const out = [];
+  for (const s of rawList) {
+    if (!s) continue;
+    const u = s.url;
+    if (typeof u === 'string') {
+      if (!u || u.includes('[object')) continue;
+      const dedupKey = `${u}|${String(s.language || '').toUpperCase()}`;
+      if (seenUrls.has(dedupKey)) continue;
+      seenUrls.add(dedupKey);
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+/**
  * Crée un provider standardisé avec timeout, error handling et expandStreamQualities.
  * Élimine la duplication de boilerplate dans tous les index.js.
  *
@@ -505,25 +573,12 @@ export function createProvider(name, extractFn, opts = {}) {
       // expandStreamQualities (URL + langue RAW) pour préserver VF/VOSTFR
       // quand la même URL sert aux deux. Filtre aussi les url vides ou
       // "[object ...]" (rejetées silencieusement côté app).
-      const rawList = Array.isArray(rawStreams) ? rawStreams : [];
       // Échéance d'enrichissement : au-delà, expandStreamQualities ne fait
       // plus AUCUNE requête optionnelle (manifests HLS, sondes de taille) —
       // sur NuvioTV elles bloquent la pile JS et peuvent faire jeter le
       // résultat complet par le 60 s de l'app.
       const budgetDeadline = startTime + Math.max(5000, PROVIDER_TIMEOUT - 5000);
-      const seenUrls = new Set();
-      const dedupedRaw = [];
-      for (const s of rawList) {
-        if (!s) continue;
-        const u = s.url;
-        if (typeof u === 'string') {
-          if (!u || u.includes('[object')) continue;
-          const dedupKey = `${u}|${String(s.language || '').toUpperCase()}`;
-          if (seenUrls.has(dedupKey)) continue;
-          seenUrls.add(dedupKey);
-        }
-        dedupedRaw.push(s);
-      }
+      const dedupedRaw = dedupeStreams(rawStreams);
 
       // Tronquer les résultats bruts avant expandStreamQualities
       // pour éviter de parser des HLS manifests inutiles.
@@ -1409,6 +1464,11 @@ export async function safeFetch(url, options = {}) {
             if (rawText && rawText.endsWith(RUNTIME_TRUNCATION_SUFFIX)) {
                 truncated = true;
                 bodyText = rawText;
+            } else if (rawText && looksSilentlyTruncatedHtml(response, rawText)) {
+                // NuvioTV : coupure en octets sans suffixe (cf. helper).
+                truncated = true;
+                bodyText = rawText;
+                console.warn(`[safeFetch] HTML silently truncated by runtime (${rawText.length} chars, no </html>): ${(url || '').slice(0, 100)}`);
             } else if (rawText && rawText.length >= MAX_SAFE_FETCH_BODY_BYTES) {
                 truncated = true;
                 console.warn(`[safeFetch] Response truncated (${rawText.length} bytes > ${MAX_SAFE_FETCH_BODY_BYTES}): ${(url || '').slice(0, 100)}`);
@@ -1749,6 +1809,91 @@ export async function resolveMailRu(url) {
     return { url };
 }
 
+/**
+ * Résolveur VK / VK Video (vk.com/video_ext.php?oid=…&id=…, vkvideo.ru/video-…,
+ * vk.com/video-…_…).
+ *
+ * Vérifié en live 2026-10 : la page embed ne contient AUCUNE URL de flux (le
+ * player la charge en XHR) — d'où les `isDirect:false` silencieux sur les
+ * providers qui embarquent du VK (anime-sama : ~1 groupe de lecteurs sur 10).
+ * L'API interne publique la fournit :
+ *   POST https://vk.com/al_video.php
+ *   body: act=show&al=1&video={oid}_{id}&module=video
+ * → payload JSON avec `"hls":"https:\/\/vkvdNNN.okcdn.ru\/video.m3u8?…"`
+ *   (master multi-qualités 144→1080p, vérifié) et `"url240"…"url1080"` (MP4
+ *   progressifs servis sans extension).
+ * Le paramètre `hash` n'est PAS requis pour les vidéos publiques (vérifié :
+ * réponse identique avec et sans). Le CDN okcdn.ru exige un **UA navigateur**
+ * (sans UA → HTTP 400 sur la playlist ET les segments) ; le Referer vk.com est
+ * attaché aux deux au cas où.
+ * Vidéo retirée (« retirée à la demande du titulaire du droit d'auteur ») →
+ * isDead : inutile de payer le fallback générique + peeling.
+ */
+export async function resolveVk(url) {
+    try {
+        let oid = null;
+        let vid = null;
+        const mOid = url.match(/[?&]oid=(-?\d+)/i);
+        const mId = url.match(/[?&]id=(\d+)/i);
+        if (mOid && mId) { oid = mOid[1]; vid = mId[1]; }
+        if (oid == null) {
+            const m = url.match(/video(-?\d+)_(\d+)/);
+            if (m) { oid = m[1]; vid = m[2]; }
+        }
+        if (oid == null || vid == null) return { url };
+
+        const res = await safeFetch('https://vk.com/al_video.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': 'https://vk.com/',
+                'Origin': 'https://vk.com',
+                'Accept': '*/*',
+                'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+            },
+            body: `act=show&al=1&video=${oid}_${vid}&module=video`,
+            timeout: 10000,
+        });
+        if (!res || !res.ok) return { url };
+        const text = await res.text();
+        const unescape = (s) => s.split('\\/').join('/');
+
+        // Vidéo retirée / bloquée par le titulaire des droits → inutile d'aller plus loin
+        if (!/"(hls|url\d+)"\s*:/.test(text) && /(retir[eé]e|removed|&#233;t&#233; retir|expired)/i.test(text)) {
+            console.warn(`[Resolver] VK vidéo indisponible (retirée/expirée): ${url.slice(0, 70)}`);
+            return { url, isDead: true };
+        }
+
+        const hls = text.match(/"hls"\s*:\s*"([^"]+)"/);
+        if (hls && hls[1]) {
+            const hlsUrl = unescape(hls[1]);
+            if (/^https?:/.test(hlsUrl)) {
+                return {
+                    url: hlsUrl,
+                    headers: { 'Referer': 'https://vk.com/', 'User-Agent': USER_AGENT },
+                };
+            }
+        }
+
+        // Repli : meilleur MP4 progressif (url1080 → url240). Servi par okcdn.ru
+        // sans extension de fichier → quality forcée pour que le tri de l'app
+        // ne retombe pas sur le défaut.
+        for (const q of ['1080', '720', '480', '360', '240']) {
+            const m = text.match(new RegExp('"url' + q + '"\\s*:\\s*"([^"]+)"'));
+            if (!m || !m[1]) continue;
+            const mp4 = unescape(m[1]);
+            if (!/^https?:/.test(mp4)) continue;
+            return {
+                url: mp4,
+                headers: { 'Referer': 'https://vk.com/', 'User-Agent': USER_AGENT },
+                quality: `${q}p`,
+            };
+        }
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveUqload(url) {
     const normalizedPath = url.replace(/^https?:\/\/[^/]+/, '');
     const originalDomain = url.match(/^https?:\/\/([^/]+)/)?.[1] || 'uqload.co';
@@ -2059,6 +2204,21 @@ export async function resolveFsvidVidzy(url) {
             }
         }
 
+        // --- Pattern 3 (2026-11) : l'URL HLS est servie EN CLAIR dans le HTML
+        // (packé ou non), directement dans la config videojs :
+        //   var _fsvHls = "https://s1.fsvid.lol/troll/master.m3u8";  ← LEURRE
+        //   sources:[{src:"https://r1.fsvid.lol/hls2/02/00016/,id_n,.urlset/master.m3u8?t=…"}]
+        // vidzy.org : https://u14.vidzy.org/hls2/08/00024/,id_n,.urlset/master.m3u8?t=…
+        // Sans ce scan, la résolution échouait (ratio ~1/10) et les providers
+        // (Movix, VoirAnime…) perdaient ces sources.
+        if (!videoUrl) {
+            const all = html.match(/https?:\/\/[^\s"'<>\\)]+?\.m3u8[^\s"'<>\\)]*/g) || [];
+            const real = all.filter(u => !u.includes('/troll/') && !u.includes('_fsvHls') && !u.includes('troll.m3u8'));
+            // master.m3u8 d'abord : les variantes index-v1-a1.m3u8 n'ont pas
+            // toujours toutes les qualités (cf. expandStreamQualities).
+            videoUrl = real.find(u => u.includes('master.m3u8')) || real[0] || null;
+        }
+
         if (!videoUrl) return { url };
 
         // Referer requis par le CDN (vérifié en live : fsvid.lol → 200, vidzy.live → 200)
@@ -2070,11 +2230,91 @@ export async function resolveFsvidVidzy(url) {
 
 export async function resolveStreamtape(url) {
     try {
-        const res = await safeFetch(url);
+        // Id du fichier, quelle que soit la forme reçue (/e/{id}/, /v/{id},
+        // get_video?id={id}).
+        const idMatch = url.match(/\/(?:e|v)\/([A-Za-z0-9]+)/) || url.match(/[?&]id=([A-Za-z0-9]+)/);
+        const fileId = idMatch ? idMatch[1] : null;
+
+        // ⚠ Toujours re-lire la page EMBED canonique : les sites recopient le
+        // HTML de streamtape (get_video?id=…&token=…) tel quel, et ce token peut
+        // être un leurre — vérifié live : le lien fourni par VoirAnime renvoyait
+        // 200 text/html (48 o) alors que la page /e/{id}/ donne le bon token.
+        // `get_video` est aussi une URL qui redirige vers le MP4 : la fetch
+        // telle quelle aspirerait des centaines de Mo dans un res.text().
+        const pageUrl = fileId ? `https://streamtape.com/e/${fileId}/` : url;
+        const res = await safeFetch(pageUrl);
         if (!res) return { url };
         let html = await res.text();
         if (html.includes('p,a,c,k,e,d')) html = unpack(html);
 
+        // ⚠ 2026-10 : le "robotlink" reconstruit par concaténation ne mène plus
+        // au flux. La page publie 4 à 8 `token=` FICTIFS répartis entre des
+        // assignments JS truffés de `.substring(n)` (ideoolink, botlink,
+        // robotlink) — recoller les morceaux donnait `gedt_video`, qui répond
+        // **404** : symptôme « le flux streamtape ne se lance jamais ».
+        // Vérifié live sur 3 fichiers distincts : le DERNIER `token=` du
+        // document (dernier assignment, `robotlink`) est le seul valide →
+        // 302 vers tapecontent.net puis 200/206 `video/mp4`, sans Referer requis.
+        // Les autres tokens renvoient une page HTML en 200 (indétectable en HEAD),
+        // d'où l'ordre documentaire plutôt qu'une validation par requête.
+        const tokenMatches = html.match(/token=([A-Za-z0-9_-]+)/g);
+        const expiresMatches = html.match(/expires=(\d+)/g);
+        const ipMatches = html.match(/ip=([A-Za-z0-9]+)/g);
+        // Sélection du BON token. La page est un piège à scrapers :
+        //   - `<span/div id="ideoolink|botlink|robotlink">` portent des liens
+        //     complets `/streamtape.com/get_video?id=…&token=…` mais FICTIFS
+        //     (mauvais token → 200 sur un JSON d'erreur de 48 o) ;
+        //   - le lien réel n'est construit QUE par les assignments JS, sous
+        //     forme de littéraux bruités (`'xcdb0…'`, `'xnftb0…'`, `'xcda0…'`)
+        //     suivis de `.substring(n).substring(m)` ;
+        //   - le JSON de config de la page contient lui aussi un `token=`
+        //     (sous-titre distants) qui n'a rien à voir et se retrouvait choisi
+        //     en dernier → « le flux streamtape ne se lance jamais ».
+        // On reconstruit donc les littéraux JS (chaîne des `.substring()` dans
+        // l'ordre) et on ne garde QUE ceux qui redonnent exactement notre
+        // fileId suivi de `&expires=…&ip=…&token=…` : c'est déterministe, là où
+        // « dernier token du document » dépendait de l'ordre des blocs.
+        // Le bon token est celui des 4 assignments JS (tous identiques) ; les
+        // leurres des `<span/div id="ideoolink|botlink|robotlink">` et le JSON
+        // des sous-titres distants n'apparaissent qu'une fois chacun.
+        // Le token JS est donc simplement le PLUS FRÉQUENT du document (à
+        // égalité, le dernier rencontré = bloc `<script>` en fin de page) —
+        // règle vérifiée sur 4 fichiers, là où « dernier token » et « token du
+        // div robotlink » tombaient sur un leurre.
+        let token = null;
+        if (tokenMatches && tokenMatches.length > 0) {
+            const counts = new Map();
+            for (const t of tokenMatches) {
+                const v = t.split('=')[1];
+                if (v) counts.set(v, (counts.get(v) || 0) + 1);
+            }
+            let best = 0;
+            for (const [v, c] of counts) {
+                if (c >= best) { token = v; best = c; }
+            }
+        }
+        if (fileId && token) {
+            const expires = expiresMatches && expiresMatches.length > 0
+                ? expiresMatches[expiresMatches.length - 1].split('=')[1]
+                : null;
+            const ip = ipMatches && ipMatches.length > 0
+                ? ipMatches[ipMatches.length - 1].split('=')[1]
+                : null;
+            if (expires && ip) {
+                return {
+                    url: `https://streamtape.com/get_video?id=${fileId}&expires=${expires}&ip=${ip}&token=${token}`,
+                    headers: { "Referer": "https://streamtape.com/" },
+                };
+            }
+        }
+
+        // Dernier recours : lien direct déjà fourni par le site (token peut
+        // être périmé, mais mieux que rien si la page embed est inaccessible).
+        if (/get_video\?/i.test(url) && /[?&]token=/i.test(url)) {
+            return { url, headers: { "Referer": "https://streamtape.com/" }, isDirect: true };
+        }
+
+        // Repli (ancienne page, si le format revient un jour)
         const match = html.match(/robotlink['"]\)\.innerHTML\s*=\s*['"]([^'"]+)['"]\s*\+\s*([^;]+)/);
         if (match) {
             let videoUrl = "https:" + match[1];
@@ -2865,6 +3105,7 @@ export async function resolveStream(stream, depth = 0) {
         if (urlLower.includes('sibnet.ru')) result = await resolveSibnet(originalUrl);
         else if (urlLower.includes('vidmoly.') || urlLower.includes('voembed.') || urlLower.includes('ansembed.')) result = await resolveVidmoly(originalUrl);
         else if (urlLower.includes('.mail.ru')) result = await resolveMailRu(originalUrl);
+        else if (urlLower.includes('vk.com/video_ext') || urlLower.includes('vk.com/video-') || urlLower.includes('vkvideo.ru/') || urlLower.includes('vk.com/video?') || urlLower.includes('vk.com/clip')) result = await resolveVk(originalUrl);
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
         else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother') || urlLower.includes('jeremyparticipantanything') || urlLower.includes('teresapoliticallearn')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
@@ -2898,6 +3139,13 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('down-paradise.') || urlLower.includes('ww1.down-paradise.')) result = await resolveDownParadise(originalUrl);
         else if (urlLower.includes('up4fun.')) result = await resolveUp4fun(originalUrl);
         
+        // Un résolveur peut déclarer le flux DÉJÀ direct (cas streamtape :
+        // l'URL `get_video?id=…&token=…` fournie par le site EST le flux, elle
+        // n'a pas d'extension connue donc `isPlayableMediaUrl` la rejette).
+        if (result && result.isDirect === true && result.url) {
+            return { ...stream, ...result, originalUrl, isDirect: true };
+        }
+
         // If a specific resolver found a different URL, it's the final direct link
         if (result && result.url !== originalUrl && !isKnownFakeDirectUrl(result.url)) {
             // Appliquer aussi la correction de domaine à l'URL de sortie du résolveur
@@ -2945,7 +3193,12 @@ export async function resolveStream(stream, depth = 0) {
 
                 // Suivre les redirections JS window.location
                 if (!skipDirectScan) {
-                    const jsRedirect = html.match(/window\.location\.(?:href|replace)\s*=\s*['"]([^'"]+)['"]/);
+                    // Trois formes rencontrées : affectation (window.location.href =
+                    // '…'), APPEL (window.location.replace('…'), utilisée par le
+                    // gateway oneupload/uqload) et document.location.href.
+                    const jsRedirect = html.match(/window\.location\.replace\s*\(\s*['"]([^'"]+)['"]\s*\)/) ||
+                                       html.match(/(?:window|document)\.location(?:\.[a-z]+)?\s*=\s*['"]([^'"]+)['"]/) ||
+                                       html.match(/location\.replace\s*\(\s*['"]([^'"]+)['"]\s*\)/);
                     if (jsRedirect && jsRedirect[1] !== originalUrl) {
                         const res2 = await safeFetch(jsRedirect[1], { headers: stream.headers });
                         if (res2) {

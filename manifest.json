@@ -6,7 +6,7 @@
       "id": "anime-ultime",
       "name": "Anime-Ultime",
       "description": "Animes VOSTFR et VF en streaming sur v5.anime-ultime.net (séries licenciées exclues par le site).",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -29,7 +29,7 @@
       "id": "anime-sama",
       "name": "Anime-Sama",
       "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.58",
+      "version": "1.1.61",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -125,7 +125,7 @@
       "id": "animoflix",
       "name": "AnimoFlix",
       "description": "Regarder des animes VF et VOSTFR gratuitement sur AnimoFlix.",
-      "version": "1.0.19",
+      "version": "1.0.20",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -291,7 +291,7 @@
       "id": "frenchstream",
       "name": "Frenchstream",
       "description": "Films, séries et animes en VF et VOSTFR (recherche exacte par tag TMDB, réglages langue/hosts — Mobile uniquement).",
-      "version": "2.0.23",
+      "version": "2.0.24",
       "hasSettings": true,
       "author": "Gowaru",
       "supportedTypes": [
@@ -317,7 +317,7 @@
       "id": "movix",
       "name": "Movix",
       "description": "Films, Séries et Animes en VF et VOSTFR.",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "hasSettings": true,
       "author": "Gowaru",
       "supportedTypes": [
@@ -343,7 +343,7 @@
       "id": "mugiwarastream",
       "name": "Mugiwara-no-Streaming",
       "description": "Streaming gratuit d'animes et scans en bonne qualite via API Next.js.",
-      "version": "1.0.20",
+      "version": "1.0.21",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -394,7 +394,7 @@
       "id": "voiranime",
       "name": "VoirAnime",
       "description": "Un des plus gros catalogues français d'animes.",
-      "version": "1.2.25",
+      "version": "1.2.28",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -421,7 +421,7 @@
       "id": "voiranime-one",
       "name": "VoirAnime.one",
       "description": "Animes VF et VOSTFR en streaming sur VoirAnime.one (catalogue riche : TV, films, OVA, 24k épisodes).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -488,8 +488,8 @@
     {
       "id": "senanimes",
       "name": "SenAnimes",
-      "description": "Animes VF et VOSTFR sur SenAnimes (Next.js, 150 titres : séries multi-saisons + films, sources HLS/MP4 CDN maison, mapping des saisons via JSON-LD).",
-      "version": "0.1.2",
+      "description": "Animes VF et VOSTFR sur SenAnimes (Next.js, 150 titres : séries multi-saisons + films, sources HLS/MP4 CDN maison, mapping des saisons via JSON-LD). Depuis 2026-10 le site exige une vérification Cloudflare Turnstile côté serveur : plus aucune source n'est résolvable hors navigateur (le provider détecte le portail et sort immédiatement).",
+      "version": "0.1.3",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -535,7 +535,7 @@
       "id": "animesite",
       "name": "AnimeSite",
       "description": "Animes VF et VOSTFR sur AnimeSite (Next.js/RSC, API /api/stream/token par cookies de session, 5 lecteurs par épisode : Sibnet, Byse HLS, Sendvid ; validation saison/épisode via JSON-LD, catalogue complet via sitemap).",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -582,7 +582,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.56",
+      "version": "1.1.57",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -701,7 +701,7 @@
       "id": "waveanime",
       "name": "WaveAnime",
       "description": "Animes en DASH (MPD) via waveanime.fr — lecture native ExoPlayer/Media3 (Android), non supporté par AVPlayer (iOS).",
-      "version": "0.0.9",
+      "version": "0.0.10",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -844,7 +844,7 @@
       "id": "animevost-fr",
       "name": "AnimeVOST.fr",
       "description": "Anime VOSTFR en streaming via animevost.fr (HLS gupload, catalogue en croissance).",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": "Gowaru",
       "supportedTypes": [
         "tv"

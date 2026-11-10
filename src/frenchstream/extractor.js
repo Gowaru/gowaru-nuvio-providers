@@ -1,6 +1,6 @@
-import { stripSeasonSuffix, toStream, resolveTargetEpisodes, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
+import { stripSeasonSuffix, toStream, resolveTargetEpisodes, resolveSeasonEpisodeInputs, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import cheerio from 'cheerio-without-node-native';
-import { safeFetch, resolveStream, verifyPlayableUrl, isBudgetExhausted, isAborted, getScraperSettings } from '../utils/resolvers.js';
+import { safeFetch, resolveStream, verifyPlayableUrl, isBudgetExhausted, isAborted, getScraperSettings, isTvMediaType } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { fetchText, fetchJson, fetchPost, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
@@ -241,11 +241,11 @@ function scoreCard(card, queryTitle, mediaType, season) {
     for (const w of qWords) { if (tWords.has(w)) common += 1; }
     score += common * 8;
     if (mediaType === 'movie' && card.isSeries) score -= 50;
-    if (mediaType === 'tv' && !card.isSeries) score -= 30;
+    if (isTvMediaType(mediaType) && !card.isSeries) score -= 30;
     const sn = Number(season) || 1;
     const text = (card.title + ' ' + card.href).toLowerCase();
     const hasSeason = /saison\s*\d+|s-tv\//i.test(text);
-    if (mediaType === 'tv') {
+    if (isTvMediaType(mediaType)) {
         if (sn > 1) {
             const sr = new RegExp('saison\\s*' + sn + '|[-_/]' + sn + '(?:[^0-9]|$)', 'i');
             if (sr.test(text)) score += 20;
@@ -566,7 +566,7 @@ async function searchByTmdbTag(tmdbId, mediaType) {
         const cards = parseSearchCards(html, BASE_URL);
         // xfsearch peut mélanger films (f-) et séries (s-) quand le préfixe
         // seul est cherché — re-filtrer par type de carte.
-        const filtered = cards.filter(c => mediaType === 'tv' ? c.isSeries : !c.isSeries);
+        const filtered = cards.filter(c => isTvMediaType(mediaType) ? c.isSeries : !c.isSeries);
         const result = (filtered.length > 0 ? filtered : cards).map(c => ({ ...c, _score: 200 }));
         console.log('[Frenchstream] xfsearch ' + prefix + '-' + tmdbId + ': ' + result.length + ' card(s)');
         return result;
@@ -829,6 +829,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     const startTime = Date.now();
     const BUDGET_MS = 45000;
+
+    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
+    // ABSOLU. Sans reverse-map, on interroge la saison 1 avec un numéro absolu.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType, startTime, budgetMs: BUDGET_MS });
+    season = se.season;
+    episode = se.episode;
+
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 

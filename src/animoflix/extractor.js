@@ -13,83 +13,151 @@ const SPECIAL_SLUG_RE = /(?:ona|oav|film|movie|special|scan|chapitre|volume|dub|
 const MAX_TITLE_SEARCHES = 3;
 const MAX_TITLE_SEARCHES_MOVIE = 2;
 
+// Hosts irrésolubles en fetch statique → ne JAMAIS les résoudre (gain 15 s
+// chacun, ils finissaient en timeout dans le budget du provider) :
+//  - lpayer.embed4me.com/#hash : SPA React, les URLs sortent d'un worker client
+//  - smoothpre.com : EarnVids verrouillé par domaine ("Video embed restricted
+//    for this domain animoflix.to", vérifié live quel que soit le Referer)
+//  - oneupload.to : gateway JS (page « Loading… » 497 o qui redirige via
+//    window.location.replace vers ?ch=1&js=<JWT>&sid=…, puis une pub) : sans
+//    jar de cookies ni JS, le player n'est jamais servi → resolveUqload le
+//    déclare mort après ~9 s de fetch, budget perdu à chaque épisode.
+const DEAD_HOST_RE = /(embed4me|lpayer\.|smoothpre\.|oneupload\.)/i;
+const MAX_EMBEDS_PER_EPISODE = 6;
+
 // Cache partagé LRU — TTL long sur échecs (rate limiting agressif sur ce site)
 const withCache = createCache('af', 'AnimoFlix', { failureTtl: 120_000, maxSize: 200 }) // 2min failure (vs 30s)
 
-async function searchAnime(title) {
+/**
+ * Requête l'API d'autocomplete du site.
+ *
+ * ⚠ Contrainte vérifiée en live (2026-11) : le serveur matche la requête
+ * comme un PRÉFIXE de `title` ou d'UN alias de `title2` (séparés par virgule),
+ * jamais du titre complet TMDB (« Demon Slayer: Kimetsu no Yaiba » → [],
+ * « Demon Slayer Kimetsu » → [], mais « Demon Slayer » et « Kimetsu » → OK).
+ * Les deux-points cassent donc le match → on découpe la requête.
+ */
+async function apiSearch(query) {
     try {
-        const results = await fetchJson(`${SEARCH_URL}?q=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
-        if (Array.isArray(results) && results.length > 0) return results;
+        const results = await fetchJson(`${SEARCH_URL}?q=${encodeURIComponent(query)}`, { timeout: TIMEOUT });
+        return Array.isArray(results) ? results : [];
     } catch (e) {
-        console.warn(`[AnimoFlix] Search API failed for "${title}": ${e.message}`);
+        console.warn(`[AnimoFlix] Search API failed for "${query}": ${e.message}`);
+        return [];
     }
-    // Step 2: Slug probing — test URL directe avant la recherche HTML
-    // La search API peut échouer sur certains titres (surtout les titres avec
-    // des caractères spéciaux comme 'Your Name.'), on teste le slug directement.
-    const slug = toSlug(title)
-    if (slug && slug.length > 3) {
-      const slugUrl = `${BASE_URL}/anime/${slug}/`
-      try {
-        const slugHtml = await fetchText(slugUrl, { timeout: 8000 })
-        if (slugHtml && slugHtml.length > 1000) {
-          console.log(`[AnimoFlix] Slug probing match: ${slugUrl}`)
-          return [{
-            title: slug.replace(/-/g, ' '),
-            title2: title,
-            slug: slug,
-            url: slugUrl
-          }]
-        }
-      } catch (e) {
-        // slug not found, continue
-      }
-    }
+}
 
-    // Step 3: Fallback — scrape HTML search page
-    try {
-        const html = await fetchText(`${BASE_URL}/?s=${encodeURIComponent(title)}`, { timeout: TIMEOUT });
-        const $ = cheerio.load(html);
-        const results = [];
-        // Try multiple selectors to find search result links
-        const selectors = [
-            '.post-title a[href*="/anime/"]',
-            '.TPost a[href*="/anime/"]',
-            'a[href*="/anime/"]',
-            '.result-item a',
-            '.search-item a',
-            '.card a[href*="/anime/"]',
-            'article a[href*="/anime/"]',
-        ];
-        for (const sel of selectors) {
-            $(sel).each((i, el) => {
-                if (results.length >= 15) return false;
-                const href = $(el).attr('href');
-                const rawText = $(el).text().trim();
-                const text = rawText.replace(/\s+/g, ' ').trim();
-                if (href && href.includes('/anime/') && text.length > 2) {
-                    const slugRaw = href.replace(/.*\/anime\//, '').replace(/\/$/, '');
-                    if (slugRaw.includes('/') || results.some(r => r.slug === slugRaw)) return;
-                    // TV-safe : .closest() n'existe pas dans le runtime cheerio de NuvioTV
-                    const imgAlt = (typeof $(el).closest === 'function')
-                        ? $(el).closest('.TPost, .TPostMv, article, li, .card, .result-item, .search-item').find('img').first().attr('alt')
-                        : null;
-                    const cleanTitle = (imgAlt || text).replace(/\s+/g, ' ').trim();
-                    results.push({
-                        title: cleanTitle,
-                        title2: cleanTitle,
-                        slug: slugRaw,
-                        url: href
-                    });
+/**
+ * Variantes de requête pour un titre TMDB, de la plus précise à la plus large.
+ * Le premier segment (« Demon Slayer », « L'Attaque des Titans ») suffit
+ * presque toujours ; les préfixes courts rattrapent les sous-titres.
+ */
+function queryVariants(title) {
+    const out = [];
+    const push = (q) => {
+        const v = String(q || '').replace(/\s+/g, ' ').trim();
+        if (v.length < 3) return;
+        if (!out.some(o => o.toLowerCase() === v.toLowerCase())) out.push(v);
+    };
+    const raw = String(title || '').trim();
+    push(raw);
+    // Sans suffixe de saison / mention VF(FR) / parenthèses
+    const noSuffix = raw
+        .replace(/\s*[-–:]?\s*(?:saison|season)\s*\d+.*$/i, '')
+        .replace(/\s*\((?:vf|vostfr|fr|vfq|vff)\)\s*$/i, '')
+        .replace(/\s*[-–:]?\s*\b(?:vf|vostfr)\b\s*$/i, '')
+        .replace(/\s*\([^)]*\)\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    push(noSuffix);
+    // Premier segment : avant « : », « - » ou virgule (« Demon Slayer: Kimetsu… »)
+    for (const sep of [':', ' - ', ',', ' – ']) {
+        const i = noSuffix.indexOf(sep);
+        if (i > 2) push(noSuffix.slice(0, i));
+    }
+    // Préfixes de mots (l'API matche en préfixe)
+    const words = noSuffix.split(/\s+/).filter(Boolean);
+    for (const n of [3, 2]) {
+        if (words.length > n) push(words.slice(0, n).join(' '));
+    }
+    return out;
+}
+
+/**
+ * Oracle sitemap : `sitemap-animes.xml` (~270 Ko) liste les 2 300+ fiches du
+ * catalogue. Indispensable pour les titres que l'API ne matche pas
+ * (translittérations, titres FR agglutinés, sous-titres) : l'appel API est un
+ * confort, le sitemap est la source de vérité.
+ * Cache mémoire par exécution (une instance QuickJS par getStreams).
+ */
+let _animeSlugsPromise = null;
+
+function getSitemapAnimeSlugs() {
+    if (!_animeSlugsPromise) {
+        _animeSlugsPromise = (async () => {
+            try {
+                const xml = await fetchText(`${BASE_URL}/sitemap-animes.xml`, { timeout: TIMEOUT });
+                if (!xml || xml.length < 1000) return [];
+                const slugs = [];
+                const re = /<loc>([^<]*)<\/loc>/gi;
+                let m;
+                while ((m = re.exec(xml)) !== null) {
+                    const sm = m[1].trim().match(/\/anime\/([^\/?#]+)\/?$/);
+                    if (sm && sm[1]) slugs.push(decodeURIComponent(sm[1]).toLowerCase());
                 }
-            });
-            if (results.length > 0) break;
-        }
-        if (results.length > 0) return results;
-    } catch (e) {
-        console.warn(`[AnimoFlix] Search HTML fallback failed: ${e.message}`);
+                console.log(`[AnimoFlix] Sitemap: ${slugs.length} fiche(s)`);
+                return slugs;
+            } catch (e) {
+                console.warn(`[AnimoFlix] Sitemap unavailable: ${e.message}`);
+                return [];
+            }
+        })();
     }
+    return _animeSlugsPromise;
+}
 
-    return [];
+/**
+ * Score d'un slug de sitemap contre les titres TMDB (conservateur : égalité
+ * normalisée, ou tous les mots du titre présents dans le slug).
+ */
+function scoreSitemapSlug(slugWords, titleWords) {
+    if (!slugWords.length || !titleWords.length) return 0;
+    if (slugWords.join(' ') === titleWords.join(' ')) return 100;
+    const slugSet = new Set(slugWords);
+    const missing = titleWords.filter(w => !slugSet.has(w)).length;
+    if (missing === 0 && titleWords.length >= 2) return 85;
+    // Titre court ("Naruto") inclus en tête du slug ("naruto-shippuden") →
+    // ambigu (c'est une autre série) : on ne le prend QUE pour un mot unique
+    // et un slug qui commence par lui, avec un score faible (arbitrage
+    // départagé plus loin par la vérification du titre de la fiche).
+    if (titleWords.length === 1 && titleWords[0].length >= 5 && slugWords[0] === titleWords[0]) return 60;
+    return 0;
+}
+
+function findSitemapMatches(slugs, titles) {
+    const out = [];
+    const seen = new Set();
+    for (const t of titles.slice(0, 8)) {
+        const nt = normalize(t);
+        if (!nt) continue;
+        const titleWords = nt.split(/\s+/).filter(Boolean);
+        for (const slug of slugs) {
+            if (seen.has(slug)) continue;
+            const s = scoreSitemapSlug(slug.split(/[-_]+/).filter(Boolean), titleWords);
+            if (s >= 60) {
+                seen.add(slug);
+                out.push({
+                    title: slug.replace(/-/g, ' '),
+                    title2: t,
+                    slug,
+                    url: `${BASE_URL}/anime/${slug}/`,
+                    _sitemap: true,
+                    _sitemapScore: s,
+                });
+            }
+        }
+    }
+    return out.sort((a, b) => b._sitemapScore - a._sitemapScore).slice(0, 6);
 }
 
 function normalize(s) {
@@ -214,28 +282,80 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
         }
         searchPool = pool;
     }
+    // ─── Candidats ──────────────────────────────────────────────────────────
+    // 1) Slug direct (gratuit en cas de succès, pas de recherche)
+    // 2) Oracle sitemap (couvre tout le catalogue, 1 GET partagé)
+    // 3) API autocomplete (rapide quand le préfixe matche)
     const allResults = [];
-    for (const searchTitle of searchPool) {
-        if (isAborted(signal)) break;
+
+    const primarySlug = toSlug(titles[0]);
+    if (primarySlug && primarySlug.length > 3) {
         try {
-            const nt = normalize(searchTitle);
-            if (nt.length < 4) continue;
-            const results = await searchAnime(searchTitle);
-            const filtered = results.filter(r => !SPECIAL_SLUG_RE.test(r.slug) && !badSlugs.has(r.slug))
-                .map(r => ({ ...r, _queryTitle: searchTitle }));
-            allResults.push(...filtered);
-            // Stop early if we already have good results
-            if (filtered.some(r => scoreSearchMatch(r, searchTitle) >= 100)) break;
-        } catch {}
-        // Small delay between searches to respect rate limits
-        if (allResults.length === 0) await sleep(500);
+            const slugHtml = await fetchText(`${BASE_URL}/anime/${primarySlug}/`, { timeout: 8000 });
+            if (slugHtml && slugHtml.length > 1000 && slugHtml.includes('hero-title')) {
+                console.log(`[AnimoFlix] Slug direct valide: ${primarySlug}`);
+                allResults.push({
+                    title: primarySlug.replace(/-/g, ' '),
+                    title2: titles[0],
+                    slug: primarySlug,
+                    url: `${BASE_URL}/anime/${primarySlug}/`,
+                    _queryTitle: titles[0],
+                });
+            }
+        } catch (e) { /* slug absent → oracle */ }
     }
 
-    // Score and deduplicate by slug
+    if (allResults.length === 0 && !isAborted(signal)) {
+        const sitemapSlugs = await getSitemapAnimeSlugs();
+        if (sitemapSlugs.length > 0) {
+            const matches = findSitemapMatches(sitemapSlugs, titles);
+            for (const m of matches) {
+                allResults.push({ ...m, _queryTitle: m.title2 });
+            }
+            if (matches.length > 0) {
+                console.log(`[AnimoFlix] Sitemap: ${matches.map(m => m.slug + '(' + m._sitemapScore + ')').join(', ')}`);
+            }
+        }
+    }
+
+    // API autocomplete : complète (et départage) les candidats. On teste des
+    // variantes de requête jusqu'à obtenir un match franc.
+    let apiQueryCount = 0;
+    const MAX_API_QUERIES = isMovie ? 6 : 7;
+    for (const searchTitle of searchPool) {
+        if (isAborted(signal) || apiQueryCount >= MAX_API_QUERIES) break;
+        const variants = queryVariants(searchTitle);
+        let strongFound = false;
+        for (const q of variants) {
+            if (isAborted(signal) || apiQueryCount >= MAX_API_QUERIES) break;
+            const nt = normalize(q);
+            if (nt.length < 4) continue;
+            apiQueryCount++;
+            const results = await apiSearch(q);
+            const filtered = results
+                .filter(r => r && r.slug && !SPECIAL_SLUG_RE.test(r.slug) && !badSlugs.has(r.slug))
+                .map(r => ({ ...r, _queryTitle: searchTitle }));
+            allResults.push(...filtered);
+            if (filtered.some(r => scoreSearchMatch(r, searchTitle) >= 100)) { strongFound = true; break; }
+            if (filtered.length === 0) continue;
+            // Résultats trouvés mais aucun franc : inutile d'élargir encore la
+            // requête pour ce titre (les variantes suivantes sont plus larges →
+            // même jeu de résultats).
+            break;
+        }
+        if (strongFound) break;
+        if (allResults.length === 0) await sleep(400);
+    }
+
+    // Score et déduplication par slug (les candidats sitemap gardent leur
+    // score propre tant qu'aucun match API ne fait mieux).
     const scored = new Map();
     for (const r of allResults) {
         if (badSlugs.has(r.slug)) continue;
-        const score = scoreSearchMatch(r, r._queryTitle);
+        const score = Math.max(
+            r._sitemapScore || 0,
+            scoreSearchMatch(r, r._queryTitle || titles[0])
+        );
         const existing = scored.get(r.slug);
         if (!existing || score > existing.score) {
             scored.set(r.slug, { ...r, score });
@@ -310,15 +430,19 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
     }
 
     const seasons = [];
-    let filmSeasonHref = null;
-    
+    // ⚠ Une série peut lister PLUSIEURS films (Demon Slayer : Train de
+    // l'infini + Forteresse infinie) : garder un seul href servait toujours le
+    // dernier → mauvais film pour un « épisode qui ne correspond pas au titre ».
+    // On collecte tout, puis on choisit par titre TMDB.
+    const filmCards = [];
+
     // Primary: parse .season-card elements
     $('.season-card').each((i, el) => {
         const href = $(el).attr('href');
         const title = $(el).find('.season-card-title').text().trim();
         if (href && title) {
-            if (/film|movie/i.test(title)) {
-                filmSeasonHref = href;
+            if (/film|movie/i.test(title) || /\/film[-\/]/i.test(href)) {
+                filmCards.push({ href, title });
                 return;
             }
             if (/oav|ona/i.test(title)) return;
@@ -326,9 +450,9 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
             seasons.push({ href, title, seasonNum });
         }
     });
-    
+
     // Fallback: if no season cards found, try a[href*="saison-"] links
-    if (seasons.length === 0 && filmSeasonHref === null) {
+    if (seasons.length === 0 && filmCards.length === 0) {
         $('a[href*="saison-"]').each((i, el) => {
             const href = $(el).attr('href');
             const title = $(el).text().trim();
@@ -340,28 +464,57 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
             }
         });
         // Also try film/movie links
-        if (filmSeasonHref === null) {
-            $('a[href*="/film/"], a[href*="/movie/"]').each((i, el) => {
+        if (filmCards.length === 0) {
+            $('a[href*="/film/"], a[href*="/movie/"], a[href*="/film-"], a[href*="/film-"]').each((i, el) => {
                 const href = $(el).attr('href');
                 if (href && href.includes('/anime/' + slug + '/')) {
-                    filmSeasonHref = href;
-                    return false;
+                    filmCards.push({ href, title: $(el).text().trim() });
                 }
             });
         }
     }
 
-    if (isMovie) {
-        // Try season-based URL first (movies listed under Saison 1), then fall back to film URL
-        const movieSeasonHref = filmSeasonHref || seasons.find(s => s.seasonNum === 1)?.href;
-        if (movieSeasonHref) {
-            return extractMovieStreams(slug, movieSeasonHref);
+    /** URL absolue d'une fiche/saison. */
+    const absUrl = (href) => href.startsWith('http') ? href : `${BASE_URL}${href.startsWith('/') ? '' : '/'}${href}`;
+
+    /**
+     * Choisit le film de la fiche qui correspond au film TMDB demandé.
+     * Score = mots du titre du film présents dans le href/titre de la carte.
+     * Sans correspondance (film standalone, noms FR différents), on garde le
+     * premier — mieux vaut un film plausible que zéro.
+     */
+    const pickFilm = () => {
+        if (filmCards.length === 0) return null;
+        let best = filmCards[0];
+        let bestScore = 0;
+        for (const f of filmCards) {
+            const hay = normalize(`${f.href} ${f.title}`);
+            let score = 0;
+            for (const t of titles.slice(0, 6)) {
+                const words = normalize(t).split(/\s+/).filter(w => w.length >= 4);
+                for (const w of words) if (hay.includes(w)) score++;
+            }
+            if (score > bestScore) { bestScore = score; best = f; }
         }
+        if (bestScore > 0) console.log(`[AnimoFlix] Film retenu: \"${best.title || best.href}\" (score ${bestScore})`);
+        return best;
+    };
+
+    if (isMovie) {
+        const film = pickFilm();
+        if (film) {
+            const movieStreams = await extractMovieStreams(slug, absUrl(film.href));
+            if (movieStreams.length > 0) return movieStreams;
+        }
+        // Films classés comme « Saison 1 » sur la fiche (pas de carte film)
+        const movieSeasonHref = seasons.find(s => s.seasonNum === 1)?.href;
+        if (movieSeasonHref) return extractMovieStreams(slug, absUrl(movieSeasonHref));
         return extractMovieStreams(slug, null);
     }
 
     if (seasons.length === 0) {
-        if (filmSeasonHref) return extractMovieStreams(slug, filmSeasonHref);
+        const film = pickFilm();
+        if (film) return extractMovieStreams(slug, absUrl(film.href));
         return [];
     }
 
@@ -376,7 +529,21 @@ async function _extractStreams(tmdbId, mediaType, season, episode, options = {})
     // ("1" === 1 → false) → le fallback "nearest" servait S1 par coïncidence.
     // Coercion en number AVANT le filtre.
     const targetSeasonNum = parseInt(effectiveSeason, 10);
-    const targetSeasons = seasons.filter(s => s.seasonNum === targetSeasonNum);
+    // Numéro de partie dans l'URL (saison-4-partie-2 → 2) : l'ordre des
+    // parties pilote la numérotation cumulative des épisodes.
+    const partNum = (href) => {
+        const m = String(href).match(/partie[-_]?(\d+)/i);
+        return m ? parseInt(m[1], 10) : 0;
+    };
+    const sameSeason = seasons.filter(s => s.seasonNum === targetSeasonNum);
+    // Préférer les URLs canoniques `/saison-N/` aux variantes (remake, hash
+    // `saison-1-03c005b0`) qui contiennent souvent un autre contenu.
+    const canonicalSeason = sameSeason.filter(s =>
+        new RegExp(`/saison-${targetSeasonNum}/?$`, 'i').test(s.href)
+    );
+    const targetSeasons = (canonicalSeason.length > 0 ? canonicalSeason : sameSeason)
+        .slice()
+        .sort((a, b) => partNum(a.href) - partNum(b.href));
     const fallbackSeasons = targetSeasons.length === 0
         ? seasons.filter(s => s.seasonNum == null).slice(0, 1)
         : targetSeasons;
@@ -651,8 +818,14 @@ async function extractEpisodeStreams(episodeUrl, langLabel, slug) {
         });
     }
 
+    // Hosts morts/injoignables : ne pas gaspiller le budget (chacun coûtait
+    // 9 à 15 s de fetch avant de rendre isDirect:false).
+    const skipped = embedUrls.filter(u => DEAD_HOST_RE.test(u)).length;
+    const liveEmbeds = embedUrls.filter(u => !DEAD_HOST_RE.test(u)).slice(0, MAX_EMBEDS_PER_EPISODE);
+    if (skipped > 0) console.log(`[AnimoFlix] ${skipped} lecteur(s) mort(s) ignoré(s) (${langLabel})`);
+
     const results = await Promise.allSettled(
-        embedUrls.map(url =>
+        liveEmbeds.map(url =>
             resolveStream({
                 name: `AnimoFlix (${langLabel})`,
                 title: `[${langLabel}] AnimoFlix`,
