@@ -26,16 +26,52 @@
  *  - 0 stream propre > faux stream.
  */
 
-import { fetchFaText, fetchTextSafe, ajaxGet, ajaxPost, setCurrentSignal, FA_SITE, SITE } from './http.js';
-import { resolveStream, isAborted, safeFetch } from '../utils/resolvers.js';
+import { fetchFaText, fetchTextSafe, ajaxGet, ajaxPost, setCurrentSignal, ensureSite, FA_SITE, SITE } from './http.js';
+import { resolveStream, isAborted, safeFetch, withTimeout } from '../utils/resolvers.js';
 import { createCache } from '../utils/cache.js';
+import { isTurnstileSolverEnabled } from '../utils/turnstile.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const withCache = createCache('fra', 'FrenchAnime');
 
 const PAGE_TIMEOUT = 12000;
-const MAX_SUGGEST_QUERIES = 5;
+const MAX_SUGGEST_QUERIES = 8;
+
+/**
+ * Titres localisés TMDB (fr-FR). Les métadonnées bundlées n'exposent pas
+ * toujours le titre FR (« Spirited Away » sans « Le Voyage de Chihiro ») et
+ * les deux canaux (french-anime.com / coflix) cataloguent en FR → un film
+ * pourtant présent restait introuvable.
+ */
+const TMDB_API_KEY =
+    (typeof globalThis !== 'undefined' && globalThis.TMDB_API_KEY) || '8265bd1679663a7ea12ac168da84d2e8';
+
+async function fetchLocalizedTitles(tmdbId, mediaType, signal) {
+    const out = [];
+    if (!/^\d+$/.test(String(tmdbId))) return out;
+    const kind = mediaType === 'movie' ? 'movie' : 'tv';
+    try {
+        const res = await safeFetch(
+            `https://api.themoviedb.org/3/${kind}/${tmdbId}?api_key=${TMDB_API_KEY}&language=fr-FR`,
+            { headers: { Accept: 'application/json' }, timeout: 10000, signal }
+        );
+        const text = res ? await res.text().catch(() => '') : '';
+        if (!text) return out;
+        const json = JSON.parse(text);
+        for (const t of [json.title, json.name]) {
+            if (typeof t === 'string' && t.trim().length >= 2 && !out.includes(t.trim())) out.push(t.trim());
+        }
+    } catch (e) { /* repli optionnel */ }
+    return out;
+}
+// 2 lecteurs/langue : l'ordre d'hôtes est trié (vidzy/uqload d'abord), donc
+// 2 essais suffisent. Au-delà on ne faisait que payer des CDN muets.
 const MAX_EMBEDS_PER_LANG = 2;
+
+// Lecteurs qui passent systématiquement par le CDN tnmr.org (403) ou par une
+// SPA JS : sondés pour rien (12 s chacun, vérifié 2026-11).
+const SKIP_EMBED_HOSTS = ['livavid.', 'kakaflix.'];
+const isSkippedEmbed = (u) => SKIP_EMBED_HOSTS.some((h) => String(u || '').toLowerCase().includes(h));
 const MAX_LANGS = 2;
 
 /** Hosts confirmés morts/irrésolvables (2026-09). */
@@ -53,9 +89,63 @@ const EXCLUDED_SLUGS = [
 /** Marqueurs de film/OAV dans un slug — interdits pour une demande TV. */
 const FILM_MARKER = /(^|-)(le-film|film|movie|oav|ova|special)(-|$)/i;
 
+/**
+ * Slug de film sur coflix : marqueur explicite OU suffixe de numéro d'opus
+ * (`jujutsu-kaisen-0-vf` = le film JJK 0, qui était servi pour « S2E1 »).
+ */
+function isFilmSlug(slug) {
+    const s = String(slug || '').toLowerCase().replace(/-(vf|vostfr|truefrench|french)$/, '');
+    return FILM_MARKER.test(s) || /-(0|1er|premier)$/.test(s);
+}
+
+/** Saison explicite d'un slug coflix (`…-saison-2-vf`). */
+function slugSaison(slug) {
+    const m = String(slug || '').match(/saison-(\d+)/i);
+    return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Tolérance de frappe : le site perd parfois des lettres accentuées dans ses
+ * slugs (« Le Garçon et le Héron » → `Le-Garon-et-le-hron`). Un mot quasi
+ * identique (1-2 éditions) doit compter comme un hit.
+ */
+function editDistance(a, b) {
+    const m = a.length, n = b.length;
+    if (!m || !n) return Math.max(m, n);
+    let prev = new Array(n + 1);
+    let cur = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+        cur[0] = i;
+        for (let j = 1; j <= n; j++) {
+            cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        }
+        const t = prev; prev = cur; cur = t;
+    }
+    return prev[n];
+}
+
+function fuzzyWordMatch(q, w) {
+    if (q === w) return true;
+    if (q.length < 4 || w.length < 4) return false;
+    const d = editDistance(q, w);
+    return d <= (Math.max(q.length, w.length) >= 6 ? 2 : 1);
+}
+
 function isDeadUrl(url) {
     const u = (url || '').toLowerCase();
     return DEAD_HOSTS.some(d => u.includes(d));
+}
+
+/**
+ * CDN qui répond 403 sur toute URL tokenisée (re-vérifié 2026-11 :
+ * `3duxixhjxwkg.tnmr.org/hls2/…/index-v1-a1.m3u8` → 403 nginx, avec ou sans
+ * Referer Origin). Servir ces URL produit un flux qui ne démarre jamais →
+ * on garde les autres lecteurs du même épisode.
+ */
+function isBlockedCdn(url) {
+    const u = String(url || '').toLowerCase();
+    return u.includes('tnmr.org') && !u.includes('cdn-tnmr.org');
 }
 
 function isExcludedSlug(slug) {
@@ -91,11 +181,14 @@ function titleScore(candidate, query) {
     if (!qw.length) return 0;
     const cw = new Set(norm(candidate).split(/[^a-z0-9]+/));
     let hits = 0;
-    for (const w of qw) if (cw.has(w)) hits += (w.length === 3 ? 0.5 : 1);
+    for (const w of qw) {
+        if (cw.has(w)) hits += (w.length === 3 ? 0.5 : 1);
+        else if ([...cw].some((c) => fuzzyWordMatch(w, c))) hits += (w.length === 3 ? 0.5 : 1);
+    }
     const GENERIC = /(vf|vostfr|truefrench|french|saison|season|film|movie|episode|complete|integral|integrale|oav|special)$/;
     for (const w of cw) {
         if (w.length < 4 || GENERIC.test(w)) continue;
-        if (qw.some((q) => q === w || (q.length >= 4 && (w.startsWith(q) || q.startsWith(w))))) continue;
+        if (qw.some((q) => q === w || (q.length >= 4 && (w.startsWith(q) || q.startsWith(w))) || fuzzyWordMatch(q, w))) continue;
         return 0; // mot étranger à la requête → pas ce titre
     }
     return hits / qw.length;
@@ -286,6 +379,7 @@ async function extractFromFrenchAnime(titles, mediaType, season, episode, opts =
                     const resolved = await resolveStream({ ...baseStream, url }, 0);
                     if (!resolved || resolved.isDirect === false) continue;
                     if (!resolved.url || resolved.url.includes('[object')) continue;
+                    if (isBlockedCdn(resolved.url)) continue;
                     st = resolved;
                 } catch (e) {
                     if (isAborted(signal)) throw e;
@@ -312,7 +406,9 @@ export async function searchCandidates(query, opts = {}) {
     if (!json || !json.html || typeof json.html !== 'string') return [];
     const out = [];
     const seen = new Set();
-    const re = /href="https?:\/\/coflix\.wiki\/film\/([^"\/]+)\/ep-(\d+)"/g;
+    // Domaine variable (coflix.gold aujourd'hui, coflix.wiki hier) : ne jamais
+    // figer le TLD dans le parseur, sinon 0 candidat après rotation.
+    const re = /href="https?:\/\/[a-z0-9.-]*coflix\.[a-z]+\/film\/([^"\/]+)\/ep-(\d+)"/g;
     let m;
     while ((m = re.exec(json.html)) !== null) {
         const slug = m[1];
@@ -320,10 +416,49 @@ export async function searchCandidates(query, opts = {}) {
         if (isExcludedSlug(slug)) continue;
         seen.add(slug);
         const lang = /-vostfr$/i.test(slug) ? 'ja'
-            : /(-vf|-truefrench|-french)$/i.test(slug) ? 'fr' : null;
+            : /(-vf|-truefrench|-french)$/i.test(slug) ? 'fr' : 'fr';
         out.push({ slug, epId: m[2], lang, isFilm: FILM_MARKER.test(slug) });
     }
     return out.slice(0, 8);
+}
+
+/**
+ * Repli catalogue : la recherche « suggest » du thème n'indexe qu'une partie
+ * du catalogue (ex. « attack on titan » → 2 films, la série est absente).
+ * `/filter?keyword=` liste TOUS les enregistrements correspondants (films ET
+ * séries) — 1 requête HTML, même format de slug que suggest.
+ */
+export async function searchFilterCandidates(query, opts = {}) {
+    await ensureSite();
+    const html = await fetchTextSafe(`${SITE}/filter?keyword=${encodeURIComponent(query)}`, {
+        ...opts,
+        timeout: PAGE_TIMEOUT,
+    });
+    if (!html) return [];
+    const out = [];
+    const seen = new Set();
+    const re = /href="https?:\/\/[a-z0-9.-]*coflix\.[a-z]+\/film\/([^"\/]+)\/(?:ep-)?(\d+)?"?/g;
+    // 1re passe : slugs nus (sans /ep-), pour ne pas dupliquer les entrées
+    const slugRe = /href="https?:\/\/[a-z0-9.-]*coflix\.[a-z]+\/film\/([^"\/]+)\/?"/g;
+    let m;
+    while ((m = slugRe.exec(html)) !== null) {
+        const slug = m[1];
+        if (!slug || seen.has(slug) || isExcludedSlug(slug)) continue;
+        seen.add(slug);
+        const lang = /-vostfr$/i.test(slug) ? 'ja'
+            : /(-vf|-truefrench|-french)$/i.test(slug) ? 'fr' : 'fr';
+        out.push({ slug, epId: null, lang, isFilm: FILM_MARKER.test(slug) });
+    }
+    if (out.length === 0) {
+        while ((m = re.exec(html)) !== null) {
+            const slug = m[1];
+            if (!slug || seen.has(slug)) continue;
+            seen.add(slug);
+            const lang = /-vostfr$/i.test(slug) ? 'ja' : /(-vf|-truefrench|-french)$/i.test(slug) ? 'fr' : null;
+            out.push({ slug, epId: m[2] || null, lang, isFilm: FILM_MARKER.test(slug) });
+        }
+    }
+    return out.slice(0, 12);
 }
 
 /** Liste des épisodes du record série (movieId = data-id de la page). */
@@ -348,6 +483,7 @@ async function listEpisodes(movieId, opts = {}) {
 /** data-id du record depuis une page /film/{slug}/. */
 async function getMovieId(slug, opts = {}) {
     return withCache(`mid_${slug}`, async () => {
+        await ensureSite();
         const html = await fetchTextSafe(`${SITE}/film/${slug}/`, { ...opts, timeout: PAGE_TIMEOUT });
         if (!html) return null;
         const m = html.match(/id="watch-page"[^>]*data-id="(\d+)"/) || html.match(/data-id="(\d+)"/);
@@ -367,13 +503,28 @@ async function getEpisodeEmbeds(epId, fallbackLang, opts = {}) {
             if (url && typeof url === 'object' && url.url) url = url.url;
             if (!url || typeof url !== 'string' || !url.startsWith('http')) continue;
             if (isDeadUrl(url)) continue;
+            // ⚠ Le champ `version` du thème vaut « VF » même pour les fiches
+            // `-vostfr` (vérifié en live sur one-piece-saison-2-vostfr) → il ne
+            // sert qu'en dernier recours : la langue du slug est autoritaire.
             const v = String(srv.version || '').toLowerCase();
-            const lang = v.includes('vostfr') ? 'ja'
-                : (v.includes('vf') || v.includes('french') || v.includes('true')) ? 'fr' : fallbackLang;
+            const fromVersion = v.includes('vostfr') ? 'ja'
+                : (v.includes('vf') || v.includes('french') || v.includes('true')) ? 'fr' : null;
+            const lang = fallbackLang || fromVersion || 'fr';
             out.push({ url, lang });
         }
         return out;
     }, { successTtl: 120000, failureTtl: 30000 });
+}
+
+/** Premier `ep-{id}` de la fiche (films) — utilisé quand /filter n'en donne pas. */
+async function getFirstEpId(slug, opts = {}) {
+    return withCache(`fep_${slug}`, async () => {
+        await ensureSite();
+        const html = await fetchTextSafe(`${SITE}/film/${slug}/`, { ...opts, timeout: PAGE_TIMEOUT });
+        if (!html) return null;
+        const m = html.match(/\/ep-(\d+)/) || html.match(/data-id="(\d+)"/);
+        return m ? m[1] : null;
+    }, { successTtl: 300000, failureTtl: 60000 });
 }
 
 async function resolveEmbedToStream(embedUrl, baseStream, signal) {
@@ -381,6 +532,10 @@ async function resolveEmbedToStream(embedUrl, baseStream, signal) {
         const resolved = await resolveStream({ ...baseStream, url: embedUrl }, 0);
         if (!resolved || resolved.isDirect === false) return null;
         if (!resolved.url || resolved.url.includes('[object')) return null;
+        if (isBlockedCdn(resolved.url)) {
+            console.log(`[FrenchAnime] CDN bloqué (403) ignoré : ${resolved.url.slice(0, 60)}…`);
+            return null;
+        }
         return resolved;
     } catch (e) {
         if (isAborted(signal)) throw e;
@@ -389,48 +544,105 @@ async function resolveEmbedToStream(embedUrl, baseStream, signal) {
 }
 
 /** Pipeline coflix (fallback). Retourne [] si rien, jamais de faux contenu. */
-async function extractFromCoflix(titles, mediaType, season, episode, opts = {}) {
+async function extractFromCoflix(tmdbId, titles, mediaType, season, episode, opts = {}) {
     const signal = opts.signal || null;
+    // Budget interne : la résolution d'un lecteur lent (CDN muet, iframe JS)
+    // ne doit pas manger les 45 s du plugin (mesuré 37 s sur un film).
+    const startTime = Date.now();
+    const DEADLINE_MS = 38000;
+    const overBudget = () => Date.now() - startTime > DEADLINE_MS;
     const type = mediaType === 'movie' ? 'movie' : 'tv';
     const epNum = Math.max(1, parseInt(episode, 10) || 1);
     const seasonNum = Math.max(1, parseInt(season, 10) || 1);
 
-    const queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
+    let queries = [...new Set(titles.slice(0, MAX_SUGGEST_QUERIES).map((t) => String(t).trim()).filter(Boolean))];
     let candidates = [];
     const seenSlugs = new Set();
-    for (const q of queries) {
-        if (isAborted(signal)) return [];
-        try {
-            const batch = await searchCandidates(q, { signal });
-            for (const c of batch || []) {
-                if (!seenSlugs.has(c.slug)) {
-                    seenSlugs.add(c.slug);
-                    candidates.push(c);
+    const runQueries = async (list) => {
+        for (const q of list) {
+            if (isAborted(signal)) return;
+            try {
+                const batch = await searchCandidates(q, { signal });
+                for (const c of batch || []) {
+                    if (!seenSlugs.has(c.slug)) {
+                        seenSlugs.add(c.slug);
+                        candidates.push(c);
+                    }
                 }
+            } catch (e) {
+                if (isAborted(signal)) throw e;
             }
-        } catch (e) {
-            if (isAborted(signal)) throw e;
+            if (candidates.length >= 3) break;
         }
-        if (candidates.length >= 3) break;
-    }
-    if (!candidates.length) return [];
+    };
+    await runQueries(queries);
 
+    // Le catalogue coflix est en français : le titre FR localisé doit
+    // participer au scoring, sinon un film trouvé via /filter (titre FR
+    // uniquement) est rejeté à 0 (cas « Le Voyage de Chihiro »).
+    const scoreTitles = [...titles];
     const scoreOf = (c) => {
         const slugClean = c.slug.replace(/-(vf|vostfr|truefrench|french)$/i, '');
         let best = 0;
-        for (const t of titles.slice(0, 5)) {
+        for (const t of scoreTitles.slice(0, 6)) {
             const s = titleScore(slugClean, String(t).trim());
             if (s > best) best = s;
         }
         return best;
     };
-    const scored = candidates
+    const buildScored = (list) => list
         .map((c) => ({ ...c, score: scoreOf(c) }))
         .filter((c) => c.score >= 0.34)
         // Garde film/OAV : un film ne peut jamais répondre à une demande TV
-        // (le record expose un épisode 1 factice — faux contenu Chainsaw Man).
-        .filter((c) => type === 'movie' || !c.isFilm)
+        // (le record expose un épisode 1 factice — « Jujutsu Kaisen 0 » servi
+        // pour JJK S2E1, « Chainsaw Man le film » pour la série).
+        .filter((c) => type === 'movie' || (!c.isFilm && !isFilmSlug(c.slug)))
+        .filter((c) => {
+            const ss = slugSaison(c.slug);
+            if (type === 'movie') return ss == null;        // page saison ≠ film
+            if (ss != null && ss !== seasonNum) return false; // autre saison
+            return true;
+        })
         .sort((a, b) => b.score - a.score);
+
+    let scored = buildScored(candidates);
+    let localized = null;
+
+    // Repli titre FR : les titres bundlés TMDB sont souvent EN/romaji.
+    if (scored.length === 0) {
+        localized = await fetchLocalizedTitles(tmdbId, mediaType, signal);
+        if (localized.length) {
+            console.log(`[FrenchAnime] Repli titres FR: ${localized.join(' | ')}`);
+            scoreTitles.unshift(...localized);
+            queries = localized;
+            await runQueries(localized);
+            scored = buildScored(candidates);
+        }
+    }
+
+    // Repli `/filter?keyword=` : le suggest du thème n'indexe pas tout le
+    // catalogue (séries et films absents de la suggestion, ex. Attack on Titan).
+    if (scored.length === 0) {
+        const filterQueries = [...new Set([...(localized || []), ...queries])].slice(0, 4);
+        for (const q of filterQueries) {
+            if (isAborted(signal)) break;
+            try {
+                const extra = await searchFilterCandidates(q, { signal });
+                for (const c of extra) {
+                    if (!seenSlugs.has(c.slug)) { seenSlugs.add(c.slug); candidates.push(c); }
+                }
+            } catch (e) {
+                if (isAborted(signal)) throw e;
+            }
+            scored = buildScored(candidates);
+            if (scored.length > 0) break;
+        }
+        if (candidates.length > 0) {
+            console.log(`[FrenchAnime] Repli filtre: ${candidates.length} candidat(s), ${scored.length} retenu(s)`);
+        }
+    }
+    if (scored.length === 0) return [];
+    console.log(`[FrenchAnime] Candidats coflix: ${scored.slice(0, 4).map((c) => `${c.slug}(${c.score.toFixed(2)}${c.lang ? ',' + c.lang : ''})`).join(', ')}`);
 
     const streams = [];
     const seenEmbeds = new Set();
@@ -448,7 +660,12 @@ async function extractFromCoflix(titles, mediaType, season, episode, opts = {}) 
 
             let embeds = [];
             if (type === 'movie' || !seasonNum) {
-                embeds = await getEpisodeEmbeds(cand.epId, lang, { signal });
+                // Candidats issus de /filter : pas d'epId dans le HTML de
+                // listing → on le lit sur la page du film.
+                let epId = cand.epId;
+                if (!epId) epId = await getFirstEpId(cand.slug, { signal });
+                if (!epId) continue;
+                embeds = await getEpisodeEmbeds(epId, lang, { signal });
             } else {
                 const movieId = await getMovieId(cand.slug, { signal });
                 if (!movieId) continue;
@@ -458,19 +675,45 @@ async function extractFromCoflix(titles, mediaType, season, episode, opts = {}) 
                 embeds = await getEpisodeEmbeds(target.epId, lang, { signal });
             }
 
+            // Priorité d'hôtes : les lecteurs qui répondent vite et qui ne
+            // passent pas par le CDN tnmr.org (403) d'abord — sinon 2 lecteurs
+            // lents/morts consomment le quota (mesuré 23 s pour 1 film).
+            const hostRank = (u) => {
+                const s = String(u || '').toLowerCase();
+                if (s.includes('vidzy')) return 0;
+                if (s.includes('uqload')) return 1;
+                if (s.includes('byse')) return 2;
+                if (s.includes('fsvid')) return 3;
+                return 5;
+            };
+            embeds = [...embeds]
+                .filter((e) => !isSkippedEmbed(e.url))
+                .sort((a, b) => hostRank(a.url) - hostRank(b.url));
+
             let resolvedThisLang = 0;
             for (const emb of embeds) {
                 if (resolvedThisLang >= MAX_EMBEDS_PER_LANG) break;
+                if (overBudget()) {
+                    console.warn('[FrenchAnime] Budget de résolution atteint — arrêt');
+                    return streams;
+                }
                 if (seenEmbeds.has(emb.url)) continue;
                 seenEmbeds.add(emb.url);
-
                 const baseStream = {
                     name: 'FrenchAnime',
-                    title: `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] Épisode ${epNum}`,
+                    title: type === 'movie'
+                        ? `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] Film`
+                        : `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] Épisode ${epNum}`,
                     language: lang,
                     quality: 'HD',
                 };
-                const st = await resolveEmbedToStream(emb.url, baseStream, signal);
+                const st = await withTimeout(
+                    resolveEmbedToStream(emb.url, baseStream, signal),
+                    // Lecteur protégé par Turnstile (dood/playmogo) : plus de
+                    // marge quand l'utilisateur a activé le solveur.
+                    isTurnstileSolverEnabled() ? 26000 : 12000,
+                    'french-anime embed'
+                ).catch(() => null);
                 if (!st) continue;
                 delete st.isDirect;
                 delete st.originalUrl;
@@ -520,12 +763,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     }
     if (direct === null) {
         console.log('[FrenchAnime] Challenge CF sur french-anime.com → fallback coflix.wiki');
-        return extractFromCoflix(titles, type, season, episode, { signal });
+        return extractFromCoflix(tmdbId, titles, type, season, episode, { signal });
     }
     if (direct.length > 0) return direct;
 
     // 2. Titre introuvable en direct (ou épisode absent) : le catalogue du
     //    showcase est aussi porté par coflix.wiki — tenter le fallback avant
     //    de conclure à l'absence.
-    return extractFromCoflix(titles, type, season, episode, { signal });
+    return extractFromCoflix(tmdbId, titles, type, season, episode, { signal });
 }

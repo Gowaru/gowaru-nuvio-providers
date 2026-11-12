@@ -33,7 +33,7 @@
 import { fetchJson, fetchText, setCurrentSignal, BASE } from './http.js';
 import { resolveStream, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { toSlug } from '../utils/dle-extractor.js';
+import { toSlug, resolveTargetEpisodes } from '../utils/dle-extractor.js';
 
 /** Clé XOR statique du player gupload (stable, vérifiée sur plusieurs pages). */
 const GUPLOAD_XOR_KEY = 'G7#kP!2qZxV9mRwL';
@@ -148,52 +148,146 @@ async function searchApi(titles, signal) {
     return { hit: null, best };
 }
 
-/**
- * Sonde de slug directe : /anime/{slug} (200 + RSC même si search rate).
- * Les slugs des résultats search sous-seuil (extraSlugs) sont revalidés
- * ici avant usage — jamais servis à l'aveugle.
- */
-async function probeSlug(titles, signal, extraSlugs = []) {
-    const seen = new Set();
-    const candidates = [];
-    for (const s of extraSlugs) {
-        if (s && !seen.has(s)) {
-            seen.add(s);
-            candidates.push({ slug: s, score: 65 });
-        }
-    }
-    for (const t of titles.slice(0, MAX_SEARCH_TITLES)) {
-        if (isAborted(signal)) return null;
-        const slug = toSlug(t);
-        if (!slug || seen.has(slug)) continue;
-        seen.add(slug);
-        candidates.push({ slug, score: 80 });
-    }
-    for (const c of candidates) {
-        if (isAborted(signal)) return null;
-        const html = await fetchText(`/anime/${c.slug}`, { signal });
-        // La page fiche valide contient les données d'épisodes dans le flight RSC
-        if (html && html.includes('zoplayer_id')) {
-            return c;
-        }
-    }
-    return null;
-}
-
 // ─── Détails + extraction ───────────────────────────────────────────────────
 
 async function getAnimeDetails(slug, signal) {
     return fetchJson(`/api/animes/${slug}`, { signal });
 }
 
-function findEpisodeData(details, seasonNum, episodeNum) {
+/**
+ * Sitemap → catalogue complet des slugs `/anime/{slug}` (1 GET par exécution,
+ * ~320 Ko). L'API `/api/anime/search?q=` est cassée pour beaucoup de titres
+ * (renvoie `[]` : « Kimetsu », « Frieren », « titan »…) et les slugs romaji
+ * sont impossibles à deviner depuis les titres TMDB (EN/FR) — le sitemap est
+ * la seule source d'identité fiable.
+ */
+let _sitemapSlugs = null;
+async function getSitemapSlugs(signal) {
+    if (_sitemapSlugs) return _sitemapSlugs;
+    const xml = await fetchText('/sitemap.xml', { signal, timeout: 15000 });
+    if (!xml) return (_sitemapSlugs = []);
+    const slugs = [];
+    const seen = new Set();
+    const re = /<loc>https:\/\/animevost\.fr\/anime\/([^<\/]+)<\/loc>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+        const slug = m[1];
+        if (!seen.has(slug)) { seen.add(slug); slugs.push(slug); }
+    }
+    _sitemapSlugs = slugs;
+    return slugs;
+}
+
+/** Tokens significatifs d'un titre (>= 3 lettres, sans mots vides). */
+const STOP = new Set(['the', 'and', 'les', 'des', 'une', 'pour', 'with', 'season', 'saison', 'part', 'movie', 'film']);
+function titleTokens(s) {
+    return String(s || '')
+        .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 3 && !STOP.has(w));
+}
+
+/**
+ * Score d'un slug romaji contre les titres TMDB.
+ * 100 = slug exact, 95 = slug exact à suffixe numérique près, 60-90 = recouvrement.
+ */
+function scoreSlug(slug, titles) {
+    const base = stripNumericSuffix(String(slug || '').toLowerCase());
+    const slugTokens = new Set(titleTokens(base));
+    if (slugTokens.size === 0) return 0;
+    let best = 0;
+    for (const t of titles) {
+        const exact = toSlug(t);
+        if (exact && (exact === slug || exact === base)) { best = Math.max(best, 100); continue; }
+        const tokens = titleTokens(t);
+        if (!tokens.length) continue;
+        const hit = tokens.filter((w) => slugTokens.has(w)).length;
+        if (hit === 0) continue;
+        // Tous les mots du titre présents dans le slug (ou l'inverse)
+        if (hit === tokens.length) {
+            const extras = slugTokens.size - hit;
+            best = Math.max(best, 90 - Math.min(extras * 8, 25));
+        } else {
+            best = Math.max(best, Math.round((hit / tokens.length) * 60));
+        }
+    }
+    return best;
+}
+
+/** Candidats slugs : recherche API, sitemap scoré, puis sondes toSlug. */
+async function buildCandidates(titles, signal, apiBest) {
+    const out = [];
+    const seen = new Set();
+    const push = (slug, score) => {
+        if (!slug || seen.has(slug)) return;
+        seen.add(slug);
+        out.push({ slug, score });
+    };
+    if (apiBest && apiBest.slug) push(apiBest.slug, apiBest.score + 5);
+    const slugs = await getSitemapSlugs(signal);
+    if (slugs.length) {
+        const scored = [];
+        for (const s of slugs) {
+            const sc = scoreSlug(s, titles);
+            if (sc >= 55) scored.push({ slug: s, score: sc });
+        }
+        scored.sort((a, b) => b.score - a.score || a.slug.length - b.slug.length);
+        for (const c of scored.slice(0, 6)) push(c.slug, c.score);
+        console.log(`[AnimeVostFR] Sitemap ${slugs.length} fiche(s) → ${scored.length} candidate(s) pour "${titles[0]}"`);
+    }
+    for (const t of titles.slice(0, MAX_SEARCH_TITLES)) {
+        push(toSlug(t), 70);
+    }
+    out.sort((a, b) => b.score - a.score);
+    return out.slice(0, 8);
+}
+
+/**
+ * Cherche l'épisode dans une fiche, en tolérant les numérotations du site :
+ *  - exact : saison demandée + numéro local (cas normal) ;
+ *  - absolu dans la saison demandée (fiches qui stockent les numéros
+ *    absolus, ex. One Piece S1 → 1176…) ;
+ *  - absolu dans n'importe quelle saison (offset de saison différent de TMDB).
+ * Aucun repli « épisode le plus proche » : 0 propre > mauvais contenu.
+ */
+function findEpisodeData(details, seasonNum, episodeNum, absoluteEpisodes = []) {
     if (!details || !Array.isArray(details.seasons)) return null;
-    const seasonData =
-        details.seasons.find((s) => parseInt(s.season_number, 10) === seasonNum) ||
-        // Pas de repli cross-saison : la saison demandée doit exister.
-        null;
-    if (!seasonData || !Array.isArray(seasonData.episodes)) return null;
-    return seasonData.episodes.find((e) => parseInt(e.episode_number, 10) === episodeNum) || null;
+    const seasons = details.seasons.filter((s) => s && Array.isArray(s.episodes));
+    const exactSeason = seasons.find((s) => parseInt(s.season_number, 10) === seasonNum);
+    if (exactSeason) {
+        const hit = exactSeason.episodes.find((e) => parseInt(e.episode_number, 10) === episodeNum);
+        if (hit) return hit;
+    }
+    const absTargets = new Set();
+    for (const a of absoluteEpisodes) {
+        const n = parseInt(a, 10);
+        if (Number.isFinite(n) && n > 0) absTargets.add(n);
+    }
+    if (exactSeason) {
+        for (const abs of absTargets) {
+            const hit = exactSeason.episodes.find((e) => parseInt(e.episode_number, 10) === abs);
+            if (hit) return hit;
+        }
+    }
+    // Cross-saison par numéro absolu : UNIQUEMENT sur les saisons qui
+    // numérotent réellement en absolu (One Piece S1 → 1176…, 6 épisodes).
+    // Sans ce garde-fou, « TMDB S1E1 » (abs 1) tombait sur la saison 2 du
+    // site et servait l'épisode 1 de la mauvaise saison.
+    const looksAbsolute = (s) => {
+        const nums = (s.episodes || []).map((e) => parseInt(e.episode_number, 10)).filter(Number.isFinite);
+        if (!nums.length) return false;
+        const max = Math.max.apply(null, nums);
+        return max > 100 && max > nums.length * 2;
+    };
+    const sorted = [...seasons].sort((a, b) => (b.episodes || []).length - (a.episodes || []).length);
+    for (const abs of absTargets) {
+        for (const s of sorted) {
+            if (!looksAbsolute(s)) continue;
+            const hit = s.episodes.find((e) => parseInt(e.episode_number, 10) === abs);
+            if (hit) return hit;
+        }
+    }
+    return null;
 }
 
 /**
@@ -304,32 +398,47 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const titles = await getTmdbTitles(tmdbId, 'tv', { season: seasonNum });
     if (!titles || titles.length === 0) return [];
 
-    // 1. Search API puis sonde de slug (le meilleur candidat sous-seuil
-    //    est revalidé par sonde plutôt qu'abandonné)
-    let match = null;
+    // Numéros absolus (ArmSync) : les fiches du site numérotent souvent en
+    // absolu dans une seule « saison » (One Piece S1 → 1176…1180).
+    const absolutes = await resolveTargetEpisodes(tmdbId, 'tv', seasonNum, episodeNum).catch(() => []);
+
+    // 1. Candidats : API search (accélérateur) + sitemap scoré + sondes toSlug.
+    //    L'ancien code s'arrêtait au PREMIER slug répondant `zoplayer_id`
+    //    (« kusuriya-no-hitorigoto-3rd-season », fiche vide) et rendait 0
+    //    alors que la bonne fiche existait sous un autre slug.
     const search = await searchApi(titles, signal);
-    if (search && search.hit) match = search.hit;
-    if (!match) {
-        const extra = search && search.best && search.best.score >= 50 ? [search.best.slug] : [];
-        match = await probeSlug(titles, signal, extra);
-    }
-    if (!match) {
+    const candidates = await buildCandidates(titles, signal, search && search.best);
+    if (!candidates.length) {
         console.log(`[AnimeVostFR] Titre introuvable pour TMDB ${tmdbId}`);
         return [];
     }
 
-    // 2. Détails + garde anti-mismatch + épisode exact (jamais de repli)
-    const details = await getAnimeDetails(match.slug, signal);
-    if (detailsTitleScore(details, titles, match.slug) < 40) {
-        console.log(`[AnimeVostFR] Fiche ${match.slug} sans rapport avec TMDB ${tmdbId} — abandon`);
-        return [];
+    const startedAt = Date.now();
+    const DEADLINE_MS = 40000;
+    let sawEpisodeSlot = false;
+    for (const cand of candidates) {
+        if (isAborted(signal) || Date.now() - startedAt > DEADLINE_MS) break;
+        // 2. Détails + garde anti-mismatch (0 propre > mauvais contenu)
+        const details = await getAnimeDetails(cand.slug, signal);
+        if (!details) continue;
+        if (detailsTitleScore(details, titles, cand.slug) < 40) {
+            console.log(`[AnimeVostFR] Fiche ${cand.slug} sans rapport avec TMDB ${tmdbId} — ignorée`);
+            continue;
+        }
+        // 3. Épisode : exact, puis numéro absolu (même saison, puis toutes)
+        const epData = findEpisodeData(details, seasonNum, episodeNum, absolutes);
+        if (!epData) {
+            const count = (details.seasons || []).reduce((n, s) => n + (s.episodes || []).length, 0);
+            console.log(`[AnimeVostFR] S${seasonNum}E${episodeNum} absent de ${cand.slug} (${count} ép.)`);
+            continue;
+        }
+        sawEpisodeSlot = true;
+        // 4. Résolution gupload → m3u8
+        const streams = await resolveEpisodeStreams(cand.slug, seasonNum, episodeNum, epData, signal);
+        if (streams.length) return streams;
     }
-    const epData = findEpisodeData(details, seasonNum, episodeNum);
-    if (!epData) {
-        console.log(`[AnimeVostFR] S${seasonNum}E${episodeNum} absent de ${match.slug}`);
-        return [];
+    if (!sawEpisodeSlot) {
+        console.log(`[AnimeVostFR] Aucune fiche avec S${seasonNum}E${episodeNum} (${candidates.length} candidate(s))`);
     }
-
-    // 3. Résolution gupload → m3u8
-    return resolveEpisodeStreams(match.slug, seasonNum, episodeNum, epData, signal);
+    return [];
 }

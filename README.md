@@ -32,17 +32,17 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
 | 1 | **ADKami** | 🎬📺 | FR / JA | — | ✅ | ✅ | 0.1.2 |
 | 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.61 |
-| 3 | **AnimeSite** | 🎬📺 | FR / JA | — | ✅ | ✅ | 0.1.4 |
+| 3 | **AnimeSite** | 🎬📺 | VOSTFR | HLS, MP4 | ✅ | ✅ | 0.2.0 |
 | 4 | **Anime-Ultime** ¹ | 🎬📺 | VF / VOSTFR | MP4 | ✅ | ✅ | 0.0.6 |
-| 5 | **AnimeVOST.fr** | 📺 _only_ | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.3 |
-| 6 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.54 |
-| 7 | **AnimesUltra** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.39 |
-| 8 | **AnimeSama.co (DLE Mirror)** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
+| 5 | **AnimeVOST.fr** | 📺 _only_ | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.2.0 |
+| 6 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.1.55 |
+| 7 | **AnimesUltra** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.40 |
+| 8 | **AnimeSama.co (DLE Mirror)** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
 | 9 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.20 |
-| 10 | **Aniverse** | 🎬📺 | FR / JA | M3U8 | ✅ | ✅ | 0.2.2 |
+| 10 | **Aniverse** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 0.3.0 |
 | 11 | **Franime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.3 |
 | 12 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
-| 13 | **French-Anime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.3 |
+| 13 | **French-Anime** | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
 | 14 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
 | 15 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.1.3 |
 | 16 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.21 |
@@ -50,7 +50,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 18 | **SenAnimes** ⁶ | 🎬📺 | FR / JA | — | ⚠️ | ⚠️ | 0.1.3 |
 | 19 | **Sekai** ² | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.26 |
 | 20 | **VoirAnime** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.2.28 |
-| 21 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.3 |
+| 21 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.2.0 |
 | 22 | **VoirAnime.one** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.3 |
 | 23 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.16 |
 | 24 | **VoiranimeBE** | 🎬📺 | VOSTFR / JA | — | ✅ | ✅ | 0.1.2 |
@@ -61,7 +61,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 
 | # | Provider | 🎬 Content | 🌐 Lang | 💾 Formats | 📱 App | 📺 TV | 🏷️ Ver. |
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
-| 27 | **Coflix** ⁵ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ⚠️ | 2.0.5 |
+| 27 | **Coflix** ⁵ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ⚠️ | 2.2.0 |
 | 28 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
 | 29 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
 | 30 | **Frenchstream** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.24 |
@@ -85,7 +85,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 > - ² **Sekai**: direct MP4s (1080p/720p/360p) — multi-variant probing with rate limiting can exceed NuvioTV's 30 s window on large titles; disabled on TV (`disabledPlatforms: ["tv"]`).
 > - ³ **VoirAnime**: multi-host resolution (Sibnet, Uqload, Voe, Dood, Vidzy…) — the slowest titles can exceed NuvioTV's 30 s window; disabled on TV. The site also rate-limits by IP (Cloudflare 503 after a few dozen requests): the provider detects it and aborts the current run instead of burning its budget on retries.
 > - ⁴ **WaveAnime**: native DASH (MPD) playback via ExoPlayer/Media3 on NuvioMobile (Android) **and NuvioTV**. External ASS subtitles: NuvioMobile only (NuvioTV ignores the `subtitles` field).
-> - ⁵ **Coflix**: multi-domain probing + `lecteurvideo` embeds — falls back to embed links (not natively playable) when direct resolution fails.
+> - ⁵ **Coflix**: the site rotates domains (`coflix.wiki` → `301` → `coflix.gold`, root redirect) — the provider probes the live domain at runtime, then uses the theme AJAX API (`suggest` → `list-episode` → `player`) with a `/filter?keyword=` fallback. Streams hosted on `*.tnmr.org` (403) are dropped instead of being returned unplayable, and `dood.*`/`playmogo` embeds are detected as Cloudflare-Turnstile-gated instead of burning the budget (optional Turnstile solver available in the provider settings, disabled by default, needs your own CapSolver/2Captcha key).
 > - ⁶ **SenAnimes**: since 2026-10 the site requires a server-side Cloudflare Turnstile check (`403 {"error":"verification-humaine"}` on `/api/episode/source`, whatever the headers sent) — no source can be resolved from a plugin runtime, so the provider is kept for its catalogue/mapping logic but returns no stream. It detects the gate, exits in < 2 s and logs the reason instead of wasting the budget.
 
 ---

@@ -135,6 +135,37 @@ function scoreCard(card, queryNorm) {
   return Math.round((matched / Math.max(qWords.length, 1)) * 60);
 }
 
+/**
+ * Titres localisés TMDB (fr-FR). Les métadonnées bundlées de `metadata.js`
+ * n'exposent pas toujours le titre FR (« Spirited Away » sans « Le Voyage de
+ * Chihiro ») alors que le catalogue du site est en FR → introuvable.
+ * 1 requête, uniquement quand la recherche initiale a échoué.
+ */
+const TMDB_API_KEY =
+  (typeof globalThis !== 'undefined' && globalThis.TMDB_API_KEY) || '8265bd1679663a7ea12ac168da84d2e8';
+
+async function fetchLocalizedTitles(tmdbId, mediaType, signal) {
+  const out = [];
+  const kind = mediaType === 'movie' ? 'movie' : 'tv';
+  for (const lang of ['fr-FR', 'en-US']) {
+    if (!/^\d+$/.test(String(tmdbId))) break;
+    try {
+      const res = await safeFetch(
+        `https://api.themoviedb.org/3/${kind}/${tmdbId}?api_key=${TMDB_API_KEY}&language=${lang}`,
+        { headers: { Accept: 'application/json' }, timeout: 10000, signal }
+      );
+      const text = res ? await res.text().catch(() => '') : '';
+      if (!text) continue;
+      const json = JSON.parse(text);
+      for (const t of [json && json.title, json && json.name, json && json.original_title, json && json.original_name]) {
+        if (typeof t === 'string' && t.trim().length >= 2 && !out.includes(t.trim())) out.push(t.trim());
+      }
+    } catch (e) { /* titre localisé optionnel */ }
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
 async function findSeries(titles, signal) {
   const candidates = (titles || []).filter(Boolean).slice(0, 6);
   let best = null;
@@ -215,6 +246,41 @@ export function parseFicheMeta(html) {
 // Lecteurs
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Langue réelle d'un lecteur ─────────────────────────────────────────────
+// DIAG 2026-11 : le site n'expose AUCUNE langue par player (l'API token ne
+// renvoie que { src }), et son catalogue est en réalité quasi exclusivement
+// VOSTFR. L'ancien défaut « VF » étiquetait donc des VOSTFR en VF → le filtre
+// VF de l'app montrait du contenu non doublé et le filtre VOSTFR était vide.
+// Chaque page d'embed porte le nom de la vidéo (« Jujutsu Kaisen 1 VOSTFR »,
+// « One Piece 01 VOSTFR », « … VF ») → on la lit une fois par URL.
+const embedProbeCache = new Map();
+const EMBED_PROBE_TTL = 5 * 60 * 1000;
+
+async function probeEmbedLang(embedUrl) {
+  const key = String(embedUrl).split('?')[0];
+  const hit = embedProbeCache.get(key);
+  if (hit && Date.now() - hit.at < EMBED_PROBE_TTL) return hit.lang;
+  let lang = null;
+  try {
+    const res = await safeFetch(embedUrl, {
+      headers: { Referer: BASE + '/', 'User-Agent': USER_AGENT },
+      timeout: 8000,
+    });
+    const text = res ? await res.text().catch(() => '') : '';
+    if (text) {
+      const head = text.slice(0, 12000);
+      if (/vostfr/i.test(head)) lang = 'VOSTFR';
+      else if (/(^|[^a-z])vf([^a-z]|$)/i.test(head) || /version fran[cç]aise/i.test(head)) lang = 'VF';
+    }
+  } catch (e) { /* host muet → langue inconnue */ }
+  embedProbeCache.set(key, { lang, at: Date.now() });
+  return lang;
+}
+
+// Lecteurs définitivement injouables (diag 2026-11) : sbfull.com = clone
+// Streamtape (flux uniquement derrière JS/ads), vido.lol = domaine parqué.
+const DEAD_EMBED_RE = /(sbfull\.com|vido\.lol|lpayer\.embed4me\.com)/i;
+
 function hostLabel(url) {
   const u = String(url || '');
   if (/sibnet/.test(u)) return 'Sibnet';
@@ -225,6 +291,11 @@ function hostLabel(url) {
   if (/voe/.test(u)) return 'Voe';
   if (/streamtape/.test(u)) return 'Streamtape';
   if (/myxvpn|movixhub/.test(u)) return 'Mova';
+  if (/ansembed/.test(u)) return 'Ansembed';
+  if (/uqload/.test(u)) return 'Uqload';
+  if (/sbfull/.test(u)) return 'Sbfull';
+  if (/vido\.lol/.test(u)) return 'Vido';
+  if (/embed4me/.test(u)) return 'Embed4Me';
   return 'Player';
 }
 
@@ -284,6 +355,7 @@ async function resolveEmbed(embed, episode, signal, seriesTitle) {
         console.log(`[${PROVIDER}] ⚠ sibnet dit épisode ${probe.ep} (demandé ${episode})`);
       }
     }
+    if (!/sibnet/i.test(embedUrl) && !langHint) langHint = await probeEmbedLang(embedUrl);
     if (/byse|secured\.lol|hdsplay/i.test(embedUrl)) {
       const r = await withTimeout(
         resolveByse(embedUrl, async (u, o) => {
@@ -336,7 +408,15 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   }
   console.log(`[${PROVIDER}] Titles: ${titles.slice(0, 3).join(' | ')}`);
 
-  const series = await findSeries(titles, signal);
+  let series = await findSeries(titles, signal);
+  if (!series) {
+    // Repli titre localisé FR (catalogue du site en français)
+    const localized = await fetchLocalizedTitles(tmdbId, mediaType, signal);
+    if (localized.length > 0) {
+      console.log(`[${PROVIDER}] Repli titres FR: ${localized.join(' | ')}`);
+      series = await findSeries([...localized, ...titles], signal);
+    }
+  }
   if (!series) {
     console.log(`[${PROVIDER}] Not found on AnimeSite: ${tmdbId}`);
     return [];
@@ -396,15 +476,29 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   const order = { Sibnet: 0, Byse: 1, Mova: 2, Sendvid: 3 };
   embeds.sort((a, b) => (order[a.host] != null ? order[a.host] : 9) - (order[b.host] != null ? order[b.host] : 9));
 
+  // Résolution EN PARALLÈLE (l'ancienne boucle séquentielle coûtait 20-26 s
+  // pour 4-5 lecteurs ; chaque lecteur a ses propres timeouts).
+  const playable = embeds.filter((x) => x.url && !DEAD_EMBED_RE.test(x.url));
+  // Plafond par lecteur : un hôte muet (sibnet 403 datacenter, uqload lent) ne
+  // doit pas tirer tout l'épisode au-delà du budget (mesuré 29 s avant).
+  const settled = await Promise.allSettled(
+    playable.map((embed) => withTimeout(resolveEmbed(embed, e, signal, series.title), 16000, 'embed'))
+  );
+
   const streams = [];
   const langsSeen = new Set();
-  for (const embed of embeds) {
-    if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-    if (isAborted(signal)) break;
-    const result = await resolveEmbed(embed, e, signal, series.title);
+  const seenStreamUrls = new Set();
+  for (let i = 0; i < settled.length; i++) {
+    const embed = playable[i];
+    if (isBudgetExhausted(startTime, BUDGET_MS) || isAborted(signal)) break;
+    const result = settled[i].status === 'fulfilled' ? settled[i].value : null;
     if (!result || !result.url) continue;
-    const langLabel = result.langHint || embed.langHint || 'VF';
-    const langCode = normalizeLanguageCode(langLabel) || 'fr';
+    const streamKey = String(result.url).split('?')[0];
+    if (seenStreamUrls.has(streamKey)) continue;
+    seenStreamUrls.add(streamKey);
+    // Défaut VOSTFR (catalogue du site quasi exclusivement sous-titré)
+    const langLabel = result.langHint || embed.langHint || 'VOSTFR';
+    const langCode = normalizeLanguageCode(langLabel) || 'ja';
     // 1er flux d'une langue non encore vue = prioritaire ; ensuite 2 max
     if (streams.length >= 2 && !langsSeen.has(langLabel)) continue;
     if (streams.length >= MAX_STREAMS) break;

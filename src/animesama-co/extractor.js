@@ -229,7 +229,23 @@ async function detectSubTypeCached(tmdbId, mediaType) {
   return detectSubType(tmdbId, mediaType)
 }
 
-const SEASON_PATTERN = /\/saison-(\d+)\.html/g
+// Sélecteur de saisons : nouveau schéma du site (`/saison-saison-1.html`, et
+// `/saison-film.html` pour les films) + ancien (`/saison-1.html`).
+const SEASON_PATTERN = /\/saison-(?:saison-)?(\d+)\.html/g;
+
+/**
+ * DIAG 2026-11 : toutes les pages saison/épisode de animesama.co renvoient
+ * une page de défacement (`<title>pwned`, 168 o) alors que l'accueil, le
+ * catalogue, les fiches et la recherche DLE répondent normalement.
+ * Le provider doit le détecter et s'arrêter en 1 requête (0 stream honnête)
+ * au lieu d'enchaîner 6-8 fetchs morts.
+ */
+function isDefacedPage(html) {
+  if (!html) return false;
+  return /<title>\s*pwned\s*<\/title>/i.test(html) || /u\.pone\.rs\//.test(html);
+}
+
+let _siteBroken = false;
 
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
   const signal = options?.signal || null
@@ -417,25 +433,35 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 }
 
 async function extractEpisodeStreams(match, season, episode, subType) {
+  if (_siteBroken) return []
   const baseUrl = `${SITE.BASE_URL}/anime/${match.animeId}-${match.slug}`
-  const seasonUrl = `${baseUrl}/saison-${season}/episode-${episode}.html`
-  const filmUrl = `${baseUrl}/film/episode-${episode}.html`
+  // Nouveau schéma (2026-11) d'abord, puis les anciennes URL en repli —
+  // le site a doublé le préfixe de saison (`/saison-saison-1/…`).
+  const candidates = [
+    `${baseUrl}/saison-saison-${season}/episode-${episode}.html`,
+    `${baseUrl}/saison-${season}/episode-${episode}.html`,
+    `${baseUrl}/saison-film/episode-${episode}.html`,
+    `${baseUrl}/film/episode-${episode}.html`,
+  ]
 
   let html = ''
-  let episodeUrl = seasonUrl
+  let episodeUrl = candidates[0]
 
-  try {
-    html = await fetchText(seasonUrl, { timeout: TIMEOUTS.PAGE })
-  } catch (e) { /* ignore */ }
-
-  if (!html || !html.includes('videoPlayer')) {
+  for (const url of candidates) {
     try {
-      const filmHtml = await fetchText(filmUrl, { timeout: TIMEOUTS.PAGE })
-      if (filmHtml && filmHtml.includes('videoPlayer')) {
-        html = filmHtml
-        episodeUrl = filmUrl
+      const pageHtml = await fetchText(url, { timeout: TIMEOUTS.PAGE })
+      if (isDefacedPage(pageHtml)) {
+        _siteBroken = true
+        console.warn('[AnimeSamaCo] Pages saison/épisode défacemées sur le site ("pwned") — 0 stream')
+        return []
       }
-    } catch (e) { /* ignore */ }
+      // 404 → fetchText renvoie '' ; on continue sur les schémas suivants
+      if (pageHtml && (pageHtml.includes('videoPlayer') || pageHtml.includes('videoUrls') || pageHtml.includes('filmUrls'))) {
+        html = pageHtml
+        episodeUrl = url
+        break
+      }
+    } catch (e) { /* candidat suivant */ }
   }
 
   console.log(`[AnimeSamaCo] Fetching episode: ${episodeUrl}`)

@@ -1,5 +1,5 @@
 /**
- * HTTP Utilities for Coflix (coflix.wiki — domaine officiel vérifié 2026-09).
+ * HTTP Utilities for Coflix (domaine vivant résolu à l'exécution ; diag 2026-11).
  *
  * Architecture réelle (diagnostic live 2026-09) :
  *  - Les anciens domaines (coflix.boston/.cymru/.esq/.group) sont derrière
@@ -19,7 +19,41 @@ import { safeFetch, createProviderRateLimiter, sleep, isAborted } from '../utils
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-export const SITE = 'https://coflix.wiki';
+/**
+ * DIAG 2026-11 : coflix.wiki renvoie **301 → https://coflix.gold/** et le 301
+ * pointe vers la RACINE (pas vers le chemin demandé). Résultat : chaque appel
+ * `/ajax/...` recevait le HTML de la home → JSON.parse échouait → 0 stream sur
+ * tout le catalogue. Le domaine tourne régulièrement : on résout le domaine
+ * vivant une fois par exécution (sonde JSON sur /ajax/search/suggest).
+ */
+const SITE_CANDIDATES = ['https://coflix.gold', 'https://coflix.wiki'];
+export let SITE = SITE_CANDIDATES[0];
+
+let _siteReady = null;
+export async function ensureSite() {
+    if (_siteReady) return _siteReady;
+    _siteReady = (async () => {
+        for (const base of SITE_CANDIDATES) {
+            try {
+                const res = await safeFetch(`${base}/ajax/search/suggest?keyword=test`, {
+                    headers: { ...HEADERS, ...ajaxHeaders() },
+                    timeout: 8000,
+                    redirect: 'follow',
+                });
+                if (!res || !res.ok) continue;
+                const text = await res.text().catch(() => '');
+                // Un domaine mort/parqué renvoie du HTML : seule une réponse
+                // JSON prouve que les routes /ajax/ sont servies.
+                if (!text || text.trim()[0] !== '{') continue;
+                SITE = base;
+                console.log(`[Coflix] Domaine actif : ${base}`);
+                return;
+            } catch (e) { /* candidat suivant */ }
+        }
+        console.warn('[Coflix] Aucun domaine coflix ne répond en JSON');
+    })();
+    return _siteReady;
+}
 
 const rateLimit = createProviderRateLimiter();
 
@@ -96,6 +130,7 @@ export async function fetchTextSafe(url, options = {}) {
 /** GET JSON d'une route /ajax/. null si échec. */
 export async function ajaxGet(path, options = {}) {
     try {
+        await ensureSite();
         const res = await rawFetch(`${SITE}${path}`, { ...options, headers: ajaxHeaders(options.headers) });
         if (!res || !res.ok) return null;
         const text = await res.text();
@@ -110,6 +145,7 @@ export async function ajaxGet(path, options = {}) {
 /** POST d'une route /ajax/ (ex: /ajax/episode/player). null si échec. */
 export async function ajaxPost(path, body, options = {}) {
     try {
+        await ensureSite();
         const res = await rawFetch(`${SITE}${path}`, {
             ...options,
             method: 'POST',

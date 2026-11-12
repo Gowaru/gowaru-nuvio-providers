@@ -6,8 +6,9 @@
 import { stripSeasonSuffix, resolveTargetEpisodes, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, sortStreamsByLanguage, isAborted } from '../utils/resolvers.js';
+import { resolveStream, sortStreamsByLanguage, isAborted, safeFetch, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { resolveByse } from '../jetanimes/byse.js';
 
 const BASE_URL = "https://animevostfr.org";
 const MAX_SEARCH_TITLES = 8;
@@ -318,9 +319,63 @@ function decodeEscapedHtml(s) {
 }
 
 /**
- * Extract player URLs from an episode page via trembed redirects
+ * Langue d'un onglet lecteur ("Lecteur VF", "Lecteur VOSTFR", "Bysewihe
+ * VOSTFR", "Lecteur SUB ENGLISH"). Le nom du tab est l'indicateur
+ * autoritaire : l'URL de la fiche contient souvent "-vf-vostfr".
+ * Retourne 'vf' | 'vostfr' | null (indéterminé).
  */
-async function extractPlayersFromEpisode(episodeUrl) {
+function tabLangKey(name) {
+    const n = String(name || '').toLowerCase();
+    if (/vostfr|\bvost\b|sub\s*french|sub\s*english|\bvost\b/.test(n)) return 'vostfr';
+    if (/\bvf\b|\bvff\b|\bvfq\b/.test(n)) return 'vf';
+    return null;
+}
+
+/**
+ * Hosts définitivement inexploitables en fetch statique (vérifié live 2026-11) :
+ *  - lpayer.embed4me.com : SPA React, l'URL ne contient aucune source
+ *  - minochinos.com : origin morte (522) quel que soit le Referer
+ *  - vidmoly : challenge JS sans flux dans le HTML
+ *  - upstream.to : injoignable sans résolveur dédié
+ * sendvid.com N'EST PLUS dans cette liste : le service est revenu (2026-11)
+ * et resolveSendvid extrait bien le MP4, c'était la principale cause des 0.
+ */
+function isDeadPlayerHost(url) {
+    const u = String(url || '').toLowerCase();
+    return u.includes('embed4me') || u.includes('minochinos.com') ||
+        u.includes('vidstream.pro') || u.includes('vidmoly') || u.includes('upstream.');
+}
+
+/**
+ * Extract player URLs from an episode page via trembed redirects.
+ *
+ * @param {string} episodeUrl
+ * @param {object} [quota] Budget par langue partagé entre les fiches :
+ *   { counts: { vf: n, vostfr: n }, maxPerLang, maxTotal }. Sans quota,
+ *   comportement historique (arrêt à 2 lecteurs directs).
+ */
+/**
+ * Lecteurs « Byse » (bysewihe.com, hdsplay*, secured.lol) : SPA Vite dont
+ * l'API /api/videos/{code} renvoie un playback AES-256-GCM. resolveByse
+ * (partagé avec jetanimes/adkami/animesite) le déchiffre via crypto.subtle
+ * (Mobile) ou CryptoJS-CTR (les deux runtimes) → master.m3u8 direct.
+ */
+function isBysePlayer(url) {
+    const u = String(url || '').toLowerCase();
+    return u.includes('bysewihe') || u.includes('byse.') || u.includes('hdsplay') || u.includes('secured.lol');
+}
+
+async function fetchMetaForByse(url, opts = {}) {
+    const res = await safeFetch(url, {
+        headers: { 'User-Agent': USER_AGENT, ...(opts.headers || {}) },
+        timeout: opts.timeout || 12000,
+    });
+    if (!res || !res.ok) return null;
+    const text = await res.text();
+    return { text, finalUrl: res.url || url };
+}
+
+async function extractPlayersFromEpisode(episodeUrl, quota = null) {
     const streams = [];
     try {
         const html = await fetchText(episodeUrl, { timeout: SEARCH_TIMEOUT });
@@ -378,10 +433,31 @@ async function extractPlayersFromEpisode(episodeUrl) {
 
         console.log(`[AnimeVOSTFR] Found ${trembedEntries.length} player tabs`);
 
+        // Priorité aux langues encore manquantes : les 3 premiers onglets du
+        // site sont souvent tous VOSTFR, ce qui affamait la VF quand on
+        // s'arrêtait au 2e flux direct (bug "des fois les VF n'apparaît pas").
+        if (quota && quota.counts) {
+            const missing = (k) => (quota.counts[k] || 0) < (quota.maxPerLang || 2);
+            const prio = (e) => {
+                const k = tabLangKey(e.serverName);
+                return k && missing(k) ? 0 : 1;
+            };
+            trembedEntries.sort((a, b) => prio(a) - prio(b));
+        }
+
         // Resolve each trembed URL to get the real player iframe (séquentiel + early-exit)
-        const DIRECT_HOSTS = ['sibnet', 'luluvid', 'uqload', 'myvi', 'mytv', 'dood', 'ds2play', 'hgcloud', 'stape', 'streamtape'];
+        const DIRECT_HOSTS = ['sibnet', 'luluvid', 'uqload', 'myvi', 'mytv', 'dood', 'ds2play', 'hgcloud', 'stape', 'streamtape', 'sendvid'];
         let directCount = 0;
         for (const entry of trembedEntries) {
+            if (quota && quota.counts) {
+                const key = tabLangKey(entry.serverName);
+                if (key && (quota.counts[key] || 0) >= (quota.maxPerLang || 2)) {
+                    console.log(`[AnimeVOSTFR] Quota ${key.toUpperCase()} atteint — tab "${entry.serverName}" ignoré`);
+                    continue;
+                }
+                const taken = (quota.counts.vf || 0) + (quota.counts.vostfr || 0);
+                if (taken >= (quota.maxTotal || 6)) break;
+            }
             try {
                 let trembedUrl = entry.src;
                 if (trembedUrl.startsWith('/')) trembedUrl = BASE_URL + trembedUrl;
@@ -405,12 +481,34 @@ async function extractPlayersFromEpisode(episodeUrl) {
                     const playerName = getPlayerName(playerSrc);
                     // Skip early les hosts morts/lents (gain ~8-15s par lecteur mort).
                     // sibnet PAS skippé : 403 datacenter mais OK en résidentiel FR.
-                    // vidmoly = challenge JS sans flux en HTML ; upstream.to =
-                    // injoignable sans resolver dédié (comme sendvid).
-                    const pLower = playerSrc.toLowerCase();
-                    if (pLower.includes('sendvid.com') || pLower.includes('vidstream.pro') ||
-                        pLower.includes('vidmoly') || pLower.includes('upstream')) {
+                    if (isDeadPlayerHost(playerSrc)) {
                         console.log(`[AnimeVOSTFR] Skip host mort (${playerName}): ${playerSrc.slice(0, 60)}`);
+                        continue;
+                    }
+                    // Byse : résolveur dédié (le HTML de la page ne contient
+                    // aucune source, seul l'API déchiffrée en donne).
+                    if (isBysePlayer(playerSrc)) {
+                        const byse = await resolveByse(playerSrc, fetchMetaForByse, null).catch(() => null);
+                        if (byse && byse.url) {
+                            const quality = (String(byse.label || '').match(/\d{3,4}/) || [])[0] || 'HD';
+                            const item = {
+                                name: 'AnimeVOSTFR',
+                                title: `Byse (${entry.serverName})`,
+                                url: byse.url,
+                                quality: /\d{3,4}/.test(quality) ? quality + 'p' : 'HD',
+                                headers: { 'Referer': playerSrc },
+                                isDirect: true,
+                            };
+                            if (/vostfr/i.test(entry.serverName)) item.language = 'ja';
+                            else if (/\bvf\b/i.test(entry.serverName)) item.language = 'fr';
+                            streams.push(item);
+                            if (quota && quota.counts) {
+                                const key = tabLangKey(entry.serverName);
+                                if (key) quota.counts[key] = (quota.counts[key] || 0) + 1;
+                            }
+                            continue;
+                        }
+                        console.log(`[AnimeVOSTFR] Byse non résolu: ${playerSrc.slice(0, 60)}`);
                         continue;
                     }
                     const stream = await resolveStream({
@@ -433,8 +531,14 @@ async function extractPlayersFromEpisode(episodeUrl) {
                     if (/vostfr/i.test(entry.serverName)) clean.language = 'ja';
                     else if (/\bvf\b/i.test(entry.serverName)) clean.language = 'fr';
                     streams.push(clean);
+                    if (quota && quota.counts) {
+                        const key = tabLangKey(entry.serverName);
+                        if (key) quota.counts[key] = (quota.counts[key] || 0) + 1;
+                    }
                     if (DIRECT_HOSTS.some(h => playerSrc.toLowerCase().includes(h))) directCount++;
-                    if (directCount >= 2) break;
+                    // Sans quota (et pas de quota par langue en place), on garde
+                    // l'ancien plafond. Avec quota, c'est lui qui décide.
+                    if (!quota && directCount >= 2) break;
                 } else if (stream) {
                     console.log(`[AnimeVOSTFR] ${playerSrc.slice(0, 60)} unresolved (embed mort) — rejeté`);
                 }
@@ -480,6 +584,7 @@ function detectLang(url, title) {
 }
 
 function getPlayerName(url) {
+    if (url.includes('bysewihe') || url.includes('byse.')) return 'Byse';
     if (url.includes('sibnet')) return 'Sibnet';
     if (url.includes('vidmoly')) return 'Vidmoly';
     if (url.includes('christopheruntilpoint') || url.includes('voe')) return 'Voe';
@@ -683,10 +788,21 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    // Résolution séquentielle avec early-exit (target 2 streams directs)
-    let directStreamCount = 0;
+    // Résolution séquentielle. Budget PAR LANGUE (et non global) : les fiches
+    // sont mono-langue sur ce site (une fiche VF, une fiche VOSTFR), donc
+    // s'arrêter à 2 flux directs laissait la 2e langue inexplorée — c'était
+    // la cause des "VF qui n'apparaissent pas" selon l'ordre des résultats.
+    const quota = { counts: { vf: 0, vostfr: 0 }, maxPerLang: 2, maxTotal: 6 };
+    const quotaFull = () => quota.counts.vf >= quota.maxPerLang &&
+        quota.counts.vostfr >= quota.maxPerLang;
+    const directStreamCount = () => (quota.counts.vf || 0) + (quota.counts.vostfr || 0);
+    // Garde-budget : si le site n'a qu'une langue pour ce titre, quotaFull()
+    // ne sera jamais vrai → on borne quand même le temps total.
+    const startedAt = Date.now();
+    const DEADLINE_MS = 40000;
+    const overDeadline = () => Date.now() - startedAt > DEADLINE_MS;
     for (const match of matchesToProcess) {
-        if (directStreamCount >= 2) break;
+        if (quotaFull() || directStreamCount() >= quota.maxTotal || overDeadline()) break;
 
         const langSuffix = detectLang(match.url, match.title);
         const matchLower = (match.title + ' ' + match.url).toLowerCase();
@@ -718,7 +834,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             // la page film elle-même à extractPlayersFromEpisode.
             if (!checkedEpisodeUrls.has(match.url)) {
                 checkedEpisodeUrls.add(match.url);
-                const playerStreams = await extractPlayersFromEpisode(match.url);
+                const playerStreams = await extractPlayersFromEpisode(match.url, quota);
                 epResults.push({ ep: searchEpisode, playerStreams });
             }
         } else {
@@ -731,7 +847,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 const episodeUrl = await findEpisodeUrl(match.url, searchSeason, Number(ep), isAbsolute);
                 if (episodeUrl && !checkedEpisodeUrls.has(episodeUrl)) {
                     checkedEpisodeUrls.add(episodeUrl);
-                    const playerStreams = await extractPlayersFromEpisode(episodeUrl);
+                    const playerStreams = await extractPlayersFromEpisode(episodeUrl, quota);
                     epResults.push({ ep, playerStreams });
                 }
             }
@@ -759,7 +875,6 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 if (!s.language) s.language = langSuffix === 'VF' ? 'fr' : 'ja';
             });
             streams.push(...playerStreams);
-            if (playerStreams.some(s => s.isDirect)) directStreamCount++;
         }
     }
 

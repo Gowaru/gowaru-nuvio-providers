@@ -437,11 +437,12 @@ async function resolveStreamByLang(animeId, episode, lang, signal) {
   )
   if (!data || typeof data.source !== 'string' || !data.source || !data.source.includes('/')) return null
   const auth = data.headers && typeof data.headers.Authorization === 'string' ? data.headers.Authorization : null
-  // Sans Authorization le CDN renvoie 401 sur manifest + clé + segments → inutilisable
-  if (!auth) {
-    console.log(`[${PROVIDER}] Stream sans Authorization (CDN 401 garanti) — rejeté`)
-    return null
-  }
+  // DIAG 2026-11 : le CDN api.onefy.me n'exige PLUS de JWT (`headers: {}` dans
+  // la réponse, manifest + clé AES + segments en 200 sans Authorization).
+  // L'ancien rejet « sans Authorization » mettait TOUT le catalogue à 0 stream.
+  // → header attaché seulement s'il est présent, jamais bloquant.
+  if (!auth) console.log(`[${PROVIDER}] CDN sans Authorization (public) — ok`)
+
   return {
     source: data.source,
     authHeader: auth,
@@ -487,10 +488,14 @@ async function resolveEntryStreams(item, epNumber, { epLabel, episodeTitle, sign
     const vtt = sub.tracks.find(t => t && t.file && /captions|subtitles/i.test(t.kind || ''))
     const stream = buildStream(sub, 'VOSTFR', 'ja')
     if (vtt && vtt.file) {
+      // DIAG 2026-11 : `tracks[].file` est désormais un chemin RELATIF
+      // (`/api/subtitles/<jwt>` sur aniverse.fr), plus une URL CDN absolue.
+      // Sans le préfixe, le lecteur recevait une URL invalide → pas de sous-titres.
+      const subUrl = /^https?:\/\//i.test(vtt.file) ? vtt.file : `https://aniverse.fr${vtt.file.startsWith('/') ? '' : '/'}${vtt.file}`
       stream.subtitles = [{
-        url: vtt.file,
-        language: 'fr',
-        name: 'Français',
+        url: subUrl,
+        language: vtt.locale || 'fr',
+        name: vtt.label || 'Français',
         headers: cdnHeaders(sub.authHeader),
       }]
     }
