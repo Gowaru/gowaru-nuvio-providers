@@ -7,8 +7,16 @@ import { getTmdbTitles } from '../utils/metadata.js';
 // FIX 2026-09 : ww.animesultra.org est MORT (TCP/TLS KO sur les 2 IP, vérifié
 // live). Le site actif est animesultra.com — mais son moteur DLE distant est
 // lui aussi en panne (full-story 404, /dist/ 404, www1 → 525 SSL failed).
-// Le provider reste pointé sur le domaine officiel et renverra 0 stream
-// proprement tant que le backend du site ne sera pas rétabli.
+//
+// DIAG 2026-11 : animesultra.com (et www1/api/cdn.*) renvoie **525
+// (SSL handshake origin KO)** en continu depuis l'EU, et 520/522 depuis des
+// relais US — l'origin monte/descend en boucle. Quelques 200 observés : le
+// HTML est bien l'ancien template DLE (a.film-poster-ahref, /xfsearch/…),
+// mais la nav pointe désormais vers un préfixe /www1-sub/ — structure
+// inutilisable tant que l'hébergement ne tient pas. www.animesultra.com est
+// parqué (« /lander »), animesultra.org/.fr/.net sont morts ou sans rapport.
+// Le provider reste pointé sur le domaine officiel, sort vite quand l'origin
+// est down (sonde 6 s) et renverra 0 stream proprement.
 const BASE_URL = "https://animesultra.com";
 
 const searchCache = {};
@@ -138,6 +146,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const BUDGET_MS = 45000;
     const startTime = Date.now();
     const epNum = episode || 1;
+    // Sonde de disponibilité : l'origin est en 525/522 la plupart du temps.
+    // Un aller-retour de 6 s évite 6-8 requêtes qui échoueront en cascade
+    // (budget inutilement consommé sur TV où le timeout HTTP est de 30 s).
+    try {
+        const probe = await fetchText(`${BASE_URL}/`, { timeout: 6000, retries: 0 });
+        if (!probe || probe.length < 5000) {
+            console.log('[AnimesUltra] Site injoignable (origin 525/522) — 0 stream');
+            return [];
+        }
+    } catch (e) {
+        console.log(`[AnimesUltra] Site injoignable (${e && e.message}) — 0 stream`);
+        return [];
+    }
+
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
     const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;

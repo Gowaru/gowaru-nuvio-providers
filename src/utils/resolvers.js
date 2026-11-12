@@ -3,6 +3,8 @@
  * Optimized for QuickJS (Nuvio runtime)
  */
 
+import { solveTurnstile, isTurnstileSolverEnabled } from './turnstile.js';
+
 // ─── Shared Budget & Helpers ────────────────────────────────────────────────
 
 /**
@@ -394,10 +396,13 @@ export async function fetchWithRetry(fetchFn, opts = {}) {
       return await fetchFn();
     } catch (err) {
       lastError = err;
-      // Ne pas retry les 4xx sauf 429
-      if (err.message && /HTTP error 4(?:0[0-9]|1[0-79]|29)/.test(err.message)) throw err;
+      // Ne pas retry les 4xx… sauf 429 (throttle) : la regex d'origine
+      // matchait aussi 429 et cassait donc le retry prévu par ce commentaire.
+      if (err.message && /HTTP error 4/.test(err.message) && !/HTTP error 429/.test(err.message)) throw err;
       if (i === retries) throw err;
-      if (delays[i]) await sleep(delays[i]);
+      // 429 = fenêtre de throttle : backoff plus long que le délai standard.
+      if (err.message && /HTTP error 429/.test(err.message)) await sleep(4000 + i * 2000);
+      else if (delays[i]) await sleep(delays[i]);
     }
   }
   throw lastError;
@@ -2395,6 +2400,75 @@ export async function resolveHGCloud(url) {
     return { url };
 }
 
+/**
+ * Récupère une page en contournant le cache GET de `safeFetch` (une page
+ * « challenge » mise en cache ne doit pas resservir de résultat périmé).
+ */
+async function fetchFresh(url, options = {}) {
+    try {
+        const sep = url.includes('?') ? '&' : '?';
+        const res = await fetch(`${url}${sep}_=${Date.now()}`, { ...options, redirect: 'follow' });
+        if (!res || !res.ok) return null;
+        const text = await res.text();
+        return { text: text || '', res, finalUrl: res.url || url };
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Sitekey Turnstile d'une page (attribut `data-sitekey` ou appel JS). */
+function extractSitekey(html) {
+    const text = String(html || '');
+    const m = text.match(/data-sitekey=["']([^"']+)["']/)
+        || text.match(/turnstile\.render\([^)]*?sitekey\s*:\s*["']([^"']+)["']/)
+        || text.match(/sitekey\s*:\s*["']([^"']+)["']/);
+    return m ? m[1] : null;
+}
+
+/** Texte de la page embed relu sans cache (short timeout). */
+async function freshPageText(url) {
+    const page = await fetchFresh(url, { headers: { Referer: 'https://playmogo.com/' } });
+    return page ? page.text : '';
+}
+
+/**
+ * Contourne le challenge Turnstile d'une page DoodStream via le solveur
+ * configuré par l'utilisateur (CapSolver / 2Captcha).
+ *
+ * Séquence : token Turnstile → `GET /dood?op=validate&gc_response=<token>`
+ * (pose un cookie de session) → relecture de la page embed (avec le cookie
+ * si les en-têtes l'exposent) → retour du HTML contenant `/pass_md5/…`.
+ *
+ * Retourne null si le solveur est désactivé, échoue, ou si la page reste
+ * protégée : le provider écarte alors ce lecteur (aucun faux flux).
+ */
+async function trySolveDoodGate(pageUrl, finalDomain, gatedHtml, sitekey) {
+    if (!isTurnstileSolverEnabled()) return null;
+    const token = await solveTurnstile({ pageUrl, html: gatedHtml, sitekey });
+    if (!token) return null;
+    const validate = await fetchFresh(
+        `https://${finalDomain}/dood?op=validate&gc_response=${encodeURIComponent(token)}`,
+        { headers: { Referer: pageUrl } }
+    );
+    if (!validate) return null;
+    let cookie = null;
+    try {
+        const raw = validate.res && validate.res.headers && typeof validate.res.headers.get === 'function'
+            ? validate.res.headers.get('set-cookie')
+            : null;
+        if (raw) cookie = String(raw).split(';')[0];
+    } catch (e) { /* set-cookie parfois masqué par le runtime */ }
+    const page = await fetchFresh(pageUrl, {
+        headers: { Referer: `https://${finalDomain}/`, ...(cookie ? { Cookie: cookie } : {}) },
+    });
+    if (!page || !page.text) return null;
+    if (/Just a moment|challenges\.cloudflare\.com\/turnstile|turnstile\.render|captcha-player/.test(page.text)) {
+        console.warn('[Dood] Solveur: page toujours protégée après validation');
+        return null;
+    }
+    return page.text;
+}
+
 export async function resolveDood(url) {
     try {
         const domain = url.match(/https?:\/\/([^\/]+)/)?.[1] || "dood.to";
@@ -2413,6 +2487,26 @@ export async function resolveDood(url) {
             currentUrl = finalUrl;
         }
         res = null;
+        // DIAG 2026-11 : la famille dood (dood.to/ws/li, ds2play, playmogo…)
+        // sert un **challenge Cloudflare Turnstile** (sitekey 0x4AAAAAACFq32tMjwLTJaKk,
+        // puis GET /dood?op=validate&gc_response=<token>) au lieu du token
+        // `/pass_md5/…`. La page ne contient donc AUCUNE URL de flux et le
+        // serveur vérifie le token Turnstile : impossible à résoudre sans
+        // navigateur (QuickJS n'a ni DOM ni captcha solver). On sort tout de
+        // suite pour que le provider essaie un autre lecteur — le challenge
+        // n'apparaît que sur les IP flaggées (datacenter) : depuis un device
+        // résidentiel la page classique pass_md5 est servie et ce code reste
+        // utilisé.
+        // Deux couches constatées : challenge managé Cloudflare (« Just a
+        // moment… », 403) selon le fingerprint TLS, puis Turnstile côté dood.
+        if (/Just a moment|cf-browser-verification|challenges\.cloudflare\.com\/turnstile|turnstile\.render|captcha-player/.test(html)) {
+            console.log('[Dood] Challenge Cloudflare/Turnstile détecté');
+            // Voie optionnelle : uniquement si l'utilisateur a activé le
+            // solveur ET saisi une clé API dans les réglages du provider.
+            const gateSitekey = extractSitekey(html) || extractSitekey(await freshPageText(currentUrl));
+            html = await trySolveDoodGate(currentUrl, finalDomain, html, gateSitekey);
+            if (!html) return null;
+        }
         if (html.includes('eval(function(p,a,c,k,e,d)')) html = unpack(html);
         const passMatch = html.match(/\$\.get\(['"]\/pass_md5\/([^'"]+)['"]/)
             || html.match(/pass_md5\/([^'"\s]+)['"]/);
