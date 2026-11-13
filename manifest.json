@@ -269,7 +269,7 @@
       "id": "voiranime-homes",
       "name": "VoirAnime.homes",
       "description": "Animes VF et VOSTFR sur voiranime.homes (moteur DLE, miroir French-Manga) : recherche AJAX paginée avec repli titres FR TMDB, gardes saison/film, lecteurs Vidzy/Uqload, filtrage des CDN morts (vidhsareup sans DNS, tnmr.org en 403).",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

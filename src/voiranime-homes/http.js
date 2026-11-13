@@ -1,5 +1,5 @@
-import { safeFetch, sanitizeSearchQuery, createProviderRateLimiter, isAborted, sleep } from '../utils/resolvers.js'
-import { SITE, ENDPOINTS, TIMEOUTS } from './config.js'
+import { safeFetch, sanitizeSearchQuery, createProviderRateLimiter, isAborted } from '../utils/resolvers.js'
+import { SITE, ENDPOINTS, TIMEOUTS, MAX_SITE_REQUESTS } from './config.js'
 
 /**
  * Le site throttle par FENÊTRE (mesuré 2026-11) : quelques requêtes passent,
@@ -12,25 +12,21 @@ const rateLimit = createProviderRateLimiter(600)
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-const THROTTLE_COOLDOWN_MS = 7000
-const THROTTLE_MAX_WAIT_MS = 9000
-let _throttledUntil = 0
-// Une seule attente de fenêtre par exécution : au-delà, mieux vaut rendre
-// partiellement que brûler le budget du plugin (60 s app).
-let _throttleWaits = 0
+// Throttle mesuré : fenêtre d'environ 30 s. Un 429 signifie qu'on est DÉJÀ
+// hors quota → réessayer dans les 7 s suivantes échoue presque toujours et
+// consomme 2 requêtes + 14 s de budget plugin. On coupe donc net pour ce run :
+// le suivant (nouvelle instance QuickJS) repart sur une fenêtre propre.
+let _throttled = false
 
-export function isThrottled() { return Date.now() < _throttledUntil }
-function markThrottled() { _throttledUntil = Math.max(_throttledUntil, Date.now() + THROTTLE_COOLDOWN_MS) }
+// Budget de requêtes site pour CE run (instance QuickJS fraîche par exécution).
+let _siteRequests = 0
 
-/** Attend la fin de la fenêtre de throttle (borné, jamais bloquant à l'infini). */
-async function waitCooldown() {
-  const started = Date.now()
-  while (Date.now() < _throttledUntil) {
-    if (Date.now() - started > THROTTLE_MAX_WAIT_MS) return false
-    await sleep(1000)
-  }
-  return true
-}
+/** Requêtes site déjà consommées dans ce run. */
+export function siteRequestsUsed() { return _siteRequests }
+/** Requêtes site encore disponibles (0 = on rend le partiel). */
+export function siteRequestsLeft() { return Math.max(0, MAX_SITE_REQUESTS - _siteRequests) }
+/** Le site nous a répondu 429 : plus aucune requête dans ce run. */
+export function isThrottled() { return _throttled }
 
 const DOMAIN = 'voiranime.homes'
 
@@ -48,27 +44,25 @@ export const AJAX_HEADERS = {
 }
 
 /**
- * Requête unique vers le site avec gestion du 429 :
- *  - attente de la fenêtre en cours,
- *  - 1 seul retry (après 6-7 s), puis échec explicite.
+ * Requête unique vers le site. Un 429 marque le run comme throttlé et coupe
+ * toutes les requêtes suivantes (aucun retry : la fenêtre dure ~30 s).
  */
 async function request(url, options = {}) {
   const signal = options.signal || _currentSignal
   if (isAborted(signal)) throw new Error('AbortError: Request aborted')
+  if (_throttled) throw new Error('SITE_THROTTLED')
+  // Budget épuisé : on n'entame même pas la requête (elle finirait en 429 et
+  // bloquerait la fenêtre pour toutes les suivantes).
+  if (_siteRequests >= MAX_SITE_REQUESTS) throw new Error('SITE_BUDGET')
   await rateLimit(DOMAIN)
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await waitCooldown()
-    const res = await safeFetch(url, { ...options, signal })
-    if (!res) throw new Error(`No response from ${url}`)
-    if (res.status === 429) {
-      markThrottled()
-      if (attempt === 0 && _throttleWaits < 1) { _throttleWaits++; await sleep(THROTTLE_COOLDOWN_MS); continue }
-      throw new Error(`HTTP error 429 for ${url}`)
-    }
-    return res
+  _siteRequests++
+  const res = await safeFetch(url, { ...options, signal })
+  if (!res) throw new Error(`No response from ${url}`)
+  if (res.status === 429) {
+    _throttled = true
+    throw new Error(`HTTP error 429 for ${url}`)
   }
-  throw new Error(`HTTP error 429 for ${url}`)
+  return res
 }
 
 export async function fetchText(url, options = {}) {

@@ -18,13 +18,14 @@
  */
 
 import cheerio from 'cheerio-without-node-native'
-import { fetchText, fetchJson, ajaxSearch, setCurrentSignal } from './http.js'
+import { fetchText, fetchJson, ajaxSearch, setCurrentSignal, siteRequestsLeft, siteRequestsUsed, isThrottled } from './http.js'
 import { resolveStream, safeFetch, isAborted, withTimeout } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES, MAX_SEARCH_PAGES, MAX_SERVERS_PER_LANG,
+  MAX_VERIFY_PAGES,
   SKIP_HOSTS, BLOCKED_CDN_TOKENS, ALLOWED_CDN_TOKENS,
 } from './config.js'
 
@@ -134,6 +135,7 @@ function extractSeason(title) {
 
 function bestMatch(items, title, targetSeason) {
   let best = null, bestScore = 0
+  const scored = []
   for (const item of items) {
     let score = scoreMatch(item.title || item.name, title)
     if (targetSeason && score > 0) {
@@ -149,6 +151,7 @@ function bestMatch(items, title, targetSeason) {
         score -= 80
       }
     }
+    scored.push({ item, score })
     if (score > bestScore) { bestScore = score; best = item }
   }
   if (bestScore >= SCORES.MIN_MATCH) {
@@ -286,7 +289,7 @@ async function searchAllPages(query) {
       } catch (e) {
         console.warn(`[${PROVIDER}] search "${query}" page ${page}: ${e.message}`)
         // Throttle : inutile d'insister, on garde ce qui a déjà été collecté.
-        if (/429/.test(e.message)) break
+        if (/429|SITE_THROTTLED|SITE_BUDGET/.test(e.message)) break
         continue
       }
       const results = parseSearchResults(html)
@@ -305,6 +308,10 @@ async function searchAllPages(query) {
 
 /** Titres FR localisés TMDB (le catalogue du site est en français). */
 async function fetchLocalizedTitles(tmdbId, mediaType) {
+  return cached(`fr_${tmdbId}_${mediaType}`, () => fetchLocalizedTitlesUncached(tmdbId, mediaType))
+}
+
+async function fetchLocalizedTitlesUncached(tmdbId, mediaType) {
   const out = []
   if (!/^\d+$/.test(String(tmdbId))) return out
   const kind = mediaType === 'movie' ? 'movie' : 'tv'
@@ -342,7 +349,13 @@ async function verifyPage(result, normalizedTarget) {
   if (!(nr === normalizedTarget || nr.includes(normalizedTarget) || normalizedTarget.includes(nr))) return null
   if (extra >= 2 || hasForeignLeadingTokens(nr, normalizedTarget)) return null
 
-  const apiData = await fetchEpisodeApi(config.newsId)
+  let apiData = null
+  try {
+    apiData = await fetchEpisodeApi(config.newsId)
+  } catch (e) {
+    if (/SITE_BUDGET/.test(e.message)) return null
+    return null
+  }
   if (!apiData || !apiData.versions) return null
 
   return {
@@ -378,7 +391,11 @@ async function trySearchFallback(allResults, tmdbTitles) {
   }
 
   // Séquentiel volontairement : chaque fiche coûte 2 requêtes au site throttlé.
-  for (const result of unique.slice(0, 4)) {
+  // On dimensionne le nombre d'essais sur le budget restant (1 pour l'API finale).
+  const maxVerify = Math.min(MAX_VERIFY_PAGES, Math.max(0, Math.floor((siteRequestsLeft() - 1) / 2)))
+  if (maxVerify === 0) return null
+  for (const result of unique.slice(0, maxVerify)) {
+    if (siteRequestsLeft() < 2) break
     const verified = await verifyPage(result, nt)
     if (verified) {
       console.log(`[${PROVIDER}] Fallback matched: "${verified.title}" (newsid: ${verified.newsid}, season: ${verified.season})`)
@@ -391,6 +408,47 @@ async function trySearchFallback(allResults, tmdbTitles) {
 /** Recherche principale : AJAX paginé, puis repli fiche-par-fiche, puis titres FR. */
 async function trySearch(titles, targetSeason, tmdbId, mediaType) {
   const cleanTitles = [...new Set(titles.map(t => stripSeasonSuffix(String(t || '').trim())).filter(Boolean))]
+  // Ordre des requêtes (budget = 2) : on cherche d'abord « BASE Saison N »,
+  // où BASE est la variante la plus courte qui PRÉFIXE le titre principal
+  // (« Frieren » pour « Frieren: Beyond Journey's End », « One Piece »…).
+  // C'est la forme utilisée par le site (« Frieren - Saison 1 (2023) ») et la
+  // requête la plus sélective : elle évite qu'un film dérivé (« One Piece
+  // Film - Red ») passe devant la série. Puis BASE seul (fiches sans saison).
+  // Le catalogue du site est en FRANÇAIS : le titre localisé TMDB (gratuit,
+  // pas de requête site) est donc prioritaire sur le titre EN
+  // (« L'Attaque des Titans » vs « Attack on Titan »).
+  const frTitles = tmdbId
+    ? (await fetchLocalizedTitles(tmdbId, mediaType)).filter(t => normalize(t).length >= 2)
+    : []
+
+  const bases = []
+  for (const t of [...frTitles, ...cleanTitles]) {
+    const b = stripSeasonSuffix(t)
+    const nb = normalize(b)
+    if (nb.length >= 2 && !bases.some(x => normalize(x) === nb)) bases.push(b)
+  }
+  // On garde une base courte qui préfixe le titre principal (« Frieren » pour
+  // « Frieren: Beyond Journey's End ») : c'est la forme utilisée par le site.
+  const primary = cleanTitles[0]
+  const np = normalize(primary)
+  const prefixBase = cleanTitles
+    .map(t => stripSeasonSuffix(t))
+    .filter(t => {
+      const nt = normalize(t)
+      return nt.length >= 2 && (np === nt || np.startsWith(`${nt} `))
+    })
+    .sort((a, b) => normalize(a).length - normalize(b).length)[0]
+  if (prefixBase && !bases.some(x => normalize(x) === normalize(prefixBase))) bases.splice(1, 0, prefixBase)
+
+  const searchOrder = []
+  const pushQuery = (q) => {
+    if (q && !searchOrder.some(x => normalize(x) === normalize(q))) searchOrder.push(q)
+  }
+  for (const base of bases) {
+    if (targetSeason) pushQuery(`${base} Saison ${targetSeason}`)
+    pushQuery(base)
+  }
+
   const allResults = []
   const dedup = new Set()
 
@@ -401,34 +459,48 @@ async function trySearch(titles, targetSeason, tmdbId, mediaType) {
     }
   }
 
-  for (const title of cleanTitles.slice(0, MAX_SEARCH_TITLES)) {
-    if (isAborted(SIGNAL)) break
+  for (const title of searchOrder.slice(0, MAX_SEARCH_TITLES)) {
+    // Garde 2 requêtes pour l'API d'épisodes (+ marge) : mieux vaut rendre un
+    // match partiel que déclencher un 429 qui bloque tout le run.
+    if (isAborted(SIGNAL) || siteRequestsLeft() <= 2) break
     let results = []
     try {
       results = await searchAllPages(title)
     } catch (e) {
       console.warn(`[${PROVIDER}] Search failed for "${title}": ${e.message}`)
+      // 429 / budget épuisé : aucune requête site supplémentaire dans ce run.
+      if (/429|SITE_THROTTLED|SITE_BUDGET/.test(e.message)) return null
     }
     if (!results.length) continue
     collect(results)
-    const match = bestMatch(results, title, targetSeason)
+    // Le matching utilise le titre dominant (1er TMDB) pour la saison, mais
+    // accepte aussi le titre court qui a servi à chercher.
+    const match = bestMatch(results, titles[0] || title, targetSeason) || bestMatch(results, title, targetSeason)
+    // Une requête « Saison N » qui ne ramène pas la bonne saison ne doit pas
+    // court-circuiter la recherche sur le titre nu.
+    if (match && match.season != null && targetSeason && match.season !== parseInt(targetSeason)) continue
     if (match) return match
   }
 
   // Deep fallback : vérifier les fiches faibles/bruitées via page + API.
-  if (allResults.length > 0) {
+  // Chaque vérification coûte 2 requêtes : on n'y va que si le budget le permet.
+  if (allResults.length > 0 && !isThrottled() && siteRequestsLeft() >= 3) {
     console.log(`[${PROVIDER}] Deep fallback sur ${allResults.length} résultat(s) AJAX...`)
-    const fallback = await trySearchFallback(allResults, cleanTitles)
+    let fallback = null
+    try { fallback = await trySearchFallback(allResults, cleanTitles) } catch (e) { /* budget */ }
     if (fallback) return fallback
   }
 
-  // Dernier repli : titres français TMDB (le catalogue est en FR).
-  if (tmdbId) {
+  // Dernier repli : titres français TMDB (le catalogue est en FR), uniquement
+  // quand aucune fiche n'a été trouvée et s'il reste du budget.
+  if (tmdbId && allResults.length === 0 && !isThrottled() && siteRequestsLeft() >= 3) {
     const frTitles = await fetchLocalizedTitles(tmdbId, mediaType)
     const extra = frTitles.filter(t => !cleanTitles.some(c => normalize(c) === normalize(t)))
     if (extra.length) {
       console.log(`[${PROVIDER}] Repli titres FR: ${extra.join(' | ')}`)
       for (const title of extra.slice(0, 2)) {
+        // Un titre CJK ne matche rien chez nous : inutile de le requêter.
+        if (siteRequestsLeft() <= 2 || normalize(title).length < 2) break
         let results = []
         try {
           results = await searchAllPages(title)
@@ -442,8 +514,9 @@ async function trySearch(titles, targetSeason, tmdbId, mediaType) {
           if (match) return match
         }
       }
-      const fallback = await trySearchFallback(allResults, [...cleanTitles, ...extra])
-      if (fallback) return fallback
+      let fallback2 = null
+      try { fallback2 = await trySearchFallback(allResults, [...cleanTitles, ...extra]) } catch (e) { /* budget */ }
+      if (fallback2) return fallback2
     }
   }
 
@@ -528,6 +601,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   const streams = mediaType === 'movie'
     ? await extractMovie(tmdbId, titles, subType, overBudget)
     : await extractSeries(tmdbId, mediaType, titles, season, episode, subType, overBudget)
+  console.log(`[${PROVIDER}] Requêtes site: ${siteRequestsUsed()}`)
   return applyLanguageLabel(streams)
 }
 
@@ -589,9 +663,13 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
     return []
   }
 
+  // Recherche « Saison N » uniquement si le match est ambigu : saison
+  // différente explicite OU fiche sans marqueur de saison au score faible.
+  // Une fiche sans marqueur mais au score fort (>= STRONG_MATCH) est
+  // conservée sans requête supplémentaire.
   const needsSeasonRetry = targetSeasonNum >= 1 && (
-    match.season == null ||
-    match.season !== targetSeasonNum
+    (match.season != null && match.season !== targetSeasonNum) ||
+    (match.season == null && (match.score || 0) < SCORES.STRONG_MATCH)
   )
 
   if (needsSeasonRetry) {
@@ -599,17 +677,21 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
 
     const baseTitle = stripSeasonSuffix(titles[0])
     const seasonQuery = `${baseTitle} Saison ${targetSeasonNum}`
-    try {
-      const results = await searchAllPages(seasonQuery)
-      if (results.length) {
-        const seasonMatch = bestMatch(results, titles[0], targetSeasonNum)
-        if (seasonMatch && seasonMatch.season === targetSeasonNum) {
-          console.log(`[${PROVIDER}] ✅ Season search matched: "${seasonMatch.title}" (S${seasonMatch.season})`)
-          match = seasonMatch
+    if (isThrottled() || siteRequestsLeft() < 3) {
+      console.log(`[${PROVIDER}] Recherche saison ignorée (throttle/budget, reste ${siteRequestsLeft()})`)
+    } else {
+      try {
+        const results = await searchAllPages(seasonQuery)
+        if (results.length) {
+          const seasonMatch = bestMatch(results, titles[0], targetSeasonNum)
+          if (seasonMatch && seasonMatch.season === targetSeasonNum) {
+            console.log(`[${PROVIDER}] ✅ Season search matched: "${seasonMatch.title}" (S${seasonMatch.season})`)
+            match = seasonMatch
+          }
         }
+      } catch (e) {
+        console.warn(`[${PROVIDER}] Season search failed for "${seasonQuery}": ${e.message}`)
       }
-    } catch (e) {
-      console.warn(`[${PROVIDER}] Season search failed for "${seasonQuery}": ${e.message}`)
     }
 
     if (match.season !== targetSeasonNum) {
@@ -625,6 +707,11 @@ async function extractSeries(tmdbId, mediaType, titles, season, episode, subType
       }
       console.log(`[${PROVIDER}] ⚠ Season search didn't find S${targetSeasonNum}, page sans marqueur conservée`)
     }
+  }
+
+  if (match.season == null && (match.score || 0) < SCORES.STRONG_MATCH) {
+    console.log(`[${PROVIDER}] ✗ Refus match ambigu S${targetSeasonNum} : "${match.title}" (score ${match.score} < ${SCORES.STRONG_MATCH})`)
+    return []
   }
 
   console.log(`[${PROVIDER}] Series match: ${match.title} -> ${match.url} (newsid: ${match.newsid})`)
