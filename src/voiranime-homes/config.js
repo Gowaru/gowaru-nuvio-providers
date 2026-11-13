@@ -67,3 +67,11 @@ export const SKIP_HOSTS = ['vidhsareup.']
 /** Hôtes dont le CDN final est inutilisable (403), rejetés post-résolution. */
 export const BLOCKED_CDN_TOKENS = ['tnmr.org']
 export const ALLOWED_CDN_TOKENS = ['cdn-tnmr.org']
+
+/**
+ * Réglage (NuvioMobile) : inclure les lecteurs dont le CDN final est
+ * habituellement rejeté (`*.tnmr.org`, 403 nginx constaté en test — le blocage
+ * peut être réseau/géo et laisser passer certains utilisateurs). Désactivé par
+ * défaut pour ne pas servir des flux qui ne démarrent jamais.
+ */
+export const SETTING_ALLOW_BLOCKED_CDN = 'allowBlockedCdns'

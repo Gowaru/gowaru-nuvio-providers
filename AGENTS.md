@@ -55,6 +55,22 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - **`hasSettings` + `onSettings`**: champ **requis dans `manifest.json`** pour que NuvioMobile affiche l'UI de réglages d'un provider exportant `onSettings` (helper `createSettingsLayout()` + lecture `getScraperSettings()` dans `src/utils/resolvers.js` ; layout : header/info/text/select/toggle). Pilotes : **movix** et **frenchstream**. NuvioTV ignore le champ (Gson) mais injecte `SCRAPER_SETTINGS` si défini.
 - **Modèle de cache (important)** : chaque `getStreams` tourne dans une **instance QuickJS fraîche** (TV : `quickJs{}` par exécution ; Mobile : `JsRuntime()` par exécution — seul le bytecode des polyfills est partagé côté Kotlin) → **aucun état JS ne survit entre deux appels**. Les caches mémoire (`createCache`, cache GET 5 min de `safeFetch`, `_episodesCache`…) ne servent qu'**à l'intérieur d'une exécution** (dédup de requêtes identiques, normalisation de clé entre variantes de titres). Pas d'API de stockage exposée aux plugins. Leviers inter-appels : cache disque OkHttp (50 MB) de NuvioMobile Android pour les GET avec en-têtes HTTP cacheables, et single-flight côté NuvioTV (clé `scraperId:tmdbId:type:s:e`).
 
+## Notes par provider
+
+### anime-sama (`animes-sama.fr`, diag 2026-11)
+- **L'ancien front `anime-sama.to` est mort pour les épisodes** : `…/{saison}/{lang}/episodes.js` répond 404 sur tout le catalogue (One Piece compris) → 0 flux partout. Nouveau front : `animes-sama.fr` (mêmes slugs, autre architecture).
+- **Chaîne complète** :
+  1. `POST /ajax/search.php` (`query=…`) → `<a href="/catalogue/{slug}">` + `.asn-search-result-title` / `-subtitle` (le sous-titre liste les alias FR/EN/romaji : c'est lui qui rattrape `Attack on Titan` → `shingeki-no-kyojin`).
+  2. `GET /catalogue/{slug}` → liens `/catalogue/{slug}/{saisonN|film|oav}/{lang}`. `<title>` = garde anti-faux-match (rejette les spin-offs, ex. `shingeki-kyojin-chuugakkou`).
+  3. `GET /catalogue/{slug}/{path}/{lang}` → inline `window.__EPISODE_NUMBERS`, `var epsN = ["1","",…]` (**disponibilité seule**, plus d'URL) et `window.__PROFILE.csrf`.
+  4. `POST /api/player/sign/{slug}/{path}/{lang}` `{ep, lecteur}` + `X-CSRF-Token` + **cookie PHPSESSID obligatoire** (sinon `419 {"error":"csrf"}`) → URL signée `/player/…`.
+  5. URL signée → 302 `/player/embed?t=…` → 302 **embed hébergeur** (sibnet, ansembed, oneupload, sendvid…) → `resolveStream`.
+- **Player maison** : si l'URL signée répond 200 (page « Lecteur Anime-Sama »), le vrai embed est dans `data-fallback-url`. Ne PAS servir son HLS `/player/media?t=…` : il exige le cookie à chaque segment.
+- **`safeFetch` force `redirect: 'follow'`** → toute chaîne de 302 doit passer par `fetch` brut (comme `animesite`).
+- **Garde films** : les pages `/film` n'indiquent jamais le nom du film (One Piece `/film` sert en fait « One Piece S01E01 »). `fetchEmbedTitle()` lit `og:title`/`<title>` de l'hébergeur et le flux est écarté si le titre couvre < 80 % des mots significatifs du film demandé (mots de bruit retirés : `vostfr/vf/film/le/des/episode`…). Titre non identifiable (sibnet) → écarté : 0 flux plutôt qu'un faux film.
+- **Langues** : la plupart des fiches du nouveau front n'exposent que `vostfr` ; `vf`, `vf1`, `vf2`, `vqc`, `va`, `var`, `vkr`, `vcn` sont pris en charge automatiquement s'ils apparaissent dans les liens de la fiche.
+- **Budgets** : arrêt dès 3 flux et 2 langues max (`vostfr` puis `vf`), 10–22 s par run en pratique, budget dur 40 s.
+
 ## Runtime Constraints (QuickJS)
 - **Unavailable**: `Buffer`, `process` (les deux apps) ; `setTimeout`/`setInterval` **sur NuvioTV seulement** (polyfillés sur Mobile, cf. ci-dessous)
 - **TextEncoder/TextDecoder**: Polyfilled **en JS pur** sur NuvioMobile (`JsBindings`, pas un bridge natif) — **absents de NuvioTV**. Guard avec `typeof TextEncoder !== 'undefined'` or avoid them entirely (string ops, `encodeURIComponent`, `atob`/`btoa` are polyfilled on both)

@@ -28,8 +28,8 @@
     {
       "id": "anime-sama",
       "name": "Anime-Sama",
-      "description": "Un des plus gros catalogues français, très actif, sorties du jour.",
-      "version": "1.1.61",
+      "description": "Un des plus gros catalogues français, très actif, sorties du jour (animes-sama.fr : lecteurs signés côté serveur, VOSTFR/VF/VF1/VA…).",
+      "version": "1.2.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -269,7 +269,7 @@
       "id": "voiranime-homes",
       "name": "VoirAnime.homes",
       "description": "Animes VF et VOSTFR sur voiranime.homes (moteur DLE, miroir French-Manga) : recherche AJAX paginée avec repli titres FR TMDB, gardes saison/film, lecteurs Vidzy/Uqload, filtrage des CDN morts (vidhsareup sans DNS, tnmr.org en 403).",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -277,6 +277,7 @@
       ],
       "filename": "providers/voiranime-homes.js",
       "enabled": true,
+      "hasSettings": true,
       "logo": "https://voiranime.homes/img/icon.ico",
       "contentLanguage": [
         "fr"

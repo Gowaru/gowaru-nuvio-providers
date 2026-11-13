@@ -19,14 +19,14 @@
 
 import cheerio from 'cheerio-without-node-native'
 import { fetchText, fetchJson, ajaxSearch, setCurrentSignal, siteRequestsLeft, siteRequestsUsed, isThrottled } from './http.js'
-import { resolveStream, safeFetch, isAborted, withTimeout } from '../utils/resolvers.js'
+import { resolveStream, safeFetch, isAborted, withTimeout, getScraperSettings } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
 import { stripSeasonSuffix, resolveTargetEpisodes, toStream, countExtraWords, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
 import {
   SITE, ENDPOINTS, PATTERNS, TIMEOUTS, SCORES,
   LANGUAGE_MAP, CACHE_TTL, MAX_SEARCH_TITLES, MAX_SEARCH_PAGES, MAX_SERVERS_PER_LANG,
   MAX_VERIFY_PAGES,
-  SKIP_HOSTS, BLOCKED_CDN_TOKENS, ALLOWED_CDN_TOKENS,
+  SKIP_HOSTS, BLOCKED_CDN_TOKENS, ALLOWED_CDN_TOKENS, SETTING_ALLOW_BLOCKED_CDN,
 } from './config.js'
 
 const PROVIDER = 'VoirAnimeHomes'
@@ -89,7 +89,17 @@ function buildStream(url, langLabel, subType) {
   return stream
 }
 
+/** Réglage NuvioMobile : réintègre les CDN bloqués par défaut (voir config). */
+function allowBlockedCdns() {
+  try {
+    return getScraperSettings()[SETTING_ALLOW_BLOCKED_CDN] === true
+  } catch (e) {
+    return false
+  }
+}
+
 function isBlockedCdn(url) {
+  if (allowBlockedCdns()) return false
   const u = String(url || '').toLowerCase()
   if (ALLOWED_CDN_TOKENS.some(t => u.includes(t))) return false
   return BLOCKED_CDN_TOKENS.some(t => u.includes(t))
