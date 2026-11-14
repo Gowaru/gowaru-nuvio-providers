@@ -47,7 +47,11 @@ export async function fetchText(url, options = {}) {
 
 export async function postSearch(query, options = {}) {
   await rateLimit(DOMAIN)
-  const sanitized = sanitizeSearchQuery(query)
+  // `raw: true` : la recherche du site est un LIKE sur la chaîne entière.
+  // sanitizeSearchQuery (partagé) remplace « : » par une espace, ce qui casse
+  // TOUS les titres TMDB à deux-points ("Demon Slayer: Kimetsu no Yaiba" →
+  // 0 résultat) alors que le site stocke "Demon Slayer : Kimetsu no Yaiba".
+  const sanitized = options.raw ? String(query || '').trim() : sanitizeSearchQuery(query)
   const body = `query=${encodeURIComponent(sanitized)}`
   const mergedHeaders = {
     ...AJAX_HEADERS,
@@ -63,6 +67,25 @@ export async function postSearch(query, options = {}) {
       timeout: options.timeout ?? TIMEOUTS.SEARCH,
     })
     if (!res || !res.ok) throw new Error(`No response from search`)
-    return await res.text()
-  }, { retries: 2 })
+    return await res.text()    }, { retries: 2 })
 }
+
+/**
+ * Extracteur DLE côté site : `?vr_extract_embed=1&url=<embed>` renvoie
+ * `{"ok":true,"m3u8":"…"}`. Utile quand le CDN de l'embed refuse l'IP de
+ * l'appareil (Cloudflare/geo) mais que le serveur du site, lui, passe.
+ */
+export async function extractEmbedViaSite(pageUrl, embedUrl) {
+  await rateLimit(DOMAIN)
+  const sep = pageUrl.includes('?') ? '&' : '?'
+  const target = `${pageUrl}${sep}vr_extract_embed=1&url=${encodeURIComponent(embedUrl)}`
+  const res = await safeFetch(target, {
+    headers: { ...HEADERS, Referer: pageUrl, Accept: 'application/json' },
+    timeout: 15000,
+  })
+  if (!res || !res.ok) return null
+  const json = await res.json().catch(() => null)
+  if (!json || !json.ok || !json.m3u8) return null
+  return json.m3u8
+}
+
