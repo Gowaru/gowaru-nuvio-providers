@@ -16,9 +16,10 @@
  * l'échantillon testé) → un seul flux par épisode.
  */
 
-import { fetchText, fetchMeta, postForm, setCurrentSignal } from './http.js';
+import cheerio from 'cheerio-without-node-native';
+import { fetchText, fetchMeta, fetchJson, postForm, setCurrentSignal } from './http.js';
 import { resolveByse, isByseUrl } from './byse.js';
-import { isAborted, isBudgetExhausted, normalizeLanguageCode } from '../utils/resolvers.js';
+import { isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { createCache } from '../utils/cache.js';
 
@@ -94,7 +95,12 @@ export function matchScore(seriesSlug, querySlug) {
     if (!exact && !sPrefix) {
         const generic = (w) => /^(?:19|20)\d{2}$/.test(w) || /^hd\d*$/.test(w) || /^\d+$/.test(w);
         const unexplained = st.filter((w) => !qt.some((q) => tokenMatch(q, w)) && !generic(w));
-        if (unexplained.length) return 0;
+        // Slug bilingue : la fiche préfixe le titre avec sa traduction
+        // (`lattaque-des-titans-shingeki-no-kyojin-hd`). On tolère le reste
+        // seulement si la requête est déjà multi-mots (≥2 tokens signif. :
+        // évite "naruto" → "naruto-shippuden", série différente).
+        const bilingual = qt.length >= 2 && seriesSlug.startsWith(`${querySlug}-`);
+        if (unexplained.length && !bilingual) return 0;
     }
 
     const qm = querySlug.match(/-(?:saison|season)-(\d+)$/);
@@ -112,6 +118,22 @@ export function matchScore(seriesSlug, querySlug) {
  * triées par score contre la requête. Les requêtes mono-mot sont les plus
  * fiables (WP); on envoie le titre complet puis le 1er mot significatif.
  */
+/** Recherche structurée via le CPT `tvshows` (≈3 s, pas de parsing HTML). */
+async function searchSeriesRest(query, signal) {
+    const data = await fetchJson(
+        `${SITE}/wp-json/wp/v2/tvshows?search=${encodeURIComponent(query)}&per_page=10&_fields=slug,title,link`,
+        { signal, timeout: 10000 },
+    ).catch(() => null);
+    if (!Array.isArray(data)) return [];
+    return data
+        .filter((e) => e && typeof e.slug === 'string')
+        .map((e) => ({
+            slug: e.slug,
+            title: String((e.title && e.title.rendered) || e.slug.replace(/-/g, ' ')).replace(/<[^>]+>/g, '').trim(),
+            href: `${SITE}/serie/${e.slug}/`,
+        }));
+}
+
 async function searchSeries(query, signal) {
     return withCache(`search_${query}`, async () => {
         const out = [];
@@ -119,15 +141,31 @@ async function searchSeries(query, signal) {
         for (const q of [...new Set([query, query.split(/[\s:'’]/)[0]].filter((x) => x && x.length >= 3))]) {
             if (out.length >= 5) break;
             try {
+                for (const f of await searchSeriesRest(q, signal)) {
+                    if (seen.has(f.href)) continue;
+                    seen.add(f.href);
+                    out.push(f);
+                }
+                if (out.length) break;
                 const html = await fetchText(`${GATEWAY}/?s=${encodeURIComponent(q)}`, { signal, timeout: 15000 });
                 if (!html) continue;
-                const re = /href="(https?:\/\/on\.jetanimes\.com\/serie\/([^/"]+)\/)"[^>]*>([^<]{1,80})</g;
-                let m;
-                while ((m = re.exec(html)) !== null) {
-                    if (seen.has(m[1])) continue;
-                    seen.add(m[1]);
-                    out.push({ slug: m[2], title: (m[3] || '').trim(), href: m[1] });
-                }
+                // Les liens de résultats sont des vignettes (l'ancre contient une
+                // <img>, pas du texte) : l'ancien regex texte ne matchait rien et
+                // tout le provider renvoyait 0 flux (diag live 2026-11).
+                const $ = cheerio.load(html);
+                // `.result-item` = vrais résultats ; la page « aucun résultat »
+                // contient uniquement menus/sidebars — les prendre pour des
+                // fiches produisait des homonymes puis 0 flux.
+                let anchors = $('.result-item .details .title a[href]');
+                if (!anchors || anchors.length === 0) anchors = $('.result-item a[href*="/serie/"]');
+                anchors.each((_, el) => {
+                    const href = $(el).attr('href') || '';
+                    const m = /^https?:\/\/on\.jetanimes\.com\/serie\/([^/"#?]+)\//.exec(href);
+                    if (!m || seen.has(href)) return;
+                    const title = $(el).text().trim() || $(el).find('img').attr('alt') || '';
+                    seen.add(href);
+                    out.push({ slug: m[1], title: title.trim(), href });
+                });
             } catch (e) {
                 if (isAborted(signal)) throw e;
             }
@@ -150,7 +188,10 @@ function parseFiche(html) {
         || /postid-(\d+)/.exec(html)
         || /"post_id":\s*(\d+)/.exec(html);
     if (m) out.postId = m[1];
-    const epRe = /href="(https?:\/\/on\.jetanimes\.com\/episodes\/([^/"]+))\/?"/g;
+    // Guillemets simples ET doubles : le thème rend les liens d'épisodes en
+    // attributs single-quoted ('href'), l'ancien regex double-quote ne les
+    // voyait pas.
+    const epRe = /href=['"](https?:\/\/on\.jetanimes\.com\/episodes\/([^/'"]+))\/?['"]/g;
     while ((m = epRe.exec(html)) !== null) {
         if (!out.episodes.includes(m[1])) out.episodes.push(m[1]);
     }
@@ -188,6 +229,81 @@ export function episodeSlugCandidates(ficheSlug, season, episode) {
     return out;
 }
 
+/**
+ * Le slug d'épisode du site n'a pas toujours le même stem que la fiche
+ * (`sousou-no-frieren-frieren-saison-2-episode-8` pour la fiche `frieren`).
+ * On teste donc (saison, épisode) en fin de slug, avec ou sans marqueur de
+ * saison, et avec suffixe de doublon éventuel (`-2`).
+ */
+function slugMatchesEpisode(slug, season, episode) {
+    if (!slug) return false;
+    const withSeason = /-saison-(\d+)-episode-(\d+)(?:-\d+)?$/i.exec(slug);
+    if (withSeason) return parseInt(withSeason[1], 10) === season && parseInt(withSeason[2], 10) === episode;
+    const bare = /-episode-(\d+)(?:-\d+)?$/i.exec(slug);
+    if (bare) return season === 1 && parseInt(bare[1], 10) === episode;
+    return false;
+}
+
+/**
+ * Trouve l'URL réelle de la page épisode :
+ *  1. liens d'épisodes de la fiche (le thème les rend en single-quoted) ;
+ *  2. index WP REST du CPT `episodes` (complet, exposé sans auth).
+ * La construction d'URL à l'aveugle (stem + saison-numéro) échouait pour la
+ * moitié du catalogue et renvoyait 0 flux.
+ */
+async function findEpisodeUrl(fiche, season, episode, signal) {
+    const fromList = (urls) => urls.find((u) => {
+        const slug = String(u).replace(/\/+$/, '').split('/episodes/')[1] || '';
+        return slugMatchesEpisode(slug, season, episode);
+    }) || null;
+
+    const stem = fiche.slug.replace(/-(?:saison|season)-\d{1,2}$/, '');
+    const tokens = stem.split('-').filter((w) => w.length >= 4);
+    // La recherche REST est un LIKE multi-mots : un slug bilingue entier
+    // ("lattaque des titans shingeki no kyojin hd") ne renvoie rien. On
+    // dégrade progressivement jusqu'au token le plus distinctif.
+    const queries = [...new Set([
+        stem.replace(/-/g, ' '),
+        tokens.slice(-3).join(' '),
+        tokens.reduce((a, b) => (b.length > a.length ? b : a), ''),
+    ].filter((q) => q && q.length >= 4))];
+
+    let data = null;
+    for (const q of queries) {
+        const res = await fetchJson(
+            `${SITE}/wp-json/wp/v2/episodes?search=${encodeURIComponent(q)}&per_page=100&_fields=slug,link,id&orderby=date&order=asc`,
+            { signal, timeout: 12000 },
+        ).catch(() => null);
+        if (Array.isArray(res) && res.length > 0) { data = res; break; }
+    }
+    if (!Array.isArray(data) || data.length === 0) {
+        // Index REST muet : repli sur les liens d'épisodes de la fiche.
+        const html = await fetchText(fiche.href, { signal, timeout: 12000 }).catch(() => null);
+        if (html) {
+            const hit = fromList(parseFiche(html).episodes);
+            if (hit) return { url: hit, postId: null };
+        }
+        return null;
+    }
+    const candidates = data.filter((e) => {
+        if (!e || typeof e.slug !== 'string') return false;
+        if (!slugMatchesEpisode(e.slug, season, episode)) return false;
+        if (!tokens.length) return true;
+        return tokens.some((t) => e.slug.includes(t));
+    });
+    if (!candidates.length) return null;
+    // Slugs les plus proches du stem de la fiche d'abord (évite les homonymes)
+    candidates.sort((a, b) => {
+        const sa = tokens.filter((t) => a.slug.includes(t)).length;
+        const sb = tokens.filter((t) => b.slug.includes(t)).length;
+        return sb - sa || a.slug.length - b.slug.length;
+    });
+    const winner = candidates[0];
+    // L'id du CPT episode permet d'appeler doo_player_ajax sans télécharger
+    // la page épisode (gain ~8 s par run en live 2026-11).
+    return { url: `${SITE}/episodes/${winner.slug}/`, postId: winner.id || null };
+}
+
 // ─── 3. Page épisode → embed → Byse ────────────────────────────────────────
 
 function extractEmbedUrl(html) {
@@ -219,46 +335,58 @@ function extractPlayerType(html) {
 }
 
 /**
+ * Interroge doo_player_ajax pour nume=1..2 (serveurs 1 puis secours).
+ * `nonce` peut être vide : l'AJAX répond quand même avec une session
+ * anonyme (vérifié en live 2026-11) — c'est ce qui permet de sauter le
+ * téléchargement de la page épisode (8 s de TTFB) quand l'id REST est connu.
+ */
+async function fetchEmbeds(postId, nonce, ptype, epUrl, signal) {
+    if (!postId) return [];
+    const attempts = [1, 2].map((nume) => postForm(
+        `${SITE}/wp-admin/admin-ajax.php`,
+        `action=doo_player_ajax&post=${postId}&nume=${nume}&nonce=${nonce || ''}&type=${ptype}`,
+        { signal, timeout: 10000, headers: { Referer: epUrl } },
+    ).catch(() => null));
+    const settled = await Promise.allSettled(attempts);
+    const embeds = [];
+    for (const s of settled) {
+        const u = s.status === 'fulfilled' && s.value && s.value.embed_url;
+        if (u && typeof u === 'string' && u.startsWith('http') && !embeds.includes(u)) embeds.push(u);
+    }
+    return embeds;
+}
+
+/**
  * Résout une page épisode → stream direct (via doo_player_ajax + Byse).
+ * `knownPostId` (id du CPT episode, via REST) évite un fetch de page complet.
  * Retourne [{ stream }] ou [].
- */async function resolveEpisodePage(epUrl, baseStream, signal) {
-    const html = await fetchText(epUrl, { signal, timeout: 15000 }).catch(() => null);
-    if (!html) return null;    // VOIE 1 (principale) : player Dooplay AJAX — prioritaire car la page
-    // contient aussi des liens promo secured.lol (hdsboost, /tv…) que le
-    // scan d'iframe capterait à tort (diag live 2026-09).
+ */
+async function resolveEpisodePage(epUrl, baseStream, signal, knownPostId = null) {
     let embeds = [];
-    const postId = extractEpisodePostId(html);
-    const nonce = extractNonce(html);
-    if (postId && nonce) {
-        // type=tv OBLIGATOIRE (data-type du <li> dooplay) — sans lui
-        // l'AJAX répond {"embed_url":"","type":false} (diag live 2026-09).
-        const ptype = extractPlayerType(html);
-        // nume=1..3 : serveurs multiples éventuels — en PARALLÈLE : le
-        // raccourcisseur/AJAX est parfois lent, la concurrence absorbe la
-        // flakiness (diag live 2026-09 : nume=2 est le secours de nume=1).
-        const attempts = [1, 2, 3].map((nume) => postForm(
-            `${SITE}/wp-admin/admin-ajax.php`,
-            `action=doo_player_ajax&post=${postId}&nume=${nume}&nonce=${nonce}&type=${ptype}`,
-            { signal, timeout: 12000, headers: { Referer: epUrl } },
-        ).catch(() => null));
-        const settled = await Promise.allSettled(attempts);
-        for (let i = 0; i < settled.length; i++) {
-            const r = settled[i].status === 'fulfilled' ? settled[i].value : null;
-            const u = r && r.embed_url;
-            if (u && typeof u === 'string' && u.startsWith('http')) {
-                if (!embeds.includes(u)) embeds.push(u);
-            }
-        }
+    let html = null;
+
+    // VOIE 1 (rapide) : id REST connu → AJAX direct (type=tv obligatoire,
+    // sinon {"embed_url":"","type":false}) — pas de page à télécharger.
+    if (knownPostId) {
+        embeds = await fetchEmbeds(knownPostId, '', 'tv', epUrl, signal);
     }
 
-    // VOIE 2 (secours) : iframe directe dans la page
     if (!embeds.length) {
-        const embed = extractEmbedUrl(html);
-        if (embed) embeds.push(embed);
+        html = await fetchText(epUrl, { signal, timeout: 12000 }).catch(() => null);
+        if (!html) return null;
+        // VOIE 2 : player Dooplay AJAX depuis la page — prioritaire car la page
+        // contient aussi des liens promo secured.lol (hdsboost, /tv…) que le
+        // scan d'iframe capterait à tort (diag live 2026-09).
+        embeds = await fetchEmbeds(extractEpisodePostId(html), extractNonce(html), extractPlayerType(html), epUrl, signal);
+        // VOIE 3 (secours) : iframe directe dans la page
+        if (!embeds.length) {
+            const embed = extractEmbedUrl(html);
+            if (embed) embeds.push(embed);
+        }
     }
     if (!embeds.length) return null;
 
-    // 3. Résolution des embeds — en PARALLÈLE (max 2 retenus) : chaque
+    // 4. Résolution des embeds — en PARALLÈLE (max 2 retenus) : chaque
     // résolution passe par le raccourcisseur + page player, 10-25 s en cas
     // de lenteur ; la concurrence évite qu'un serveur lent masque un bon.
     const results = [];
@@ -280,11 +408,15 @@ function extractPlayerType(html) {
         const r = settleList[i].status === 'fulfilled' ? settleList[i].value : null;
         if (!r || !r.url || seen.has(r.url)) continue;
         seen.add(r.url);
+        const title = String(r.title || '');
         results.push({
             ...baseStream,
             url: r.url,
             quality: r.label || r.quality || 'HD',
             type: r.type || 'hls',
+            // Langue réelle : l'API Byse renseigne « (VF) » / « VOSTFR ».
+            // Détection uniquement quand le marqueur est explicite.
+            _vf: /(?:\(|\[)\s*VF\s*(?:\)|\])/i.test(title),
         });
     }
     return results.length ? results : null;
@@ -313,25 +445,36 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     // Kaijuu…", accentué "Sósó no Frieren") et la recherche WP peut le
     // rater — on prépare des variantes de slugs pour la recherche ET le
     // scoring (diag live 2026-09).
+    // Toutes les variantes servent au SCORING (un titre FR tardif peut être
+    // le seul à matcher une fiche bilingue, ex. "L'Attaque des Titans" pour
+    // `lattaque-des-titans-shingeki-no-kyojin-hd`) ; seules les 6 premières
+    // sont envoyées au moteur de recherche.
     const titleVariants = [...new Set(
         [primary, ...titles.filter((t) => typeof t === 'string' && t.length >= 3)]
             .map((t) => normSlug(String(t).split(' (')[0]))
             .filter(Boolean),
-    )].slice(0, 5);
+    )];
+    const searchVariants = titleVariants.slice(0, 6);
 
     // 1. Recherche gateway : essayer les variantes jusqu'à trouver des fiches
     let fiches = [];
     if (!isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        // Requêtes : titres bruts (le moteur WP cherche du texte), puis les
+        // mêmes en mots dérivés des slugs normalisés (retire apostrophes).
         const rawVariants = [primary, ...titles.filter((t) => typeof t === 'string' && t.length >= 3)]
             .map((t) => String(t).split(' (')[0].trim())
-            .filter(Boolean);
+            .filter((t) => t.length >= 3)
+            .slice(0, 6);
+        const slugQueries = searchVariants.map((v) => v.replace(/-/g, ' '));
+        const allQueries = [...rawVariants, ...slugQueries];
         const seenQ = new Set();
-        for (const q of rawVariants) {
+        for (const q of allQueries) {
             if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
             const key = q.toLowerCase();
             if (seenQ.has(key)) continue;
             seenQ.add(key);
             fiches = await searchSeries(q, signal);
+            console.log(`[Jetanimes] Search "${q}" → ${fiches.length} fiche(s)`);
             if (fiches.length) break;
         }
     }
@@ -351,24 +494,48 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     }
     if (!best || bestScore <= 0) return [];
 
-    // 3. Slugs d'épisodes à sonder (URL directe = la convention du site)
-    const probes = episodeSlugCandidates(best.slug, seasonNum, epNum);
-
     const baseStream = {
         name: 'Jetanimes',
-        language: normalizeLanguageCode('VOSTFR') || 'ja',
+        // VOSTFR = audio japonais : `normalizeLanguageCode('VOSTFR')` renvoie
+        // 'fr' (code de la piste de sous-titres), ce qui classait à tort les
+        // flux en VF dans les filtres NuvioTV.
+        language: 'ja',
         quality: 'HD',
     };
 
+    const emit = (streams, isVf) => {
+        const tag = isVf ? 'VF' : 'VOSTFR';
+        for (const s of streams) {
+            s.title = `${primary} S${seasonNum}E${epNum} [${tag}]`;
+            // VF = piste française, VOSTFR = audio japonais (le code de la
+            // piste de sous-titres n'est pas la langue du flux).
+            s.language = isVf ? 'fr' : 'ja';
+            delete s._vf;
+        }
+        return streams;
+    };
+
+    // 3a. URL réelle de l'épisode (fiche puis index REST)
+    const resolved = await findEpisodeUrl(best, seasonNum, epNum, signal).catch(() => null);
+    console.log(`[Jetanimes] Episode URL: ${(resolved && resolved.url) || 'introuvable'} (fiche ${best.slug}, id ${resolved && resolved.postId})`);
+    if (resolved && resolved.url && !isAborted(signal) && !isBudgetExhausted(startTime, BUDGET_MS)) {
+        const streams = await resolveEpisodePage(resolved.url, baseStream, signal, resolved.postId).catch(() => null);
+        if (streams && streams.length) {
+            return emit(streams, streams.some((s) => s._vf));
+        }
+    }
+
+    // 3b. Dernier recours : URLs construites (convention historique du site).
+    // Coûteux (1 page + 2 AJAX + résolutions) → 2 essais max, et seulement si
+    // le run n'a pas déjà consommé son budget.
+    if (isAborted(signal) || Date.now() - startTime > 25000) return [];
+    const probes = episodeSlugCandidates(best.slug, seasonNum, epNum).slice(0, 2);
     for (const slug of probes) {
         if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
         const epUrl = `${SITE}/episodes/${slug}/`;
         const streams = await resolveEpisodePage(epUrl, baseStream, signal).catch(() => null);
         if (streams && streams.length) {
-            for (const s of streams) {
-                s.title = `${primary} S${seasonNum}E${epNum} [VOSTFR]`;
-            }
-            return streams;
+            return emit(streams, streams.some((s) => s._vf));
         }
     }
 

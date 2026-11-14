@@ -20,7 +20,7 @@
 
 import { nativeCryptoAvailable } from '../utils/resolvers.js';
 
-const PLAYER_HOSTS = ['hdsplay', 'secured.lol'];
+const PLAYER_HOSTS = ['hdsplay', 'secured.lol', 'sentinel'];
 
 /** Teste si une URL pointe vers un player hdsplay/Byse (direct ou via raccourcisseur). */
 export function isByseUrl(url) {
@@ -230,7 +230,13 @@ async function resolveByseApi(pageUrl, code, fetchMetaFn, signal) {
         return sc;
     };
     valid.sort((a, b) => score(b) - score(a));
-    return { url: valid[0].url, label: String(valid[0].label || valid[0].quality || '') };
+    // `title` porte la langue réelle du média (ex. "… (VF) - … VOSTFR") :
+    // seule source fiable, la page Dooplay affiche toujours « VF et VOSTFR ».
+    return {
+        url: valid[0].url,
+        label: String(valid[0].label || valid[0].quality || ''),
+        title: String(data.title || ''),
+    };
 }
 
 /**
@@ -249,20 +255,28 @@ export async function resolveByse(embedUrl, fetchMetaFn, signal) {
     //    Fallback : chercher l'URL hdsplay dans le HTML (redirection JS).
     let url = String(embedUrl);
     if (/secured\.lol/i.test(url)) {
-        const meta = await fetchMetaFn(url, { signal, timeout: 12000 }).catch(() => null);
+        const meta = await fetchMetaFn(url, { signal, timeout: 8000 }).catch(() => null);
         if (!meta) return null;
-        let m = /https?:\/\/[a-z0-9.-]*hdsplay[a-z0-9.-]*\/(?:e|v)\/([a-z0-9]+)/i.exec(meta.finalUrl || '');
-        if (!m && meta.text) {
-            m = /https?:\/\/[a-z0-9.-]*hdsplay[a-z0-9.-]*\/(?:e|v)\/([a-z0-9]+)/i.exec(meta.text);
-        }
-        if (!m) return null;
-        url = m[0];
+        // Le player derrière le raccourcisseur change de domaine (hdsplay*,
+        // sentinel*, …) : on accepte n'importe quel hôte portant /e|v/{code},
+        // jamais secured.lol lui-même (pas de redirection suivie).
+        const pick = (txt) => {
+            const re = /https?:\/\/([a-z0-9.-]+)\/(?:e|v)\/[a-z0-9]+/gi;
+            let m;
+            while ((m = re.exec(txt || '')) !== null) {
+                if (!/secured\.lol/i.test(m[1])) return m[0];
+            }
+            return null;
+        };
+        const target = pick(meta.finalUrl) || pick(meta.text);
+        if (!target) return null;
+        url = target;
     }
 
     // 2. Page player (Referer raccourcisseur pour l'anti-hotlink)
     const meta = await fetchMetaFn(url, {
         signal,
-        timeout: 15000,
+        timeout: 10000,
         headers: { Referer: 'https://secured.lol/' },
     }).catch(() => null);
     const html = meta && meta.text;

@@ -41,7 +41,16 @@ export const LANGUAGE_MAP = {
 export const CACHE_TTL = 5 * 60 * 1000
 
 /** Titres TMDB essayés avant les replis (FR localisé, alt_titles). */
-export const MAX_SEARCH_TITLES = 3
+export const MAX_SEARCH_TITLES = 2
+
+/**
+ * Budget de requêtes vers le site PAR EXÉCUTION (throttle ~6/fenêtre) :
+ * un run typique en utilise 2 (1 recherche + 1 API d'épisodes), 4 au pire.
+ * Au-delà on rend ce qu'on a au lieu de déclencher un 429 qui bloque tout.
+ */
+export const MAX_SITE_REQUESTS = 5
+/** Vérifications fiche-par-fiche max dans le deep fallback (1 page + 1 API chacune). */
+export const MAX_VERIFY_PAGES = 2
 /** Pages de l'AJAX search (le endpoint pagine : page=2 donne d'autres fiches). */
 export const MAX_SEARCH_PAGES = 1
 /** Lecteurs résolus par langue (2 pour VF et VOSTFR). */
@@ -58,3 +67,11 @@ export const SKIP_HOSTS = ['vidhsareup.']
 /** Hôtes dont le CDN final est inutilisable (403), rejetés post-résolution. */
 export const BLOCKED_CDN_TOKENS = ['tnmr.org']
 export const ALLOWED_CDN_TOKENS = ['cdn-tnmr.org']
+
+/**
+ * Réglage (NuvioMobile) : inclure les lecteurs dont le CDN final est
+ * habituellement rejeté (`*.tnmr.org`, 403 nginx constaté en test — le blocage
+ * peut être réseau/géo et laisser passer certains utilisateurs). Désactivé par
+ * défaut pour ne pas servir des flux qui ne démarrent jamais.
+ */
+export const SETTING_ALLOW_BLOCKED_CDN = 'allowBlockedCdns'

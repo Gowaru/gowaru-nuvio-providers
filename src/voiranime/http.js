@@ -20,7 +20,7 @@ const rateLimit = createProviderRateLimiter();
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-const DOMAIN = 'voir-anime.to';
+const DOMAIN = 'voiranime.cx';
 
 // ─── Coupe-circuit anti rate-limit Cloudflare ───────────────────────────────
 // Constaté live : le sondage de slugs (16 à 56 HEAD) + les recherches WP

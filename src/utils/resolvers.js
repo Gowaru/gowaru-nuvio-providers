@@ -1127,7 +1127,18 @@ async function expandSingleStreamQualities(stream, options = {}) {
         return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD'), type: 'hls' }];
     }
 
-    const manifest = await res.text();
+    // La LECTURE du corps doit être bornée comme la requête elle-même : un
+    // CDN qui envoie l'en-tête vite puis le corps lentement faisait durer
+    // l'enrichissement 5 s de plus (constaté sur vmpx.online via VoirAnime).
+    let manifest = null;
+    try {
+        manifest = await withTimeout(res.text(), options.manifestTimeout || 12000, 'manifest-body');
+    } catch (e) {
+        manifest = null;
+    }
+    if (!manifest) {
+        return [{ ...stream, quality: normalizeQualityLabel(stream.quality || 'HD'), type: 'hls' }];
+    }
     // Manifest tronqué (suffixe runtime ou >1 MB) : les variantes de fin sont
     // perdues — exploser produirait une liste fausse. On sert l'URL originale.
     if (res.truncated || isTruncatedBody(manifest)) {
