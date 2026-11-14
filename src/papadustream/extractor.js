@@ -251,6 +251,10 @@ function buildStreams(hlsUrl, epInfo, suffix = '') {
     const { langs } = epInfo;
     const hasFr = langs.size === 0 || langs.has('fr');
     const hasEn = langs.size > 0 && langs.has('en');
+    // Cas anime VOSTFR : le master n'expose qu'une piste `ja` (aucune piste
+    // fr/en). L'ancien code n'émettait alors AUCUN flux (0 stream sur la
+    // moitié du catalogue animé).
+    const otherLang = langs.size > 0 && !hasFr && !hasEn ? [...langs][0] : null;
     const epLabel = epInfo.season != null && epInfo.episode != null
         ? `S${epInfo.season}E${epInfo.episode}`
         : 'HLS';
@@ -261,6 +265,15 @@ function buildStreams(hlsUrl, epInfo, suffix = '') {
         const s = toStream(absUrl, 'VF', 'Papadustream', BASE_URL_WWW, {
             quality: 'HD',
             title: `[VF] ${epLabel}${epTitle}${suffix}`,
+        });
+        s.type = 'hls';
+        streams.push(s);
+    }
+    if (otherLang) {
+        const label = otherLang === 'ja' ? 'VOSTFR' : `VO/${otherLang.toUpperCase()}`;
+        const s = toStream(absUrl, otherLang === 'ja' ? 'ja' : otherLang, 'Papadustream', BASE_URL_WWW, {
+            quality: 'HD',
+            title: `[${label}] ${epLabel}${epTitle}${suffix}`,
         });
         s.type = 'hls';
         streams.push(s);
@@ -342,6 +355,22 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (candidates.length === 0) {
             console.log(`[Papadustream] EPISODES JSON absent, falling back to regex`);
             candidates = extractHlsUrls(html);
+        }
+        // Fiche absente (le site redirige vers l'accueil quand l'IMDb id n'est
+        // pas connu) : recherche par titre pour récupérer l'id réellement hébergé.
+        if (candidates.length === 0) {
+            const title = await getTmdbTitle(tmdbId, false);
+            const mainTitle = title ? title.split(':')[0].trim() : null;
+            const altId = mainTitle ? await searchSiteByTitle(mainTitle, false) : null;
+            if (altId && altId !== imdbId) {
+                const altHtml = await withCache(`page_${altId}_tv`, () => fetchText(`/series/${altId}`));
+                const altCandidates = altHtml ? parseEpisodesJson(altHtml) : [];
+                if (altCandidates.length > 0) {
+                    console.log(`[Papadustream] Fiche alternative ${altId} pour "${mainTitle}" (${altCandidates.length} ép.)`);
+                    html = altHtml;
+                    candidates = altCandidates;
+                }
+            }
         }
         console.log(`[Papadustream] ${candidates.length} episode(s) listed on page`);
     }

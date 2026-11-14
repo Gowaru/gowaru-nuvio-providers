@@ -5,11 +5,11 @@
 
 import { fetchText, setCurrentSignal, isRateLimited, resetRateLimit } from "./http.js";
 import cheerio from "cheerio-without-node-native";
-import { resolveStream, isBudgetExhausted, sanitizeSearchQuery, sortStreamsByLanguage, sleep, fetchWithRetry, isAborted, safeFetch, USER_AGENT } from "../utils/resolvers.js";
+import { resolveStream, isBudgetExhausted, sanitizeSearchQuery, sortStreamsByLanguage, sleep, fetchWithRetry, isAborted, safeFetch, withTimeout, USER_AGENT } from "../utils/resolvers.js";
 import { toSlug, resolveTargetEpisodes, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from "../utils/metadata.js";
 
-const BASE_URL = "https://voir-anime.to";
+const BASE_URL = "https://voiranime.cx";
 const HEAD_TIMEOUT = 800;
 const PAGE_TIMEOUT = 10000;
 const HOST_TIMEOUT = 4000;
@@ -200,6 +200,26 @@ const SPINOFF_MARKERS = [
   'lost girls', 'junior high', 'no regrets', 'chronicle', 'picture drama',
   'recap', 'fan letter', 'ilse langnar', 'oav', 'ova'
 ];
+/**
+ * Similarité (Dice sur bigrammes) entre un slug de fiche et un titre TMDB.
+ * Sert de garde d'identité pour les FILMS, où il n'y a ni saison ni nombre
+ * d'épisodes pour vérifier la fiche : « Your Name » sondait `your-letter`,
+ * `you-cant-be-in-a-rom-com-with-your-childhood-friends`… et rendait 9
+ * streams d'autres œuvres (constaté live 2026-11).
+ */
+function slugSimilarity(a, b) {
+  const bigrams = (s) => {
+    const t = String(s || '').replace(/[^a-z0-9]/g, '');
+    const out = new Set();
+    for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));
+    return out;
+  };
+  const A = bigrams(a), B = bigrams(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return (2 * inter) / (A.size + B.size);
+}
 
 function hasSpinoffMarker(text) {
   const t = normalizeForSearch(text || '');
@@ -307,7 +327,7 @@ async function probeUrl(url) {
  * consommaient tout le budget de 45 s et le provider rendait 0 stream
  * (constaté en live sur Attack on Titan S4E28 / Demon Slayer S1E1).
  */
-async function batchProbe(urls, batchSize = 5, delayMs = 0, deadline = null) {
+async function batchProbe(urls, batchSize = 5, delayMs = 0, deadline = null, minResults = 1) {
   const results = [];
   for (let i = 0; i < urls.length; i += batchSize) {
     if (deadline != null && Date.now() > deadline) break;
@@ -322,10 +342,84 @@ async function batchProbe(urls, batchSize = 5, delayMs = 0, deadline = null) {
     for (const r of batchResults) {
       if (r.status === "fulfilled" && r.value) results.push(r.value);
     }
-    if (results.length > 0) return results; // Early exit si trouvé
+    // Early exit : rendu main uniquement quand la meillleure fiche a été
+    // trouvée EN ENTIER (VOSTFR + VF dans le même lot) ou quand on a déjà
+    // 4 candidates. Sinon une fiche homonyme incomplète (AOT S4 :
+    // lost-girls puis the-final-season sans son -vf) coupait le sondage
+    // avant la vraie fiche VF. `minResults` garde le cas mono-langue.
+    const fullBatch = batch.every((_, idx) =>
+      batchResults[idx].status === "fulfilled" && batchResults[idx].value);
+    if (results.length >= Math.max(2, minResults) && fullBatch) return results;
+    if (results.length >= 4) return results;
     if (delayMs > 0 && i + batchSize < urls.length) await sleep(delayMs);
   }
   return results;
+}
+
+/**
+ * Requêtes de recherche réellement exploitables par le site.
+ *
+ * Constaté live (2026-11) : la recherche (AJAX ET page `?s=`) fait un LIKE sur
+ * la chaîne ENTIÈRE — « Frieren: Beyond Journey's End », « Frieren Beyond » ou
+ * « Frieren Saison 1 » renvoient 0 résultat, alors que « Frieren » renvoie
+ * toute la franchise. Les titres TMDB complets sont donc inutilisables tels
+ * quels : on extrait le premier mot significatif de chaque titre
+ * (« Sousou no Frieren » → « Sousou », « Attack on Titan » → « Attack »…).
+ */
+function buildSearchQueries(titles) {
+  const STOP = new Set(['the', 'les', 'des', 'une', 'and', 'of', 'no', 'to', 'in', 'a', 'la', 'le', 'de', 'du']);
+  const out = [];
+  const push = (q) => {
+    const clean = String(q || '')
+      .replace(/\((?:VF|VOSTFR)\)/gi, ' ')
+      .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (clean.length < 4) return;
+    if (out.some(x => x.toLowerCase() === clean.toLowerCase())) return;
+    out.push(clean);
+  };
+  for (const t of (titles || []).slice(0, 8)) {
+    const words = String(t || '')
+      .replace(/\((?:VF|VOSTFR)\)/gi, ' ')
+      .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+      .split(/\s+/)
+      .filter(w => w && !STOP.has(w.toLowerCase()));
+    if (words.length === 0) continue;
+    if (words[0].length >= 4) push(words[0]);
+    else if (words[1]) push(`${words[0]} ${words[1]}`);
+    push(String(t));
+  }
+  return out;
+}
+
+/**
+ * Recherche AJAX Madara : POST `admin-ajax.php`
+ * `action=wp-manga-search-manga&title=…` → {success, data:[{title,url,type}]}.
+ * Renvoie [] si l'endpoint est indisponible (repli HTML).
+ */
+async function madaraAjaxSearch(query) {
+  try {
+    if (isRateLimited()) return [];
+    const body = `action=wp-manga-search-manga&title=${encodeURIComponent(sanitizeSearchQuery(query))}`;
+    const text = await fetchText(`${BASE_URL}/wp-admin/admin-ajax.php`, {
+      method: 'POST',
+      timeout: 8000,
+      retries: 1,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+      },
+      body,
+    });
+    if (!text) return [];
+    const json = JSON.parse(text);
+    if (!json || !json.success || !Array.isArray(json.data)) return [];
+    return json.data.filter(d => d && typeof d.url === 'string' && /\/anime\//.test(d.url));
+  } catch (e) {
+    return [];
+  }
 }
 
 /**
@@ -341,8 +435,31 @@ async function wordpressSearchRaw(query, season, altTitles) {
     // Blocage Cloudflare actif : la requête serait rejetée d'avance — inutile
     // d'enchaîner les échecs (et leurs logs) pendant tout le budget restant.
     if (isRateLimited()) return [];
-    const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(sanitizeSearchQuery(query))}`;
-    const html = await fetchText(searchUrl, { timeout: 9000 });
+    // 1. Recherche AJAX Madara (`wp-manga-search-manga`) : JSON structuré,
+    //    ~180 Ko de moins par requête et bien moins exposé au throttling que
+    //    la page de résultats (constaté live : page `?s=` en « no response »
+    //    après une rafale de sondes). Le titre renvoyé est celui du site.
+    const ajaxResults = await madaraAjaxSearch(query);
+    if (ajaxResults.length > 0) {
+      const seenAjax = new Set();
+      const scored = [];
+      for (const r of ajaxResults) {
+        const m = String(r.url || '').match(/\/anime\/([^/"'#?]+)\/?$/);
+        if (!m || seenAjax.has(m[1])) continue;
+        seenAjax.add(m[1]);
+        const url = `${BASE_URL}/anime/${m[1]}/`;
+        scored.push({ title: String(r.title || '').trim(), url, score: scoreSearchResult(r.title, url, query, season, altTitles) });
+      }
+      if (scored.length > 0) {
+        scored.sort((a, b) => b.score - a.score);
+        return scored;
+      }
+    }
+
+    // 2. Repli HTML : depuis la migration, `/?s=…` répond 302 vers
+    //    `?post_type=wp-manga&s=…` (Madara) — viser directement la cible.
+    const searchUrl = `${BASE_URL}/?post_type=wp-manga&s=${encodeURIComponent(sanitizeSearchQuery(query))}`;
+    const html = await fetchText(searchUrl, { timeout: 12000, retries: 1 });
     if (!html) return [];
 
     const $ = cheerio.load(html);
@@ -863,7 +980,7 @@ async function generateEpisodeUrl(html, targetEp, startTime, effectiveSeason) {
   const results = await Promise.allSettled(
     paddings.map(async (pad) => {
       if (isBudgetExhausted(startTime, BUDGET_MS)) return null;
-      const url = `https://voir-anime.to/anime/${slugName}/${prefix}${pad}${targetEp}${suffix}/`;
+      const url = `${BASE_URL}/anime/${slugName}/${prefix}${pad}${targetEp}${suffix}/`;
       const ok = await probeUrl(url);
       return ok ? url : null;
     })
@@ -925,10 +1042,10 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime,
       'LECTEUR YU': 4,
       'LECTEUR MOON': 5,
     };
-    // Borne dure : 3 lecteurs collectés pour 2 résolus. Chaque lecteur coûte
-    // une page de ~250 Ko (+ 1 à 3 requêtes de résolution) : au-delà, on
-    // dépasse le budget du provider et l'app jette tout le résultat.
-    const MAX_HOSTS = 4;
+    // Le site expose 4 à 7 hébergeurs par épisode ; n'en collecter que 4
+    // faisait disparaître des miroirs (et parfois la seule VF disponible).
+    // La résolution est PARALLÈLE (voir phase 3) : le coût réseau reste borné.
+    const MAX_HOSTS = 7;
     const filteredHosts = allHosts
       .filter(h => !deadHosts.includes(h))
       .sort((a, b) => (HOST_ORDER[a] ?? 9) - (HOST_ORDER[b] ?? 9))
@@ -955,8 +1072,9 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime,
           quality: "HD",
           url: iframe,
           headers: { Referer: BASE_URL, Origin: BASE_URL, "User-Agent": USER_AGENT },
+          language: lang === 'VF' ? 'fr' : 'ja',
         });
-        if (stream && stream.isDirect) return [stream];
+        if (stream && stream.isDirect) return [{ ...stream, language: lang === 'VF' ? 'fr' : 'ja' }];
         console.log(`[VoirAnime] Default player not resolvable, skipping (${embedDomain(iframe)})`);
       } else {
         console.log(`[VoirAnime] Default player is unresolvable, skipping (${embedDomain(iframe)})`);
@@ -1003,35 +1121,43 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime,
     }
     console.log(`[VoirAnime] ${candidates.length} embed(s): ${candidates.map(c => `${embedDomain(c.url)}[${c.cls}]`).join(', ')}`);
 
-    // --- Phase 3: résoudre dans l'ordre de priorité, early-exit ---
-    const direct = [];
+    // --- Phase 3: résolution PARALLÈLE de tous les lecteurs ---
+    // Démonstration live 2026-11 : voembed (VidMoly) + VOE + Streamtape + mail.ru
+    // + YourUpload répondent chacun en 0,5 à 2 s ; en séquentiel avec early-exit
+    // à 2 directs, deux miroirs valides (souvent la seule VF) n'étaient jamais
+    // résolus. Le parallèle coûte le temps du plus lent, pas la somme.
     const unresolved = [];
+    const resolvable = [];
     for (const cand of candidates) {
-      if (direct.length >= MAX_DIRECT_STREAMS) break;
-      if (expired()) break;
-
-      if (cand.cls === 'unresolvable') { unresolved.push(cand); continue; }
-
-      try {
-        const stream = await resolveStream({
-          name: `VoirAnime (${lang})`,
-          title: `${embedDomain(cand.url)} - ${lang}`,
-          quality: "HD",
-          url: cand.url,
-          headers: { ...streamHeaders },
-        });
-        if (stream && stream.isDirect) {
-          console.log(`[VoirAnime] Resolved direct: ${embedDomain(cand.url)} -> ${String(stream.url).slice(0, 70)}`);
-          direct.push(stream);
-        } else {
-          console.log(`[VoirAnime] Not resolved: ${embedDomain(cand.url)}`);
-          unresolved.push(cand);
-        }
-      } catch (e) {
-        console.warn(`[VoirAnime] Resolve failed for ${embedDomain(cand.url)}: ${e?.message}`);
-        unresolved.push(cand);
-      }
+      if (cand.cls === 'unresolvable') unresolved.push(cand);
+      else resolvable.push(cand);
     }
+    const settled = await Promise.allSettled(resolvable.map(async (cand) => {
+      if (expired()) return null;
+      // Cap par hébergeur : my.mail.ru met ~4,8 s puis échoue la plupart des
+      // essais et determine seul le temps de la phase parallèle. `withTimeout`
+      // est un no-op sur NuvioTV (pas de timers natifs) → aucun risque.
+      const stream = await withTimeout(resolveStream({
+        name: `VoirAnime (${lang})`,
+        title: `${embedDomain(cand.url)} - ${lang}`,
+        quality: "HD",
+        url: cand.url,
+        headers: { ...streamHeaders },
+        language: lang === 'VF' ? 'fr' : 'ja',
+      }), HOST_TIMEOUT + 500, `resolve ${embedDomain(cand.url)}`).catch(() => null);
+      if (stream && stream.isDirect) {
+        console.log(`[VoirAnime] Resolved direct: ${embedDomain(cand.url)} -> ${String(stream.url).slice(0, 70)}`);
+        return { ...stream, language: lang === 'VF' ? 'fr' : 'ja' };
+      }
+      console.log(`[VoirAnime] Not resolved: ${embedDomain(cand.url)}`);
+      unresolved.push(cand);
+      return null;
+    }));
+    const direct = settled
+      .filter(s => s.status === 'fulfilled' && s.value)
+      .map(s => s.value)
+      // Une même URL directe peut être servie par deux hébergeurs.
+      .filter((s, i, arr) => arr.findIndex(x => String(x.url).split('?')[0] === String(s.url).split('?')[0]) === i);
 
     if (direct.length > 0) return direct;
 
@@ -1044,6 +1170,7 @@ async function resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime,
         url: c.url,
         quality: "HD",
         headers: { ...streamHeaders },
+        language: lang === 'VF' ? 'fr' : 'ja',
         isDirect: false,
       }));
     }
@@ -1087,8 +1214,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   // la série n'exposent que l'absolu : on essaie les deux, le local d'abord.
   // Ne garder QUE l'absolu rendait 0 stream sur toutes les fiches
   // saisonnières (AOT S4E28 → recherche « 87 » dans une liste 01..30).
-  const resolvedEps = await resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
-  const targetEpisodes = [...new Set(resolvedEps.filter(e => e != null && e > 0))];
+  // Lancé SANS await : ArmSync coûte ~2 s (TMDB + mapping absolu) et ne sert
+  // qu'au matching des épisodes, après la recherche de fiche. En séquentiel, ce
+  // délai s'ajoutait à l'oracle AJAX + au sondage (constaté live : +1,9 s sur
+  // One Piece S20).
+  const resolvedEpsPromise = resolveTargetEpisodes(tmdbId, mediaType, season, episode, { startTime, budgetMs: BUDGET_MS })
+    .catch(() => []);
 
   // Search cache
   const cacheKey = `${tmdbId}-${effectiveSeason}`;
@@ -1109,7 +1240,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const seasonTitles = searchTitles.filter(t => /\bS(?:eason|aison)?\s*\d/i.test(t));
 
     const allTitles = [...baseTitles, ...seasonTitles];
-    titlePool = [baseTitles[0], seasonTitles[0], baseTitles[1], allTitles[0]].filter(Boolean);
+    // Le site ne matche que des chaînes courtes (cf. buildSearchQueries) : les
+    // mots-clés passent en tête, les titres complets restent en repli.
+    titlePool = [...buildSearchQueries(allTitles), baseTitles[0], seasonTitles[0], baseTitles[1]]
+      .filter(Boolean)
+      .filter((q, i, arr) => arr.findIndex(x => x.toLowerCase() === q.toLowerCase()) === i);
 
     // --- ÉTAPE A : sondage parallèle des slugs -----------------------------
     // Les slugs dérivés des titres TMDB sont exacts dans l'immense majorité
@@ -1153,22 +1288,26 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       );
       const probeDeadline = startTime + PROBE_BUDGET_MS;
 
-      console.log(`[VoirAnime] Parallel probe: ${uniqueSlugs.length} unique slugs`);
-
-      // Étape A0 : 2 premiers slugs de base seulement (4 URLs). Si le slug
-      // exact du site est devinable, on s'arrête là sans requête de recherche.
-      let validUrls = await batchProbe(pairUrls(uniqueSlugs).slice(0, 4), VF_PAIR_SIZE, 0, probeDeadline);
-
-      // Étape A0b : la recherche WP comme ORACLE de slug (1 requête).
+      // Étape A0 : ORACLE de slug EN PREMIER (1 POST AJAX ≈ 1 s).
       // Le site nomme ses fiches en romaji (`shingeki-no-kyojin`) alors que le
-      // slug dérivé de TMDB est anglais (`attack-on-titan`) : le sondage
-      // aveugle consommait 16 HEAD avant de tomber dessus (mesuré en live).
-      // Une seule page de résultats donne le slug réel via ses titres.
-      if (validUrls.length === 0) {
-        const oracleQuery = baseTitles[0] || allTitles[0];
-        const oracleResults = oracleQuery
-          ? await wordpressSearchRaw(oracleQuery, effectiveSeason, titles)
-          : [];
+      // slug dérivé de TMDB est anglais (`attack-on-titan`) : sonder à
+      // l'aveugle 20+ URLs coûtait 10 à 25 s (rate limiter 1 req/s) et
+      // déclenchait la limite du site, qui faisait ensuite échouer la
+      // recherche pour le reste de l'exécution (0 stream).
+      let validUrls = [];
+      {
+        const oracleQueries = titlePool.slice(0, 4);
+        let oracleResults = [];
+        let oracleQuery = null;
+        for (const q of oracleQueries.slice(0, 2)) {
+          if (isBudgetExhausted(startTime, BUDGET_MS) || isRateLimited()) break;
+          const found = await wordpressSearchRaw(q, effectiveSeason, titles);
+          if (found.length > 0) {
+            oracleQuery = q;
+            oracleResults = found;
+            break;
+          }
+        }
         // 1) Les fiches renvoyées qui portent la saison demandée (URL `…-4-…`
         //    pour une requête S4) sont les plus fiables : on les sonde avant
         //    toute dérivation de slug. Évite une 2e recherche WP en Ét. B.
@@ -1192,21 +1331,59 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
         // 2) Slugs de base dérivés des titres du site (`shingeki-no-kyojin`),
         //    avec `{base}-{N}` en tête pour S2+.
+        // 1) Fiches dont le slug correspond EXACTEMENT à un titre TMDB : le
+        //    site les expose telles quelles (`one-piece`), alors que la
+        //    recherche remonte d'abord ses dérivés (`one-piece-heroines`,
+        //    `one-piece-stampede`) — servis à la place de la série (constaté
+        //    live : One Piece S1E1 jouait « One Piece Kai »).
+        const titleSlugs = new Set(
+          allTitles.flatMap(t => [toSlug(t), toSlug(expandMacrons(t))]).filter(Boolean)
+        );
+        const coreSlug = (url) => (String(url).match(/\/anime\/([^/]+)\/$/)?.[1] || '')
+          .replace(/-vf$/, '')
+          .replace(/-(?:saison-)?\d+$/, '');
+        const exact = oracleResults
+          .filter(r => titleSlugs.has(coreSlug(r.url)))
+          .map(r => coreSlug(r.url));
+
         const oracleSlugs = rankOracleSlugs(oracleResults).slice(0, 2);
-        const ordered = [...new Set(seasonUrls)].slice(0, 2);
+        // Le slug dérivé du titre TMDB principal passe en premier : l'AJAX
+        // plafonne à 16 résultats et la fiche principale en sort parfois
+        // (One Piece → 6 dérivés : Heroines, Stampede, Kai…, jamais
+        // `one-piece`). Le sondage direct la retrouve pour 2 HEAD.
+        const baseSlug = uniqueSlugs.find(s => !/-vf$/.test(s)) || uniqueSlugs[0];
+        const ordered = [];
+        const addSlug = (s) => { if (s && !ordered.includes(s)) ordered.push(s); };
+        // Convention du site (`{slugDeBase}-{N}`) avant les fiches remontées
+        // par la recherche : pour One Piece S20 l'AJAX ne remonte que des
+        // dérivés (films, sagas, Kai) et « one-piece-log-fish-island-saga »
+        // stoppait le sondage. Le slug `{base}-{N}` est une devinette bon
+        // marché (2 HEAD) qui couvre aussi les saisons archivées.
+        // Si la recherche a DÉJÀ renvoyé la fiche de base (`one-piece`), inutile
+        // de sonder d'abord la devinette `{base}-{N}` (One Piece S20 :
+        // `one-piece-20` n'existe pas → 1 lot de HEAD perdu à chaque appel).
+        const baseAlreadyFound = oracleResults.some(r =>
+          (String(r.url).match(/\/anime\/([^/]+)\/$/)?.[1] || '').replace(/-vf$/, '') === baseSlug);
+        if (effectiveSeason > 1 && baseSlug && !baseAlreadyFound && !/\d+$/.test(baseSlug)) {
+          addSlug(`${baseSlug}-${effectiveSeason}`);
+        }
+        addSlug(baseSlug);
+        for (const slug of [...new Set(exact)].slice(0, 2)) addSlug(slug);
+        for (const slug of seasonUrls) addSlug(slug);
         for (const slug of oracleSlugs) {
-          if (effectiveSeason > 1 && !/\d+$/.test(slug)) ordered.push(`${slug}-${effectiveSeason}`);
-          ordered.push(slug);
+          if (effectiveSeason > 1 && !/\d+$/.test(slug)) addSlug(`${slug}-${effectiveSeason}`);
+          addSlug(slug);
         }
         if (ordered.length > 0) {
-          console.log(`[VoirAnime] Oracle WP "${oracleQuery}" → ${ordered.join(', ')}`);
-          validUrls = await batchProbe(pairUrls(ordered).slice(0, 12), VF_PAIR_SIZE, 0, probeDeadline);
+          console.log(`[VoirAnime] Oracle "${oracleQuery}" → ${ordered.join(', ')}`);
         }
-      }
-
-      // Étape A0c : reste du sondage aveugle (oracle indisponible ou muet).
-      if (validUrls.length === 0) {
-        validUrls = await batchProbe(pairUrls(uniqueSlugs).slice(4, 24), VF_PAIR_SIZE, 0, probeDeadline);
+        // Sondage court : slugs de l'oracle d'abord, puis les 2 slugs dérivés
+        // de TMDB (couvre les fiches dont l'orthographe colle au titre TMDB).
+        const probeUrls = [...new Set([
+          ...pairUrls(ordered),
+          ...pairUrls(uniqueSlugs).slice(0, 4),
+        ])].slice(0, 10);
+        validUrls = await batchProbe(probeUrls, VF_PAIR_SIZE, 0, probeDeadline, 2);
       }
 
       // Étape A2 : pour S2+, dériver `{slug}-{N}` des fiches réellement
@@ -1291,7 +1468,43 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   // portent ce numéro (`…-4-the-final-season`, `…-saison-2`) passent devant
   // les OVA/films/recaps homonymes — sinon on peut brûler le budget sur une
   // fiche qui ne contient pas l'épisode (Attack on Titan S4 → Lost Girls).
+  const resolvedEps = await resolvedEpsPromise;
+  const targetEpisodes = [...new Set((resolvedEps || []).filter(e => e != null && e > 0))];
+
   let waveMatches = pickBalanced(rankMatchesBySeason(matches, effectiveSeason), 4);
+
+  // FILMS : le garde d'identité (similarité de slug, voir plus bas) s'applique
+  // actuellement APRÈS le téléchargement de la fiche. Pour « Your Name », les
+  // 4 fiches remontées par la recherche (`your-letter`, `you-can't-be-in-a-…)`
+  // étaient donc toutes téléchargées puis jetées : 3 s perdues avant la 2e
+  // vague WP qui trouve `kimi-no-na-wa`. On écarte les fiches sans rapport
+  // AVANT le GET (seuil bas : les titres romaji de TMDB restent acceptés).
+  if (mediaType === 'movie' && waveMatches.length > 0) {
+    const titleSlugs = (Array.isArray(titles) ? titles : [])
+      .filter(t => typeof t === 'string')
+      .map(toSlug);
+    const plausible = waveMatches.filter(m => {
+      const slug = (String(m.url).match(/\/anime\/([^/]+)\/$/)?.[1] || '').replace(/-vf$/, '');
+      return titleSlugs.some(t => t && slugSimilarity(slug, t) >= 0.4);
+    });
+    if (plausible.length > 0 && plausible.length < waveMatches.length) {
+      console.log(`[VoirAnime] Films: ${waveMatches.length - plausible.length} fiche(s) hors sujet écartée(s) avant téléchargement`);
+      waveMatches = plausible;
+    } else if (plausible.length === 0 && waveMatches.length > 1) {
+      // Aucune fiche plausible : on n'en tente qu'UNE (la plus proche) au lieu
+      // de télécharger 4 pages qui seront toutes rejetées ; la 2e vague WP
+      // reste le vrai filet de sécurité.
+      const best = waveMatches
+        .map(m => ({
+          m,
+          sim: Math.max(0, ...titleSlugs.map(t => t ? slugSimilarity(
+            (String(m.url).match(/\/anime\/([^/]+)\/$/)?.[1] || '').replace(/-vf$/, ''), t) : 0)),
+        }))
+        .sort((a, b) => b.sim - a.sim)[0];
+      console.log(`[VoirAnime] Films: ${waveMatches.length - 1} fiche(s) hors sujet écartée(s) avant téléchargement`);
+      waveMatches = [best.m];
+    }
+  }
 
   const streams = [];
   const checkedUrls = new Set();
@@ -1299,10 +1512,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   // Budget lecteurs partagé entre les fiches retenues (VOSTFR + VF) : sans
   // partage, la 1re fiche consommait tout et la VF disparaissait.
   let embedShare = Math.max(6000, Math.floor(EMBED_BUDGET_MS / Math.max(1, waveMatches.length)));
+  // Résolution des lecteurs lancée SANS l'attendre à la fin de chaque fiche :
+  // VF et VOSTFR pointent vers les mêmes hébergeurs (voembed, voe, streamtape,
+  // my.mail.ru) et la résolution coûte 4 à 6 s par fiche — en séquentiel, la
+  // 2e fiche payait ces 5 s une deuxième fois (constaté live : 23 s sur
+  // One Piece S20). Les tâches sont attendues après la boucle.
+  const embedTasks = [];
 
   for (let wave = 0; wave < 2; wave++) {
   if (wave === 1) {
-    if (streams.length > 0) break;
+    if (streams.length > 0 || embedTasks.length > 0) break;
     // 2e vague : recherche WordPress. Le sondage de slugs ne peut pas
     // inventer `shingeki-no-kyojin-4-the-final-season` (Attack on Titan S4,
     // seul slug du site) ; et WP seul ne suffit pas toujours (les fiches
@@ -1352,6 +1571,19 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       const ficheSlug = match.url.split('/anime/')[1] || '';
       const ficheName = ($('h1').first().text() || '').trim();
       const expectedCount = titles._metadata?.seasonEpisodeCounts?.[effectiveSeason] || null;
+      // Fiche « série entière » (One Piece : 1180 chapitres pour toutes les
+      // saisons) : les garde-fous de volume ci-dessous la rejettent alors
+      // qu'elle contient l'épisode absolu demandé (S20E1 = ép. 878).
+      const wholeSeries = !!(expectedCount && ficheLinks.length > expectedCount * 3);
+      if (mediaType === 'movie') {
+        const best = (Array.isArray(titles) ? titles : [])
+          .filter(t => typeof t === 'string')
+          .reduce((max, t) => Math.max(max, slugSimilarity(ficheSlug, toSlug(t))), 0);
+        if (best < 0.55) {
+          console.log(`[VoirAnime] Fiche rejetée (film non correspondant): ${ficheSlug} (similarité ${best.toFixed(2)})`);
+          continue;
+        }
+      }
       if (mediaType !== 'movie') {
         // Œuvre dérivée (OAV/recap/spinoff) demandée implicitement : rejet, sauf
         // si le titre principal demandé est lui-même ce dérivé.
@@ -1362,7 +1594,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         // Écart massif de volume d'épisodes : la fiche ne couvre pas la saison
         // (TMDB et le site divergent souvent de quelques épisodes, on ne
         // rejette qu'en dessous du tiers).
-        if (expectedCount && ficheLinks.length > 0 &&
+        if (!wholeSeries && expectedCount && ficheLinks.length > 0 &&
             ficheLinks.length * 3 < expectedCount && expectedCount - ficheLinks.length >= 6) {
           console.log(`[VoirAnime] Fiche rejetée: ${ficheSlug} (${ficheLinks.length} ép. vs ${expectedCount} attendus pour S${effectiveSeason})`);
           continue;
@@ -1375,7 +1607,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         if (effectiveSeason > 1 && expectedCount && ficheLinks.length > 0) {
           const hasSeasonMarker = /(?:^|[-/])(?:saison-?|season-?)?\d+(?:[-/]|$)/
             .test(ficheSlug.replace(/\d{4}/g, ''));
-          if (!hasSeasonMarker && Math.abs(ficheLinks.length - expectedCount) > 2) {
+          if (!wholeSeries && !hasSeasonMarker && Math.abs(ficheLinks.length - expectedCount) > 2) {
             console.log(`[VoirAnime] Fiche rejetée: ${ficheSlug} (${ficheLinks.length} ép. pour S${effectiveSeason}, ${expectedCount} attendus) — autre saison sans marqueur`);
             continue;
           }
@@ -1501,11 +1733,18 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
       console.log(`[VoirAnime] Episode URL (${lang}, ${epLabel}): ${episodeUrl.slice(0, 80)}`);
 
       const embedDeadline = Math.min(Date.now() + embedShare, startTime + BUDGET_MS - 2000);
-      const epStreams = await resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime, embedDeadline);
-      streams.push(...epStreams);
+      embedTasks.push(
+        resolveEpisodeStreams(episodeUrl, lang, streamHeaders, startTime, embedDeadline)
+          .catch(() => [])
+      );
 
     } catch (e) { console.warn(`[VoirAnime] Match processing failed: ${e?.message}`); }
   }
+  }
+
+  // Attente groupée des résolutions (VF + VOSTFR en parallèle).
+  for (const chunk of await Promise.all(embedTasks)) {
+    if (Array.isArray(chunk)) streams.push(...chunk);
   }
 
   // Dédupliquer les streams par URL (VF et VOSTFR peuvent servir les mêmes sources)
