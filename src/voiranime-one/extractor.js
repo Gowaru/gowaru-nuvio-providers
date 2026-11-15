@@ -27,15 +27,16 @@
  *    une demande S2+ sur une fiche sans cette saison → 0 (pas d'épisode S1).
  */
 
-import { fetchText, fetchJson, BASE } from './http.js';
-import { resolveStream, isAborted } from '../utils/resolvers.js';
+import { fetchText, fetchJson, getBase, resolveBase, isBaseAlive } from './http.js';
+import { resolveStream, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
 const SITE = 'voiranime.one';
 
 /* ────────────────────────── Config ────────────────────────── */
 
-const TIMEOUTS = { search: 12000, fiche: 14000, episode: 14000, resolve: 15000 };
+const TIMEOUTS = { search: 10000, fiche: 12000, episode: 12000, resolve: 15000 };
+const BUDGET_MS = 40000;
 
 /** Homonymes à exclure (tokens interdits dans slug/titres quand la requête ne les contient pas). */
 const HOMONYM_EXCLUSIONS = [
@@ -113,20 +114,64 @@ function isHomonym(slug, titles, queryTokens) {
     return false;
 }
 
-/** Extrait le payload RSC concaténé d'une page Next.js. */
+/**
+ * Extrait le payload RSC concaténé d'une page Next.js.
+ * Chaque chunk est un littéral JSON complet (`self.__next_f.push([1,"…"])`) :
+ * on le parse individuellement au lieu de recoller les échappements à la main
+ * (l'ancien `replace(/"/g,'\\"')` corrompait les chaînes contenant des guillemets,
+ * ce qui faisait échouer le parse de `seasons` sur les fiches au synopsis riche).
+ */
 function extractRscPayload(html) {
     const chunks = [];
-    const re = /self\.__next_f\.push\(\[1,"(.*?)"\]\)/g;
+    const re = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
     let m;
-    while ((m = re.exec(html)) !== null) chunks.push(m[1]);
-    if (!chunks.length) return '';
-    let payload = chunks.join('');
-    // dé-échappement JS minimal
-    try { payload = JSON.parse(`"${payload.replace(/"/g, '\\"').replace(/\\"/g, '"')}"`); } catch { /* noop */ }
-    return payload
+    while ((m = re.exec(html)) !== null) {
+        try { chunks.push(JSON.parse(m[1])); } catch { /* chunk partiel : ignoré */ }
+    }
+    if (!chunks.length) {
+        // repli : chunk découpé par le serveur, on recolle les littéraux bruts
+        const raw = [];
+        const re2 = /self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)/g;
+        while ((m = re2.exec(html)) !== null) raw.push(m[1]);
+        if (!raw.length) return '';
+        chunks.push(raw.join(''));
+    }
+    return chunks.join('')
         .replace(/\\\\u002F/gi, '/')
         .replace(/\\u002F/gi, '/')
         .replace(/\\n/g, '\n');
+}
+
+/**
+ * Récupère le tableau `"seasons":[…]` par appariement de crochets.
+ * Plus sûr que l'ancienne regex non-greedy, qui s'arrêtait au premier mot-clé
+ * connu et cassait dès qu'un synopsis contenait `],"rating`.
+ */
+function extractSeasonsArray(src) {
+    const key = src.indexOf('"seasons":[');
+    if (key === -1) return null;
+    const start = key + '"seasons":'.length;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < src.length; i++) {
+        const ch = src[i];
+        if (inStr) {
+            if (esc) esc = false;
+            else if (ch === '\\') esc = true;
+            else if (ch === '"') inStr = false;
+            continue;
+        }
+        if (ch === '"') inStr = true;
+        else if (ch === '[') depth++;
+        else if (ch === ']') {
+            depth--;
+            if (depth === 0) {
+                try { return JSON.parse(src.slice(start, i + 1)); } catch { return null; }
+            }
+        }
+    }
+    return null;
 }
 
 /* ────────────────────────── Search ────────────────────────── */
@@ -138,14 +183,7 @@ function extractRscPayload(html) {
  */
 async function searchSite(queries, mediaType, signal) {
     const bySlug = new Map();
-    for (const q of queries) {
-        if (!q || isAborted(signal)) break;
-        const data = await fetchJson(
-            `/api/anime/search?q=${encodeURIComponent(q)}`,
-            { timeout: TIMEOUTS.search, signal },
-        );
-        const list = (data && Array.isArray(data.animes)) ? data.animes : null;
-        if (!list) continue;
+    const addList = (list) => {
         for (const a of list) {
             if (!a || !a.slug || bySlug.has(a.slug)) continue;
             bySlug.set(a.slug, {
@@ -159,6 +197,26 @@ async function searchSite(queries, mediaType, signal) {
                     a.slug,
                 ].filter(Boolean),
             });
+        }
+    };
+    for (const q of queries) {
+        if (!q || isAborted(signal)) break;
+        const data = await fetchJson(
+            `/api/anime/search?q=${encodeURIComponent(q)}&page=1`,
+            { timeout: TIMEOUTS.search, signal },
+        );
+        const list = (data && Array.isArray(data.animes)) ? data.animes : null;
+        if (!list) continue;
+        addList(list);
+        // Pagination : une requête courte ("naruto") renvoie plusieurs pages ;
+        // n'en lire qu'une faisait manquer la fiche exacte noyée dans les dérivés.
+        const totalPages = Number(data.totalPages) || 1;
+        if (bySlug.size < 8 && totalPages > 1) {
+            const p2 = await fetchJson(
+                `/api/anime/search?q=${encodeURIComponent(q)}&page=2`,
+                { timeout: TIMEOUTS.search, signal },
+            );
+            if (p2 && Array.isArray(p2.animes)) addList(p2.animes);
         }
         if (bySlug.size >= 12) break; // assez de candidats
     }
@@ -175,13 +233,8 @@ async function getFichePlan(slug, signal) {
     const html = await fetchText(`/${slug}`, { timeout: TIMEOUTS.fiche, signal });
     if (!html) return null;
     const payload = extractRscPayload(html);
-    const src = payload || html;
-
-    const m = src.match(/"seasons":\[(.*?)\],"?(?:rating|isAdult|genres|published|featured|backdrop)/);
-    if (!m) return null;
-    let plan;
-    try { plan = JSON.parse(`[${m[1]}]`); } catch { return null; }
-    if (!Array.isArray(plan)) return null;
+    const plan = extractSeasonsArray(payload || html);
+    if (!plan || !Array.isArray(plan)) return null;
 
     const seasons = new Map();
     let hasEpisodeData = false;
@@ -215,7 +268,7 @@ async function extractFromEpisodePage(slug, seasonSlot, lang, ep, signal, title)
     const embedHtml = await fetchText(`/embed/${cuid}`, {
         timeout: TIMEOUTS.episode,
         signal,
-        headers: { Referer: `${BASE}/` },
+        headers: { Referer: `${getBase()}/` },
     });
     if (!embedHtml) return [];
 
@@ -225,13 +278,14 @@ async function extractFromEpisodePage(slug, seasonSlot, lang, ep, signal, title)
 
     if (!/^https?:\/\//.test(external)) return []; // sanity : URL absolue uniquement
     const isFilm = seasonSlot === SEASON_SLOT;
-    const langLower = lang.toLowerCase();
     const label = isFilm ? 'Film' : `S${seasonSlot}E${ep}`;
+    // VF = doublage FR (piste fr), VOSTFR = VO sous-titrée : même code langue
+    // côté app (fr), mais le label doit rester visible dans le titre.
     const out = await resolveStream({
         url: external,
-        name: `${SITE} ${label}`,
+        name: `${SITE} ${label} ${lang}`,
         title,
-        language: langLower === 'vf' ? 'fr' : 'fr', // VF et VOSTFR → fr (sous-titres pour VOSTFR)
+        language: 'fr',
         quality: '',
         provider: SITE,
     }, 0);
@@ -240,7 +294,7 @@ async function extractFromEpisodePage(slug, seasonSlot, lang, ep, signal, title)
     return [{
         url: out.url,
         name: `${SITE} ${label} ${lang}`,
-        title: title || null,
+        title: title ? `${title} [${lang}]` : `[${lang}]`,
         quality: out.quality || '',
         language: 'fr',
         headers: out.headers || undefined,
@@ -252,16 +306,22 @@ async function extractFromEpisodePage(slug, seasonSlot, lang, ep, signal, title)
 
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
     const signal = options.signal;
+    const t0 = Date.now();
     const seasonNum = parseInt(season, 10) || 1;
     const epNum = parseInt(episode, 10) || 1;
     const isMovie = mediaType === 'movie';
+
+    // 0. Domaine vivant ? Le moteur nomade change d'hôte : sans cette sonde,
+    // chaque requête partait vers un domaine à la délégation DNS cassée.
+    const base = await resolveBase(signal);
+    if (!base || !isBaseAlive()) return [];
 
     // 1. Titres de recherche (TMDB)
     let titles = [];
     try {
         titles = await getTmdbTitles(tmdbId, isMovie ? 'movie' : 'tv', { season: seasonNum, episode: epNum });
     } catch { /* noop */ }
-    const queries = [...new Set([titles[0], ...titles].filter(Boolean))].slice(0, 4);
+    const queries = [...new Set([titles[0], ...titles].filter(Boolean))].slice(0, 6);
     if (!queries.length) return [];
 
     // 2. Recherche site
@@ -308,17 +368,23 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         seasonSlot = seasonNum;
     }
 
-    // 5. Langues : VF et VOSTFR si dispo, sinon celle connue
-    const langs = [];
+    // 5. Langues : on tente TOUJOURS VF et VOSTFR (le champ `langues` de l'API
+    // est un résumé par série, souvent en retard sur les pages épisode : s'y
+    // fier faisait disparaître les VF fraîchement ajoutées). Ordre = préférence.
     const known = (best.langues || []).map(l => String(l).toUpperCase());
-    if (known.includes('VF')) langs.push('VF');
-    if (known.includes('VOSTFR')) langs.push('VOSTFR');
-    if (!langs.length) langs.push('VOSTFR', 'VF');
+    const langs = [];
+    if (known.includes('VF') || !known.length) langs.push('VF');
+    langs.push('VOSTFR');
+    if (!langs.includes('VF')) langs.push('VF');
 
     // 6. Extraction par langue (séquentiel, garde-fou temps côté index)
     const all = [];
     for (const lang of langs) {
         if (isAborted(signal)) break;
+        if (isBudgetExhausted(t0, BUDGET_MS)) {
+            console.log(`[VoirAnimeOne] budget atteint, langues restantes ignorées (${lang})`);
+            break;
+        }
         try {
             const streams = await extractFromEpisodePage(best.slug, String(seasonSlot), lang, epNum, signal, titles[0] || best.titles[0]);
             all.push(...streams);
@@ -327,17 +393,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         }
     }
 
-    // 7. Dédup par host+path (VF/VOSTFR peuvent pointer vers le même fichier)
+    // 7. Dédup par langue + host + path : VF et VOSTFR peuvent pointer vers le
+    // même fichier vidéo ; ils doivent pourtant rester deux entrées distinctes.
     const seen = new Set();
-    const dedup = all.filter(st => {
+    return all.filter(st => {
         try {
             const u = new URL(st.url);
-            const key = `${u.host}${u.pathname.replace(/\?.*$/, '')}`;
+            const key = `${String(st.name || '').toUpperCase()}|${u.host}${u.pathname.replace(/\?.*$/, '')}`;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
         } catch { return true; }
     });
-
-    return dedup;
 }

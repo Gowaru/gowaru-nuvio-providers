@@ -71,6 +71,23 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - **Langues** : la plupart des fiches du nouveau front n'exposent que `vostfr` ; `vf`, `vf1`, `vf2`, `vqc`, `va`, `var`, `vkr`, `vcn` sont pris en charge automatiquement s'ils apparaissent dans les liens de la fiche.
 - **Budgets** : arrêt dès 3 flux et 2 langues max (`vostfr` puis `vf`), 10–22 s par run en pratique, budget dur 40 s.
 
+### neko-sama (`animes-sama.su`, diag 2026-11)
+- **Catalogue = sitemap WordPress** : `GET /wp-sitemap-posts-anime-1.xml` (177 Ko, ~1440 pages = 696 séries) donne TOUTES les fiches + pages `-saison-N` / `-saga-N-…`. Un seul GET remplace la recherche HTML (dont la page « 0 résultat » renvoie la sidebar d'autres séries) et les ~40 slugs devinés : un titre absent passe de 43 s à ~2 s.
+- **Matching strict par tokens de slug** : l'ancien `sn.includes(norm) || norm.includes(sn)` acceptait `GoT` ⊂ `omaegotoki` → **épisode d'une autre série servi** pour Game of Thrones. Désormais tokens entiers + couverture ≥ 60 % + pénalité des mots non couverts + garde film/OAV (`-film-`, `-fan-letter`…).
+- **Hiérarchies** : `-saison-N` et `-saga-N-…` (One Piece) alimentent la même garde saison. Un hub dont l'`eplister` est vide est pénalisé : la page saison/saga demandée passe devant.
+- **Numérotation absolue des sagas** : `one-piece-saga-2-alabasta` liste `62..143` alors que TMDB redémarre à 1 → remap `abs = min + ep - 1` quand la plage est contiguë et `min ≥ 2` (sinon S2E1 rendait 0 flux ; S1E1 continue de viser le numéro brut).
+- **Groupes serveurs** : split sur `<div class="server-group">` + premier `<label>` (`SUB:` → VOSTFR, `VF:` → VF), repli sur le libellé des boutons (`VO-1`, `VF-1`). L'ancienne lookahead `</div></div><div class="server-divider"` fusionnait/perdait des groupes (la VF disparaissait).
+- **Multi-hébergeurs** : 2 hôtes distincts max par langue, 4 boutons tentés max → si vidmoly tombe, sendvid prend le relais (l'ancien code s'arrêtait au premier succès, donc un CDN mort = 0 flux jouable).
+- **Pas de VF sur ce site** en 11/2026 : les pages épisode n'affichent qu'un groupe `SUB:` (boutons `VO-n`) ; les commentaires `<!-- VF SERVERS -->` restent vides. Une VF absente n'est pas un bug de parsing.
+- **Coût** : 7–12 s par run (sitemap + page saison + 1–2 résolutions), budget dur 38 s.
+
+### voiranime-one (`voiranime.one`, moteur Next.js "Anisama", diag 2026-11)
+- **Domaine mort** : `voiranime.one` (et le clone `anisama.org`) renvoient `Status: 2 / EDE(22): No Reachable Authority at delegation` — la délégation DNS est cassée côté registre, donc **aucune** requête n'aboutit (0 flux quel que soit le titre). Aucun miroir vivant connu en 11/2026.
+- **`resolveBase()` (http.js)** : sonde en parallèle `CANDIDATE_HOSTS` (`/api/anime/search?q=a&page=1`, JSON `{animes:[…]}` exigé), mémorise le premier domaine vivant et sert de base à tous les fetchs. Sans domaine vivant → 0 flux en ~2 s au lieu de brûler les 60 s de l'app. Ajouter un nouveau miroir = une ligne dans `CANDIDATE_HOSTS`.
+- **Payload RSC** : chaque chunk `self.__next_f.push([1,"…"])` est `JSON.parse` **individuellement** (l'ancien recollage `replace(/"/g,'\\"')` corrompait les synopsis à guillemets et cassait `seasons`). `seasons` est extrait par appariement de crochets, plus par regex non-greedy.
+- **Langues** : VF et VOSTFR sont **toujours** tentées (le champ `langues` de l'API est un résumé par série, souvent en retard → des VF fraîchement ajoutées n'apparaissaient jamais). Dédup par `name|host|path` pour ne pas écraser VF par VOSTFR quand l'hébergeur sert le même fichier.
+- **Recherche** : 6 titres TMDB max, page 1 puis page 2 si < 8 candidats (une requête courte type `naruto` renvoie plusieurs pages de dérivés).
+
 ### voiranime-homes (`voiranime.homes`, moteur DLE)
 - **Throttle du site** : ~6 requêtes par fenêtre d'environ 30 s, puis `429` (et le blocage s'allonge si on insiste). Deux garde-fous dans `http.js` : compteur `_siteRequests` (`siteRequestsLeft()`, `MAX_SITE_REQUESTS = 5` par run, on réserve 2 requêtes pour l'API d'épisodes) et coupe-circuit `isThrottled()` — un `429` **arrête le run immédiatement** (aucun retry : l'ancien retry à 7 s échouait et coûtait 2 requêtes + 14 s). Objectif : 2 requêtes par run.
 - **Recherche = 1 requête ciblée** : le catalogue est FR, donc le titre localisé TMDB (`fetchLocalizedTitles`, mis en cache) passe avant le titre EN, et la requête est `BASE Saison N` avec `BASE` = variante la plus courte qui préfixe le titre principal (« Frieren » pour « Frieren: Beyond Journey's End »). Sélectionne la bonne fiche en une seule recherche et évite qu'un film dérivé (« One Piece Film - Red ») passe devant la série. L'ordre des requêtes est `BASE Saison N` puis `BASE`, pour la base FR puis pour la base préfixe courte, plafonné par `MAX_SEARCH_TITLES = 2`. Les replis (deep fallback fiche par fiche, titres FR de secours) n'existent que si le budget le permet : `siteRequestsLeft() >= 3` et site non throttlé.
@@ -99,6 +116,24 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - **Lecteur** : `doo_player_ajax` (nume 1..2, `type=tv`) → `secured.lol/xxx` → **domaine tournant** (`hdsplay*.tld`, `sentinel*.online`) : accepter n'importe quel hôte `/(e|v)/{code}`, puis p.a.c.k.e.r (VidHide) ou API `/api/videos/{code}` + AES-GCM (legacy).
 - **Budget temps** : le `nonce` peut être vide (vérifié live) → `doo_player_ajax` appelé directement avec l'`id` REST de l'épisode (`resolveEpisodePage(…, postId)`), ce qui évite le fetch de page (TTFB 8 s). REST `episodes?slug=…&_fields=slug,link,id` d'abord, fiche seulement si REST vide ; probes d'URLs construites limitées à 2. Timeouts lecteurs 8/10 s. Mesure : 32-35 s → 23-28 s (le reste est la latence du site).
 - **Langue** : le `title` de l'API Byse porte `(VF)`/`VOSTFR` — seule source fiable (la page affiche toujours « VF et VOSTFR »). VF = `fr`, VOSTFR = `ja`.
+
+### nakios (`nakios.live`, Laravel + Livewire, diag 2026-11)
+- **Ancien backend mort** : `api.nakios.store` répond 525, `nakios.cyou` n'a plus de DNS. Tout passe par le front (SSR) : pas d'API REST à consommer.
+- **URLs** : `/movie/{slug}`, `/tv-show/{slug}`, `/episode/{slug}/{S}-{E}` (slug du **titre**, pas de l'épisode). `/search/{query}` en GET suffit largement à retrouver une fiche ; Livewire n'est nécessaire que pour lire la fiche.
+- **Sources** : les serveurs vivent dans l'attribut HTML `wire:snapshot` du composant `watch-component` (JSON encodé, `availableVersions` = `[['VF','VOSTFR']]`, `Server #1..4`, `Premium 1/2`). Parser l'attribut avec `JSON.parse` après décodage des entités — **ne pas** exécuter Livewire ni de requête `livewire/update`.
+- **Catalogue limité** : le site ne garde que la **dernière saison** de chaque série (The Boys = S5 seulement) et « One Piece » = série **live-action** 2023. Si la saison demandée manque, repli **explicite** sur la saison présente (`loadWatchPage` → `servedSeason`), avec le numéro de saison injecté dans le `title` (`Saison 5 (S1 absente du site)`) ; jamais de repli silencieux, et pas de repli si l'épisode dépasse le nombre d'épisodes listés.
+- **Hébergeurs** : vidzy (`.live`/`.org`) et uqload (`.is`→`.vc`) OK ; kakaflix.lol, getvid.club, tnmr.org injoignables ; dood/playmogo = Turnstile ; **bysebuho.com = AES-256-GCM via WebCrypto (absent sur NuvioTV) → exclu**.
+
+### vostfree (`vostfree`, moteur DLE, diag 2026-11)
+- **Recherche POST `index.php?do=search` incomplète** (résultats partiels, homonymes) : le **`sitemap.xml`** (~218 Ko, ~1208 fiches) est l'autorité de catalogue. Le charger une fois par exécution, scorer les titres, puis sonder les fiches.
+- **Épisodes** : options de la fiche `<button class="buttons_747">Episode 0747</button>` — le numéro est **dans le texte**, le suffixe `buttons_N` n'est **pas** séquentiel. Pour S2+, une fiche sans marqueur de saison exige l'épisode **absolu** en passe stricte (`MAX_PAGES`) ; une fiche multi-épisodes est refusée pour une demande film. Si la passe stricte ne rend aucun flux, une **seconde passe** (`MAX_FALLBACK_PAGES`) sert la saison réellement disponible (numérotation locale de la fiche) et l'écrit dans le `title` : `· Saison 2 (S1 absente du site)`. La saison affichée vient du slug (`-saison-N-`), sinon de l'en-tête DLE `<li>… Saison:&nbsp;<b>01</b></li>` (`pageSeason()`), sinon du h1/titre ; dernier recours seulement : `· Saison du site (S2 absente)`. Jamais de substitution silencieuse.
+- **Catalogue figé** : peu de séries, saisons partielles (Demon Slayer = S1 + arc « train de l'infini », JJK = S1, One Piece VOSTFR démarre à 747) → 0 flux est souvent le comportement correct.
+- **Lecteurs** : le site ne stocke que l'**ID** de chaque embed ; les modèles d'iframe sont dans `templates/Animix/js/anime.js` (source d'autorité, reprise dans `playerUrl`). État live 2026-11 sur 120 fiches échantillonnées :
+  - `sibnet` 120/120 — le plus courant, **403 depuis un datacenter** (OK en résidentiel) ;
+  - `uqload` 92/120 — **seul hôte fiable partout** (`.is`→`.co`) ;
+  - `mail2` 10/120 — `my.mail.ru/video/embed/{id}` : **6/12 embeds rendent un MP4 direct signé** (`cdn*.my.mail.ru/v/….mp4?slave[]=…`) → second hôte exploitable, `HOST_PRIORITY` juste après uqload ;
+  - morts/vérifiés inutilisables : `vip` 63 (getvid.club DNS mort, upvid/vudeo), `myvi` 49 (`myvi.ru` = domaine **en vente**, `myvi.tv` injoignable), `ok` 27 (résolvable via `resolveOkRu`, mais **0/28 IDs du catalogue encore en ligne** — `data-movie-id="null"`), `fembed` 13 (DNS mort), `moevideo` 13 (ninjastream), `gtv` 10 (`iframedream.com` = page de pub), `kaztube` 7 (DNS mort), `rutube` 7 (plateforme vivante mais tous les IDs du catalogue supprimés), `mp4` 3 (flash mail.ru, contenu non résoluble) → tous filtrés par `UNRESOLVABLE_HOSTS` (sauf `rutube`, `mail2`, `ok`).
+  Aucun autre hôte de secours n'existe sur le site : quand uqload, sibnet et mail2 sont morts pour un épisode, le 0 flux est réel.
 
 ## Runtime Constraints (QuickJS)
 - **Unavailable**: `Buffer`, `process` (les deux apps) ; `setTimeout`/`setInterval` **sur NuvioTV seulement** (polyfillés sur Mobile, cf. ci-dessous)
@@ -130,6 +165,16 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - Use `resolveStream` from `src/utils/resolvers.js` to process final URLs
 - Build targets **ES2020** (QuickJS supports async/await natively)
 - Update `manifest.json` when adding/removing providers (references `providers/<provider>.js`)
+- **Version bump = 2 fichiers** : toute modification de `version` dans `manifest.json` doit être répercutée dans `README.md` (colonne `🏷️ Ver.` du tableau des providers) — sinon la doc annonce une version qui n'est pas celle livrée
+
+## Pièges providers (diagnostic 11/2026)
+- **Toujours `parseInt`** `season`/`episode` : l'app peut passer des **chaînes** (`"1"`), et `e.num === episode` échoue silencieusement → « épisode introuvable » puis 0 flux (bug fullanime).
+- **Numérotation** : la saison de l'app vient de TMDB, la numérotation du site est souvent **absolue** (Naruto 220 ép.) ou **locale par arc** (One Piece `saga-N` redémarre à 1). `getAbsoluteEpisodeFromTmdb(tmdbId, season, episode)` (⚠️ **sans** `mediaType`) est l'autorité ; convertir ensuite avec le cumul d'épisodes des pages d'arcs. Ne jamais mapper `saison TMDB → saga du site` par égalité (One Piece S4 ≠ `saga-4`).
+- **Pages leurres** : certains slugs (`one-piece-vostfr`, `naruto-vostfr`) n'ont qu'un épisode — préférer la fiche la plus complète **dont le slug ne contient pas de mots étrangers au titre** (sinon `naruto-shippuden` 483 ép. gagne sur `naruto` 220).
+- **404 déguisés** : un 404 FullAnime renvoie la home en 200 avec les derniers épisodes d'autres séries → **scoper le parsing des liens `/episode/N` au slug demandé**.
+- **VF** : `fullanime` et `sekai` sont **VOSTFR uniquement** (aucune page `-vf`, sitemap sans VF). Ne pas promettre de VF dans le manifest/README ; garder le label dans `title`, `language: 'ja'`.
+- **Hébergeurs** : résoudre **tous** les embeds (pas de `break` à 2 flux) — sibnet est géo-bloqué (403) et vidmoly peut tomber.
+- **ok.ru** (`resolveOkRu`) : l'ancienne API `dk?cmd=videoPlayerMetadata&mid=…` renvoie désormais une page de login. Le manifest est dans l'attribut `data-options` de `https://ok.ru/videoembed/{id}` (JSON échappé en entités) : `flashvars.metadata.hlsManifestUrl` (master `ok*.vkuser.net`) ou `metadata.videos[]` (MP4 mobile/lowest/low/sd/hd/full). URLs signées **par IP** — valides pour l'appelant ; `data-movie-id="null"` = vidéo supprimée.
 
 ## Testing
 - **Test script**: `node test_providers.js [provider1 provider2 ...]` (tests all if none specified)

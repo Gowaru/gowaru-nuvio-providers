@@ -370,8 +370,8 @@
     {
       "id": "sekai",
       "name": "Sekai",
-      "description": "Fournisseur spécialisé sur les gros animes. Streams directs très rapides sans iFrames.",
-      "version": "1.0.26",
+      "description": "Gros animes en VOSTFR. Streams directs (MP4) très rapides, sans iFrame.",
+      "version": "1.0.27",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -423,8 +423,8 @@
     {
       "id": "voiranime-one",
       "name": "VoirAnime.one",
-      "description": "Animes VF et VOSTFR en streaming sur VoirAnime.one (catalogue riche : TV, films, OVA, 24k épisodes).",
-      "version": "0.1.3",
+      "description": "Animes VF et VOSTFR en streaming sur le moteur VoirAnime/Anisama (Next.js) — domaines détectés automatiquement (miroirs nomades).",
+      "version": "0.1.4",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -584,8 +584,8 @@
     {
       "id": "vostfree",
       "name": "Vostfree",
-      "description": "Animes VF et VOSTFR en streaming et téléchargement.",
-      "version": "1.1.57",
+      "description": "Animes VF et VOSTFR : catalogue complet (sitemap) et tous les lecteurs de chaque épisode résolus en direct.",
+      "version": "1.3.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -608,8 +608,8 @@
     {
       "id": "nakios",
       "name": "Nakios",
-      "description": "Films et séries en streaming MP4 via Nakios (API REST, TMDB natif, CDN direct).",
-      "version": "1.0.4",
+      "description": "Films et séries VF/VOSTFR sur nakios.live : toutes les sources de chaque version (vidzy, uqload…) résolues en direct.",
+      "version": "1.1.1",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -726,8 +726,8 @@
     {
       "id": "neko-sama",
       "name": "Neko-Sama",
-      "description": "Anime VF et VOSTFR en streaming sur animes-sama.su (via neko-sama.lol).",
-      "version": "0.0.4",
+      "description": "Anime VF et VOSTFR en streaming sur animes-sama.su (catalogue sitemap, multi-hébergeurs, arcs One Piece en numérotation absolue).",
+      "version": "0.0.6",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -798,7 +798,7 @@
     {
       "id": "fullanime",
       "name": "FullAnime",
-      "description": "Anime VOSTFR en streaming sur fullanime.fr. Catalogue large avec 3 hébergeurs par épisode.",
+      "description": "Anime VOSTFR en streaming sur fullanime.fr. Catalogue large, jusqu'à 4 hébergeurs par épisode.",
       "version": "0.0.5",
       "author": "Gowaru",
       "supportedTypes": [

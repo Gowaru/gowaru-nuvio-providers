@@ -1,478 +1,565 @@
 /**
  * Extractor Logic for Vostfree
+ *
+ * ⚠️ Constat live 2026-11 (cause racine des 0 stream / mauvais épisodes) :
+ *  - la recherche POST `index.php?do=search` est **incomplète** (elle ne
+ *    renvoie pas les saisons 2+, et renvoie 0 résultat pour beaucoup de
+ *    requêtes) — le provider ne « voyait » donc qu'une partie du catalogue ;
+ *  - une même série est découpée en **plusieurs fiches par plage d'épisodes**
+ *    (One Piece VOSTFR = 1 fiche `one-piece-1014-vostfr` qui commence à
+ *    l'épisode 747, One Piece VF = 1 fiche 1→887) → sans lire la bonne fiche,
+ *    l'épisode servi ne correspondait pas ;
+ *  - les fiches ont un `<select class="new_player_selector">` dont les
+ *    `value="buttons_N"` ne suivent PAS le numéro d'épisode (`buttons_747` =
+ *    « Episode 0747 ») : la correspondance se fait sur le **texte** de
+ *    l'option, jamais sur son index.
+ *
+ * Le `sitemap.xml` (218 Ko, ~1200 fiches, 1 seule requête) sert de catalogue :
+ * on y choisit les fiches par titre + saison, puis on sonde chaque fiche
+ * jusqu'à trouver l'épisode. Recherche POST conservée en repli.
  */
 
 import { fetchText, setCurrentSignal } from './http.js';
 import cheerio from 'cheerio-without-node-native';
-import { resolveStream, withTimeout, isBudgetExhausted, sortStreamsByLanguage, isAborted, isTvMediaType } from '../utils/resolvers.js';
-import { resolveTargetEpisodes, getSeasonEpisodeFromAbsolute } from '../utils/dle-extractor.js';
+import { resolveStream, withTimeout, isBudgetExhausted, isAborted, sortStreamsByLanguage } from '../utils/resolvers.js';
+import { resolveTargetEpisodes, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-const BASE_URL = "https://ipv4.vostfree.ws";
-const MAX_SEARCH_TITLES = 9;
-const MIN_QUERY_LENGTH = 5;
-
-// ⚠️ Plus de filtre dur : les hosts du site ROTENT (vérifié en live — upvid/
-// ninjastream/vudeo ont remplacé sibnet sur certaines fiches en 2026, et le
-// filtre d'origine a rendu le provider muet pendant des semaines). On
-// ORGANISE les players par priorité de résolution et on tente tout via
-// resolveStream, qui sait lui-même rejeter les hosts morts.
-const HOST_PRIORITY = [
-    'sibnet',      // ✅ résout en direct (API metadata), dominant sur les fiches récentes
-    'uqload',      // ✅ résolveur natif (Referer whitelist + regex query-string)
-    'vidmoly',
-    'myvi',
-    'sendvid',
-];
-
-// Hosts dont l'embed est un mur JS/fingerprint ou un DNS mort — vérifiés en
-// live 2026-09 : inutile de dépenser du budget resolveStream dessus.
-const UNRESOLVABLE_HOSTS = ['voe', 'streamtape', 'stape', 'dood', 'ds2play', 'bigwar5',
-    'ninjastream', 'upvid', 'opvid', 'jetload', 'getvid', 'lvturbo', 'streamlare'];
-const PLAYER_TIMEOUT_MS = 8000;
+const BASE_URL = 'https://ipv4.vostfree.ws';
 const BUDGET_MS = 45000;
+const PLAYER_TIMEOUT_MS = 9000;
+const MAX_PAGES = 6;              // fiches sondées (sitemap) par exécution
+const MAX_FALLBACK_PAGES = 3;     // fiches sondées en repli de saison
+const MAX_SEARCH_TITLES = 5;      // repli recherche POST
+const TARGET_DIRECT_PER_LANG = 2; // flux directs visés par langue
+const MAX_STREAMS = 8;
 
+// Lecteurs dont l'embed est un mur JS/fingerprint, un domaine parqué ou un DNS
+// mort — vérifiés en live 2026-11 : getvid.club (sert les `player_vip`) n'a
+// plus de DNS, voe/streamtape/dood sont derrière un captcha, et les autres
+// hôtes du site sont carrément disparus : myvi.ru (→ domaine en vente),
+// myvi.tv (injoignable), iframedream.com (`gtv` → page de pub), kaztube.kz
+// (DNS mort), fembed.com/vfree.to (DNS mort). `mail2` (my.mail.ru) et
+// `ok` (ok.ru/videoembed, manifest dans `data-options`) restent tentés : les
+// résolveurs savent les lire.
+const UNRESOLVABLE_HOSTS = ['voe.sx', 'streamtape', 'stape', 'dood.', 'ds2play', 'bigwar5',
+    'ninjastream', 'upvid', 'opvid', 'jetload', 'getvid.', 'lvturbo', 'streamlare', 'filemoon',
+    'myvi.ru', 'myvi.tv', 'iframedream', 'kaztube', 'fembed.', 'vfree.'];
+
+// `sibnet` est le lecteur le plus courant du catalogue mais répond **403**
+// depuis un datacenter : il est tenté quand même (il fonctionne depuis une IP
+// résidentielle). `mail2` (my.mail.ru) est le seul **second** hôte encore
+// résoluble : 6/12 des embeds testés rendent un MP4 direct signé (cdn*.my.mail.ru).
+
+// Priorité de résolution : uqload/vidmoly répondent vite ; sibnet passe
+// ensuite (géo-bloqué en datacenter mais OK en résidentiel) ; les hôtes morts
+// n'ont plus à consommer de budget (cf. UNRESOLVABLE_HOSTS).
+const HOST_PRIORITY = ['uqload', 'mail2', 'vidmoly', 'sibnet', 'sendvid', 'oneupload'];
+
+// ─── Texte ───────────────────────────────────────────────────────────────────
 function normalize(s) {
     if (!s) return '';
-    return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, '').replace(/[':!.,?]/g, '').replace(/\bthe\s+/g, '').replace(/\s+/g, ' ').trim();
+    return String(s).toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[’'`:!.,?]/g, ' ')
+        .replace(/&/g, ' et ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\b(the|les|le|la|des|de|du|a|an|of|and|et)\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function tokens(s) {
+    return normalize(s).split(' ').filter(w => w.length > 1);
+}
+
+/** Part des mots du titre TMDB présents dans la fiche (0..1). */
+function coverage(candidate, title) {
+    const want = tokens(title);
+    if (!want.length) return 0;
+    const words = normalize(candidate).split(' ').filter(Boolean);
+    const got = new Set(words.filter(w => w.length > 1));
+
+    // Le site abrège parfois les titres en initiales : `d-b-s-broly` pour
+    // « Dragon Ball Super: Broly ». On fait correspondre les lettres isolées
+    // aux initiales des mots du titre, dans l'ordre.
+    const initials = want.map(w => w[0]);
+    const matchedInitials = new Set();
+    let cursor = 0;
+    for (const w of words) {
+        if (w.length !== 1) continue;
+        if (cursor < initials.length && w === initials[cursor]) {
+            matchedInitials.add(cursor);
+            cursor++;
+        }
+    }
+
+    let hit = 0;
+    for (let i = 0; i < want.length; i++) {
+        if (got.has(want[i]) || matchedInitials.has(i)) hit++;
+    }
+    return hit / want.length;
 }
 
 function getSeasonNumber(text) {
-    const combined = text.toLowerCase().replace(/-/g, ' ');
-    // Pattern 1: explicit "saison N"
+    const combined = String(text || '').toLowerCase().replace(/-/g, ' ');
     let m = combined.match(/\bsaison\s*(\d+)\b/);
     if (m) return parseInt(m[1], 10);
-    // Pattern 2: URL-style "s N" or title "N VOSTFR/VF/FRENCH"
-    m = combined.match(/\bs\s*(\d+)\b/);
+    m = combined.match(/\bseason\s*(\d+)\b/);
     if (m) return parseInt(m[1], 10);
-    // Pattern 3: bare number before language/type keywords (in title)
-    m = combined.match(/\b(\d+)\s*(?:vostfr|vf|french|ddl|streaming)\b/);
+    m = combined.match(/\bs\s*(\d+)\b/);
     if (m) return parseInt(m[1], 10);
     return null;
 }
 
-function titleMatches(resultTitle, searchTitle) {
-    const nResult = normalize(resultTitle);
-    const nSearch = normalize(searchTitle);
-    if (!nResult || !nSearch) return false;
-    if (nResult === nSearch) return true;
-    if (nResult.includes(nSearch)) {
-        // Vérifier que le résultat n'a pas de mots significatifs en trop AVANT le titre recherché
-        // Ex: "boruto naruto" ne doit pas matcher "naruto"
-        const idx = nResult.indexOf(nSearch);
-        const prefix = nResult.slice(0, idx).trim();
-        const prefixWords = prefix.split(/\s+/).filter(w => w.length > 2 && !['saison', 'season', 'la', 'le', 'les', 'du', 'de', 'des'].includes(w));
-        if (prefixWords.length >= 1) return false;
-        return true;
+const FILM_MARKER = /(^|-)(film|movie|oav|ova|special)(-|$)/i;
+
+// Mots de slug qui ne viennent pas du titre (suffixes du site) : ils ne doivent
+// pas être comptés comme « mots en trop » dans le scoring.
+const SLUG_MARKERS = new Set(['vostfr', 'vf', 'ddl', 'streaming', 'telecharger', 'fichier', 'uptobox',
+    'saison', 'season', 'film', 'movie', 'oav', 'ova', 'special', 'complet', 'integrale', 'vostf']);
+
+/** Mots du slug absents du titre TMDB (« le train de l infini » pour Demon Slayer). */
+function extraTokens(base, titles) {
+    const words = normalize(base).split(' ').filter(w => w && !SLUG_MARKERS.has(w) && !/^\d+$/.test(w));
+    let best = null;
+    for (const t of titles.slice(0, 6)) {
+        const tt = new Set(tokens(t));
+        const missing = words.filter(w => !tt.has(w));
+        if (!best || missing.length < best.length) best = missing;
+        if (!best.length) break;
     }
-    const searchWords = nSearch.split(/\s+/).filter(w => w.length > 2);
-    if (searchWords.length === 0) return false;
-    const matched = searchWords.filter(w => nResult.includes(w));
-    return matched.length >= Math.min(searchWords.length, 2);
+    return best || words;
+}
+
+// ─── Catalogue (sitemap) ─────────────────────────────────────────────────────
+
+let _catalog = null; // cache intra-exécution (QuickJS : pas d'état entre appels)
+
+/**
+ * Catalogue des fiches depuis `sitemap.xml`.
+ * @returns {Promise<Array<{url, slug, title, season, lang, isFilm}>>}
+ */
+async function getCatalog(signal) {
+    if (_catalog) return _catalog;
+    let xml = null;
+    try {
+        xml = await fetchText(`${BASE_URL}/sitemap.xml`, { signal });
+    } catch (e) {
+        console.warn(`[Vostfree] Sitemap indisponible (${e && e.message}) — repli recherche`);
+        _catalog = [];
+        return _catalog;
+    }
+    const out = [];
+    const re = /<loc>\s*(https?:\/\/[^<\s]+\.html)\s*<\/loc>\s*(?:<lastmod>([^<]*)<\/lastmod>)?/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+        const url = m[1].trim();
+        const path = url.replace(/^https?:\/\/[^/]+/i, '').replace(/^\//, '');
+        let slug = path.replace(/\.html$/i, '').replace(/^\d+-/, '');
+        // Queue SEO du site : « -ddl-streaming… », « -telecharger-streaming… »
+        slug = slug.replace(/-(?:ddl|telecharger)-.*$/i, '');
+        if (!slug) continue;
+        const lang = /-vostfr(?:-|$)/i.test(slug) ? 'VOSTFR' : (/-vf(?:-|$)/i.test(slug) ? 'VF' : 'VOSTFR');
+        const base = slug.replace(/-(?:vf|vostfr)$/i, '');
+        out.push({
+            url,
+            slug,
+            base,
+            title: base.replace(/-/g, ' '),
+            season: getSeasonNumber(base),
+            lang,
+            isFilm: FILM_MARKER.test(base),
+        });
+    }
+    _catalog = out;
+    console.log(`[Vostfree] Catalogue: ${out.length} fiche(s) (sitemap)`);
+    return out;
 }
 
 /**
- * Search for the anime on Vostfree
- * Returns array of { title, url, genre? }
- * @param {string} title
- * @param {object} [opts]
- * @param {AbortSignal} [opts.signal] - Signal d'annulation
+ * Fiches candidates pour un contenu TMDB, triées par pertinence :
+ * saison exacte > pas de saison (page « plate ») > autre saison ;
+ * puis recouvrement du titre.
  */
-async function searchAnime(title, opts = {}) {
-    const signal = opts.signal || null;
-    if (isAborted(signal)) {
-        console.log(`[Vostfree] Aborted before search: "${title}"`);
-        return [];
+function buildCandidates(catalog, titles, isMovie, seasonForRanking) {
+    const cands = [];
+    for (const entry of catalog) {
+        // ⚠ Un film peut être stocké SANS marqueur (« demon-slayer-…-le-train-de-
+        // l-infini-vostfr ») et une série peut porter le même titre de base :
+        // c'est le score (recouvrement + mots en trop) qui tranche, pas le
+        // marqueur. Seule la demande TV exclut les fiches explicitement film.
+        if (!isMovie && entry.isFilm) continue;
+
+        let best = 0;
+        for (const t of titles.slice(0, 6)) best = Math.max(best, coverage(entry.base, t));
+        if (best < 0.7) continue;
+
+        // Pénalité pour les fiches d'un AUTRE contenu de la même franchise
+        // (Demon Slayer : « le train de l'infini », « la forteresse infinie »…).
+        let score = best * 100 - extraTokens(entry.base, titles).length * 15;
+        if (!isMovie && seasonForRanking != null) {
+            if (entry.season === seasonForRanking) score += 60;
+            else if (entry.season == null) score += 10;
+            else score -= 40;
+        }
+        if (isMovie && entry.isFilm) score += 20;
+        cands.push({ ...entry, score });
     }
+    cands.sort((a, b) => b.score - a.score);
+    return cands;
+}
+
+// ─── Fiches ──────────────────────────────────────────────────────────────────
+
+/**
+ * Repère le `buttons_N` de l'épisode demandé dans une fiche.
+ * Le texte des options est la seule source fiable (`buttons_747` = ép. 747).
+ * @returns {{buttonsId: string, label: string}|null}
+ */
+function findEpisodeButtons($, episodeNums, isMovie) {
+    const wanted = new Set(episodeNums.filter(n => Number.isFinite(n) && n > 0));
+    let found = null;
+    let firstOption = null;
+    $('select.new_player_selector option, select[name="new_player_selector"] option').each((i, el) => {
+        const text = $(el).text().trim();
+        const val = $(el).attr('value') || '';
+        if (!firstOption) firstOption = { value: val, text };
+        const m = text.match(/[Ee]pisode\s*0*(\d+)/);
+        if (!m) return;
+        const num = parseInt(m[1], 10);
+        if (wanted.has(num)) {
+            found = { buttonsId: val, label: text, num };
+            return false;
+        }
+    });
+    if (found) return found;
+
+    // Fiche FILM : l'unique option est libellée « Film » (pas « Episode 01 »).
+    if (isMovie) {
+        const val = firstOption ? firstOption.value : 'buttons_1';
+        return { buttonsId: val || 'buttons_1', label: 'Film', num: null };
+    }
+    // Pas de sélecteur du tout = fiche mono-épisode (film, épisode unique).
+    if (!$('select.new_player_selector').length && firstOption === null) {
+        return { buttonsId: 'buttons_1', label: 'épisode unique', num: null };
+    }
+    return null;
+}
+
+/**
+ * Saison annoncée par une fiche. La source fiable est la ligne d'en-tête DLE
+ * `<li>… Saison:&nbsp;<b>01</b></li>` (présente même quand le slug et le h1
+ * n'ont aucun marqueur : « jujutsu-kaisen-vostfr » → Saison 01). On retombe
+ * ensuite sur le h1/titre (« Saison 2 », « Season 2 »).
+ */
+function pageSeason($) {
     try {
-        const results = [];
-        const seen = new Set();
+        let found = null;
+        $('ul.slide-top li').each((i, el) => {
+            if (found != null) return;
+            const m = $(el).text().match(/saison\s*:?\s*0*(\d{1,2})\b/i)
+                || $(el).text().match(/season\s*:?\s*0*(\d{1,2})\b/i);
+            if (m) found = parseInt(m[1], 10);
+        });
+        if (found != null) return found;
 
-        const add = (h, t, genre) => {
-            if (h && h.length > 10 && t && t.length > 2 && !seen.has(h)) {
-                seen.add(h);
-                const r = { title: t, url: h.startsWith('http') ? h : BASE_URL + h };
-                if (genre) r.genre = genre;
-                results.push(r);
-            }
-        };
-
-        // --- Method 1: POST search (returns targeted results) ---
-        try {
-            const postHtml = await fetchText(`${BASE_URL}/index.php?do=search`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Referer': BASE_URL,
-                    'Origin': BASE_URL,
-                },
-                body: `do=search&subaction=search&story=${encodeURIComponent(title)}`,
-                signal
-            });
-            const $ = cheerio.load(postHtml);
-            $('.search-result').each((i, block) => {
-                const link = $(block).find('.title a');
-                const h = link.attr('href') || '';
-                const t = link.text().trim() || link.attr('title') || '';
-                const genre = $(block).find('.genre').text().trim().toUpperCase();
-                if (h && t && (h.includes(BASE_URL) || h.startsWith('/')) && t.length > 2) {
-                    add(h, t, genre || undefined);
-                }
-            });
-        } catch (e) { /* POST failed, fall through to GET */ }
-
-        // --- Method 2: GET /?s= (broader search, disabled for performance) ---
-        // if (results.length === 0) { ... }
-
-        console.log(`[Vostfree] Results found: ${results.length}`);
-        for (const r of results) {
-            console.log(`[Vostfree]   result: "${r.title}" | ${r.url}`);
-        }
-
-        const matches = results.filter(r => titleMatches(r.title, title));
-
-        if (matches.length > 0) {
-            console.log(`[Vostfree] Found ${matches.length} matches for "${title}"`);
-        }
-        return matches;
+        const text = `${$('h1').first().text()} ${$('title').first().text()}`;
+        const m = text.match(/saison\s*:?\s*0*(\d{1,2})\b/i) || text.match(/season\s*:?\s*0*(\d{1,2})\b/i);
+        return m ? parseInt(m[1], 10) : null;
     } catch (e) {
-        console.error(`[Vostfree] Search error: ${e.message}`);
+        return null;
+    }
+}
+
+/** URL d'embed d'un lecteur, à partir de sa classe `new_player_xxx`. */
+function playerUrl(elClass, content) {
+    if (!content) return null;
+    if (/^https?:\/\//i.test(content)) return content.trim();
+    const id = content.trim();
+    const host = (String(elClass).match(/new_player_([a-z0-9]+)/) || [])[1] || '';
+    switch (host) {
+        case 'sibnet': return `https://video.sibnet.ru/shell.php?videoid=${id}`;
+        case 'uqload': return `https://uqload.is/embed-${id}.html`;
+        case 'oneupload': return `https://oneupload.to/embed-${id}.html`;
+        case 'vidmoly': return `https://vidmoly.to/embed-${id}.html`;
+        case 'sendvid': return `https://sendvid.com/embed/${id}`;
+        // Modèles repris du JS du site (`templates/Animix/js/anime.js`) : le
+        // site ne stocke que l'ID et construit l'iframe côté navigateur.
+        case 'myvi': return `https://myvi.ru/player/embed/html/${id}`;
+        case 'mytv': return `https://www.myvi.tv/embed/${id}`;
+        case 'ok': return `https://ok.ru/videoembed/${id}`;
+        case 'fembed': return `https://fembed.com/v/${id}`;
+        case 'rutube': return `https://rutube.ru/play/embed/${id}`;
+        case 'kaztube': return `https://kaztube.kz/video/embed/${id}`;
+        case 'gtv': return `https://iframedream.com/embed/${id}.html`;
+        case 'mail2': return `https://my.mail.ru/video/embed/${id}`;
+        case 'voe': return `https://voe.sx/e/${id}`;
+        case 'dood': return `https://dood.to/e/${id}`;
+        case 'stape':
+        case 'streamtape': return `https://streamtape.com/e/${id}`;
+        default: return null; // `vip` (getvid/upvid), `moevideo` (ninjastream), `mp4`
+    }
+}
+
+async function resolvePlayer(embedUrl, lang, label, signal, startTime) {
+    if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return null;
+    const lower = embedUrl.toLowerCase();
+    if (UNRESOLVABLE_HOSTS.some(h => lower.includes(h))) return null;
+    const versionTag = lang === 'VF' ? 'VF' : 'VOSTFR';
+    try {
+        const resolved = await withTimeout(
+            resolveStream({
+                name: `Vostfree (${versionTag})`,
+                title: `[${versionTag}] ${label}`,
+                url: embedUrl,
+                quality: 'HD',
+                language: lang === 'VF' ? 'fr' : 'ja',
+                headers: { Referer: `${BASE_URL}/` },
+            }, 0),
+            PLAYER_TIMEOUT_MS,
+            'Vostfree player'
+        );
+        if (!resolved || !resolved.url || resolved.isDirect === false) return null;
+        if (String(resolved.url).includes('[object')) return null;
+        delete resolved.isDirect;
+        delete resolved.originalUrl;
+        return resolved;
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Repli : recherche POST du site (incomplète, utile pour les nouveautés). */
+async function searchLegacy(title, signal) {
+    try {
+        const html = await fetchText(`${BASE_URL}/index.php?do=search`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Referer: BASE_URL,
+                Origin: BASE_URL,
+            },
+            body: `do=search&subaction=search&story=${encodeURIComponent(title)}`,
+            signal,
+        });
+        const $ = cheerio.load(html);
+        const out = [];
+        $('.search-result').each((i, block) => {
+            const link = $(block).find('.title a');
+            const href = link.attr('href') || '';
+            const text = link.text().trim() || link.attr('title') || '';
+            if (!href || text.length < 2) return;
+            const url = href.startsWith('http') ? href : `${BASE_URL}${href}`;
+            const slug = url.replace(/^https?:\/\/[^/]+/i, '').replace(/^\//, '').replace(/\.html$/i, '').replace(/^\d+-/, '');
+            const clean = slug.replace(/-(?:ddl|telecharger)-.*$/i, '');
+            const lang = /-vostfr(?:-|$)/i.test(clean) ? 'VOSTFR' : (/-vf(?:-|$)/i.test(clean) ? 'VF' : 'VOSTFR');
+            const base = clean.replace(/-(?:vf|vostfr)$/i, '');
+            out.push({
+                url,
+                slug: clean,
+                base,
+                title: text || base.replace(/-/g, ' '),
+                season: getSeasonNumber(base),
+                lang,
+                isFilm: FILM_MARKER.test(base),
+                score: 0,
+            });
+        });
+        return out;
+    } catch (e) {
+        console.warn(`[Vostfree] Recherche POST en échec: ${e && e.message}`);
         return [];
     }
 }
 
+// ─── Entrée ──────────────────────────────────────────────────────────────────
+
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
-  const signal = options?.signal || null;
-  if (isAborted(signal)) return [];
-  setCurrentSignal(signal);
+    const signal = options?.signal || null;
+    if (isAborted(signal)) return [];
+    setCurrentSignal(signal);
 
-  const titles = await getTmdbTitles(tmdbId, mediaType, { season });
-  if (!titles || titles.length === 0) return [];
+    const startTime = Date.now();
+    const isMovie = mediaType === 'movie';
+    const tvType = isMovie ? 'movie' : 'tv';
 
-  const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : season;
-  const startTime = Date.now();
+    // Convention app : season=null + épisode ABSOLU (IDs kitsu:/mal:) → reverse-map.
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: tvType, startTime, budgetMs: BUDGET_MS });
+    const seasonNum = isMovie ? null : Math.max(1, se.season || 1);
+    const epNum = Math.max(1, se.episode || 1);
 
-  // Trier les titres : français d'abord (Vostfree est FR)
-  const isFrenchTitle = (t) => /[àâéèêëîïôùûüçœæ']/i.test(t);
-  const titlesOrdered = [
-      ...titles.filter(isFrenchTitle),
-      ...titles.filter(t => !isFrenchTitle(t))
-  ];
+    let titles = [];
+    try {
+        titles = await getTmdbTitles(tmdbId, tvType, { season: seasonNum != null ? seasonNum : season });
+    } catch (e) {
+        if (isAborted(signal)) return [];
+    }
+    if (!titles || titles.length === 0) return [];
 
-  // Résoudre les épisodes cibles via ArmSync
-  // ('series' = convention app, 'tv' = attendu par l'outil partagé)
-  const targetEpisodes = await resolveTargetEpisodes(tmdbId, mediaType === 'series' ? 'tv' : mediaType, season, episode, { startTime, budgetMs: BUDGET_MS });
-  const episodeStrs = targetEpisodes.map(String);
+    const effectiveSeason = titles.effectiveSeason != null ? titles.effectiveSeason : seasonNum;
 
-  // Convention app TV : season=null + épisode absolu (IDs anime kitsu:/mal:).
-  // Reverse-map l'absolu vers (S,E) TMDB pour orienter le tri vers la page de
-  // la bonne saison (sinon la 1re page au numéro d'épisode correspondant gagne,
-  // souvent la S1 → faux contenu pour les requêtes absolues S2+).
-  let absoluteSeasonHint = null;
-  if (mediaType !== 'movie' && (season == null || season === '')) {
-      const se = await getSeasonEpisodeFromAbsolute(tmdbId, parseInt(episode, 10));
-      if (se) absoluteSeasonHint = se.season;
-  }
-  // Saison effective pour le tri/filtrage : hint absolu (requête TV absolue)
-  // sinon saison demandée. Déclaré ici — utilisé par le deep fallback ET le tri.
-  const seasonForRanking = absoluteSeasonHint != null ? absoluteSeasonHint : effectiveSeason;
+    // Numéros d'épisode acceptés : local ET absolu (les fiches mélangent les
+    // deux conventions selon la série).
+    let episodeNums = [epNum];
+    let absNum = null;
+    try {
+        const target = await resolveTargetEpisodes(tmdbId, tvType, season, episode, { startTime, budgetMs: BUDGET_MS });
+        if (Array.isArray(target) && target.length) {
+            episodeNums = target.map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0);
+        }
+    } catch (e) { /* garde [epNum] */ }
+    if (!episodeNums.includes(epNum)) episodeNums.unshift(epNum);
+    absNum = episodeNums.find(n => n > epNum) || null;
+    console.log(`[Vostfree] ${isMovie ? 'Film' : `S${seasonNum}E${epNum}`} — épisodes acceptés: ${episodeNums.join(', ')}${absNum ? ` (dont absolu ${absNum})` : ''}`);
 
-  let allMatches = [];
-  const seenUrls = new Set();
+    // 1. Catalogue sitemap (autorité) puis repli recherche POST.
+    const catalog = await getCatalog(signal);
+    let candidates = catalog.length ? buildCandidates(catalog, titles, isMovie, isMovie ? null : (effectiveSeason != null ? effectiveSeason : seasonNum)) : [];
 
-  const searchables = [];
-  for (const title of titlesOrdered.slice(0, MAX_SEARCH_TITLES)) {
-      if (title.length > 60 || title.length < MIN_QUERY_LENGTH) continue;
-      const n = normalize(title);
-      if (!n) continue;
-      searchables.push(title);
-  }
-  
-  // OPTIMISATION: Recherche séquentielle avec early-exit
-  // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
-  for (let i = 0; i < searchables.length && !isBudgetExhausted(startTime, BUDGET_MS) && !isAborted(signal); i++) {
-      const title = searchables[i];
-      try {
-          const results = await searchAnime(title, { signal });
-          if (results && results.length > 0) {
-              for (const m of results) {
-                  if (!seenUrls.has(m.url)) {
-                      seenUrls.add(m.url);
-                      allMatches.push(m);
-                  }
-              }
-          }
-      } catch (e) { /* skip failed search */ }
-      // Early exit: si on a déjà des résultats, arrêter les recherches
-      if (allMatches.length > 0) {
-          console.log(`[Vostfree] Found ${allMatches.length} matches after ${i + 1}/${searchables.length} searches, stopping early`);
-          break;
-      }
-  }
-  
-  // Fix #2: Fallback saison optimisé — 1 seule requête stratégique au lieu de 9+
-  if (!isAborted(signal) && isTvMediaType(mediaType) && effectiveSeason !== undefined && effectiveSeason !== null && !isBudgetExhausted(startTime, BUDGET_MS)) {
-      const hasExplicitSeasonMatch = allMatches.some(m => getSeasonNumber(m.title + ' ' + m.url) === seasonForRanking);
-      
-      if (!hasExplicitSeasonMatch) {
-          // Trouver le meilleur titre pour la recherche : 1er titre purement ASCII (ex: anglais/français)
-          const mainTitle = titlesOrdered.find(t => !/[^\x00-\x7F]/.test(t) && t.length >= MIN_QUERY_LENGTH) || 
-                            titlesOrdered.find(t => t.length >= MIN_QUERY_LENGTH) || 
-                            titlesOrdered[0];
-          if (mainTitle && mainTitle.length >= MIN_QUERY_LENGTH) {
-              const seasonQuery = `${mainTitle} Saison ${seasonForRanking}`;
-              console.log(`[Vostfree] Season fallback: "${seasonQuery}"`);
-              const batch = await searchAnime(seasonQuery, { signal });
-              if (batch && batch.length > 0) {
-                  for (const m of batch) {
-                      if (!seenUrls.has(m.url)) {
-                          seenUrls.add(m.url);
-                          const mSn = getSeasonNumber(m.title + ' ' + m.url);
-                          if (mSn === null || mSn === seasonForRanking) {
-                              allMatches.push(m);
-                          }
-                      }
-                  }
-              }
-          }
-      }
-  }
-  
-  if (allMatches.length === 0) return [];
-
-  // Prioritize results that match the season if explicitly mentioned
-  if (isTvMediaType(mediaType) && seasonForRanking !== undefined && seasonForRanking !== null) {
-      allMatches = allMatches.sort((a, b) => {
-          const aSn = getSeasonNumber(a.title + ' ' + a.url);
-          const bSn = getSeasonNumber(b.title + ' ' + b.url);
-          const hasA = aSn === seasonForRanking;
-          const hasB = bSn === seasonForRanking;
-          if (hasA && !hasB) return -1;
-          if (!hasA && hasB) return 1;
-          return 0;
-      });
-  }
-
-  const streams = [];
-  const checkedUrls = new Set();
-  const MAX_MATCHES_TO_PROCESS = 2;
-  let processedCount = 0;
-
-  for (const match of allMatches) {
-      if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
-      if (checkedUrls.has(match.url)) continue;
-      checkedUrls.add(match.url);
-      if (processedCount >= MAX_MATCHES_TO_PROCESS) break;
-
-      const matchLower = match.title.toLowerCase();
-      const matchUrlLower = match.url.toLowerCase();
-      const animeUrl = match.url;
-      const lang = (match.title.toUpperCase().includes(' VF') || match.url.includes('/vf/')) ? 'VF' : 'VOSTFR';
-
-      // Skip OAV/OVA/FILM/Movie/Special results for TV series (non-film entries)
-      if (isTvMediaType(mediaType)) {
-          const skipKeywords = /\b(oav|ova|film|movie)\b/;
-          if (match.genre === 'FILM' || match.genre === 'OAV' ||
-              skipKeywords.test(matchLower) || skipKeywords.test(matchUrlLower)) {
-              continue;
-          }
-      }
-
-      // Skip results explicitly for a different season, unless no match has the target season
-      if (isTvMediaType(mediaType) && seasonForRanking !== undefined && seasonForRanking !== null) {
-          const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-          if (matchSn !== null && matchSn !== seasonForRanking) {
-              const hasCorrectSeason = allMatches.some(m => {
-                  const sn = getSeasonNumber(m.title + ' ' + m.url);
-                  return sn !== null && sn === seasonForRanking;
-              });
-              if (hasCorrectSeason) continue;
-          }
-      }
-
-      processedCount++;
-      try {
-          const html = await fetchText(animeUrl, { signal });
-            const $ = cheerio.load(html);
-
-            let buttonsId = null;
-
-            // Movies: no episode selector, use default buttons_1
-            if (mediaType === 'movie') {
-                buttonsId = 'buttons_1';
-            } else {
-                // TV: find episode in selector (Fix #1: utiliser episodeStrs avec l'absolu en priorité)
-                const buttonOptions = [];
-                const episodeMatches = (text, num) => {
-                    const m = String(text || '').match(/[Ee]pisode\s*(0*)(\d+)/i);
-                    return m ? parseInt(m[1] + m[2], 10) === num : false;
-                };
-                $('select.new_player_selector option').each((i, el) => {
-                    const text = $(el).text().trim();
-                    buttonOptions.push(text);
-                    for (const ep of episodeStrs) {
-                        const epNum = parseInt(ep, 10);
-                        const numMatch = text.match(/[Ee]pisode\s*(0*)(\d+)/i);
-                        if (numMatch) {
-                            const parsedEp = parseInt(numMatch[1] + numMatch[2], 10);
-                            if (parsedEp === epNum) {
-                                buttonsId = $(el).val();
-                                return false;
-                            }
-                        }
-                    }
-                });
-
-                // Fix #3 (saison-probe) : une page SANS marqueur de saison (ex
-                // "Jujutsu Kaisen FRENCH") héberge la saison 1. Pour une S2+,
-                // servir l'épisode de même numéro = faux contenu cross-saison.
-                // La page ambiguë n'est acceptée que si l'épisode ABSOLU y est
-                // aussi (page multi-saisons) ; sinon on refuse le match.
-                {
-                    const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-                    const isSeasonLess = matchSn === null;
-                    const epNum = parseInt(episodeStrs[0], 10);
-                    const absNum = episodeStrs.length > 1 ? parseInt(episodeStrs[1], 10) : null;
-                    if (buttonsId && isSeasonLess && effectiveSeason != null && effectiveSeason > 1 && absNum != null) {
-                        const hasSimple = buttonOptions.some(t => episodeMatches(t, epNum));
-                        const hasAbs = buttonOptions.some(t => episodeMatches(t, absNum));
-                        if (hasSimple && !hasAbs) {
-                            console.warn(`[Vostfree] Ambiguous season-less page (Ep${epNum} present, absolute Ep${absNum} absent) for S${effectiveSeason} — skipping ${animeUrl}`);
-                            continue;
-                        }
-                    }
-                }
-
-                // Fallback: if selector exists but empty (single-episode page), use buttons_1
-                if (!buttonsId) {
-                    const hasSelector = $('select.new_player_selector').length > 0;
-                    if (hasSelector) {
-                        console.warn(`[Vostfree] Episode ${episode} not found in selector on ${animeUrl}`);
-                        continue;
-                    }
-                }
+    if (!candidates.length && !isAborted(signal)) {
+        for (const title of titles.slice(0, MAX_SEARCH_TITLES)) {
+            if (isBudgetExhausted(startTime, BUDGET_MS)) break;
+            const found = await searchLegacy(title, signal);
+            if (!found.length) continue;
+            candidates = buildCandidates(found, titles, isMovie, isMovie ? null : seasonNum);
+            if (candidates.length) {
+                console.log(`[Vostfree] Repli recherche: ${candidates.length} candidat(s) pour "${title}"`);
+                break;
             }
-
-            if (!buttonsId) {
-                buttonsId = 'buttons_1';
-            }
-
-            console.log(`[Vostfree] Using buttons ID: ${buttonsId} for ${lang}`);
-            const playerElements = $(`#${buttonsId} div[id^="player_"]`).toArray();
-
-            // Priorité sibnet → uqload → reste ; pas de rejet de host inconnu
-            // (les rotations du site ne doivent plus rendre le provider muet)
-            const priorityOf = (el) => {
-                const elClass = ($(el).attr('class') || '').toLowerCase();
-                const pName = $(el).text().trim().toLowerCase();
-                const combined = elClass + ' ' + pName;
-                for (let i = 0; i < HOST_PRIORITY.length; i++) {
-                    if (combined.includes(HOST_PRIORITY[i])) return i;
-                }
-                return HOST_PRIORITY.length; // inconnus après les connus
-            };
-            const filteredPlayers = [...playerElements].sort((a, b) => priorityOf(a) - priorityOf(b));
-
-            // OPTIMISATION: Résolution séquentielle avec early-exit
-            // (fetch synchrone en QuickJS = Promise.allSettled ne parallélise pas)
-            const TARGET_DIRECT = 2;
-            for (const el of filteredPlayers) {
-                if (streams.filter(s => s && s.isDirect).length >= TARGET_DIRECT) break;
-                if (isBudgetExhausted(startTime, BUDGET_MS)) break;
-
-                const playerId = $(el).attr('id').replace('player_', '');
-                const playerName = $(el).text().trim() || "Player";
-                const elClass = ($(el).attr('class') || '').toLowerCase();
-
-                const contentDivId = `content_player_${playerId}`;
-                const content = $(`#${contentDivId}`).text().trim();
-
-                if (!content) continue;
-
-                let url = content;
-                if (!url.startsWith('http')) {
-                    if (elClass.includes('sibnet') || playerName.toLowerCase().includes('sibnet')) {
-                        url = `https://video.sibnet.ru/shell.php?videoid=${content}`;
-                    } else if (elClass.includes('vidmoly') || playerName.toLowerCase().includes('vidmoly')) {
-                        url = `https://vidmoly.to/embed-${content}.html`;
-                    } else if (elClass.includes('uqload') || elClass.includes('oneupload') || playerName.toLowerCase().includes('uqload') || playerName.toLowerCase().includes('oneupload')) {
-                        url = `https://uqload.com/embed-${content}.html`;
-                    } else if (elClass.includes('sendvid') || playerName.toLowerCase().includes('sendvid')) {
-                        url = `https://sendvid.com/embed/${content}`;
-                    } else if (elClass.includes('voe') || playerName.toLowerCase().includes('voe')) {
-                        url = `https://voe.sx/e/${content}`;
-                    } else if (elClass.includes('dood') || playerName.toLowerCase().includes('dood')) {
-                        url = `https://dood.to/e/${content}`;
-                    } else if (elClass.includes('stape') || elClass.includes('streamtape') || playerName.toLowerCase().includes('stape') || playerName.toLowerCase().includes('streamtape')) {
-                        url = `https://streamtape.com/e/${content}`;
-                    } else if (elClass.includes('myvi') || elClass.includes('mytv') || playerName.toLowerCase().includes('myvi') || playerName.toLowerCase().includes('mytv')) {
-                        url = `https://www.myvi.ru/embed/${content}`;
-                    } else if (elClass.includes('vip')) {
-                        if (content.includes('voe.sx') || content.includes('vudeo')) {
-                            url = content;
-                        }
-                    } else if (elClass.includes('mail') || elClass.includes('ok')) {
-                    }
-                }
-
-                if (!url.startsWith('http')) continue;
-
-                const urlLower = url.toLowerCase();
-                const isUnresolvable = UNRESOLVABLE_HOSTS.some(h => urlLower.includes(h));
-                if (isUnresolvable) {
-                    // Convention repo : ne JAMAIS retourner d'embed irrésolu
-                    // (non jouable par ExoPlayer) — on ignore ce player.
-                    continue;
-                }
-                try {
-                    const stream = await withTimeout(
-                        resolveStream({
-                            name: `Vostfree (${lang})`,
-                            title: `${playerName} - ${lang}`,
-                            url: url,
-                            quality: "HD",
-                            language: 'fr',
-                            headers: { "Referer": BASE_URL }
-                        }),
-                        PLAYER_TIMEOUT_MS,
-                        `Vostfree player ${playerName}`
-                    );
-                    if (stream) streams.push(stream);
-                } catch(e) { /* skip failed player */ }
-            }
-            const directStreams = streams.filter(s => s && s.isDirect);
-            if (directStreams.length > 0) {
-                const matchSn = getSeasonNumber(match.title + ' ' + match.url);
-                const isExplicitlyWrong = matchSn !== null && matchSn !== effectiveSeason;
-                if (!isExplicitlyWrong) {
-                    console.log(`[Vostfree] Found ${directStreams.length} direct streams from ${animeUrl}, stopping early`);
-                    break;
-                } else {
-                    console.log(`[Vostfree] Found ${directStreams.length} direct streams but match season ${matchSn} != target ${effectiveSeason}, continuing search`);
-                }
-            }
-        } catch (e) {
-            console.error(`[Vostfree] Match handle error: ${e.message}`);
         }
     }
 
-    const directStreams = streams.filter(s => s && s.isDirect);
-    const embedCount = streams.filter(s => s && !s.isDirect && s.url).length;
+    if (!candidates.length) {
+        console.warn('[Vostfree] Aucune fiche pour ce contenu');
+        return [];
+    }
+    console.log(`[Vostfree] ${candidates.length} fiche(s) candidate(s): ${candidates.slice(0, 4).map(c => `${c.base}${c.season ? `(S${c.season})` : ''}/${c.lang}`).join(', ')}`);
 
-    // Convention repo : ne JAMAIS servir d'embed non résolu en fallback
-    // (non jouable par ExoPlayer) — uniquement les directs.
-    const validStreams = directStreams;
-    console.log(`[Vostfree] Total streams found: ${validStreams.length} (${directStreams.length} direct, ${embedCount} embed rejeté)`);
+    const streams = [];
+    const seenEmbeds = new Set();
+    const found = new Set(); // langues pour lesquelles on a des flux
+    let pagesTried = 0;
+    const pageCache = new Map(); // url → html (évite de re-sonder en repli)
 
-    const cleaned = validStreams.map(s => ({
-        name: s.name || 'Vostfree',
-        title: s.title || 'Stream',
-        url: s.url || '',
-        quality: s.quality || 'HD',
-        language: s.language || 'fr',
-        isDirect: !!s.isDirect,
-        headers: s.headers || {}
-    }));
-    
-    return sortStreamsByLanguage(cleaned);
+    // Deux passes : saison exacte d'abord ; si elle ne donne rien, repli
+    // **explicite** sur la saison réellement disponible (le site ne garde
+    // souvent qu'une saison par série), annoncée dans le titre des flux.
+    for (const allowOtherSeason of [false, true]) {
+        if (allowOtherSeason) {
+            if (isMovie || streams.length) break;
+            if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+            console.log(`[Vostfree] Saison ${effectiveSeason} sans flux — repli explicite sur la saison disponible`);
+            pagesTried = 0;
+            found.clear();
+        }
+        const pageLimit = allowOtherSeason ? MAX_FALLBACK_PAGES : MAX_PAGES;
+
+        for (const cand of candidates) {
+            if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+            if (pagesTried >= pageLimit) break;
+            if (found.has(cand.lang) && found.size >= 2) break;
+            if (streams.length >= MAX_STREAMS) break;
+
+            // Saison : une fiche explicitement d'une autre saison, ou une fiche
+            // sans marqueur de saison pour une demande S2+ dont l'absolu est
+            // inconnu (elle peut être la S1), est écartée en passe stricte. En
+            // passe de repli, elle est servie avec la saison réelle dans le titre.
+            const seasonMismatch = !isMovie && effectiveSeason != null
+                && cand.season != null && cand.season !== effectiveSeason;
+            const ambiguous = !isMovie && effectiveSeason != null
+                && effectiveSeason > 1 && cand.season == null;
+            const needsFallback = seasonMismatch || (ambiguous && !absNum);
+            if (!allowOtherSeason && needsFallback) {
+                if (seasonMismatch) {
+                    console.log(`[Vostfree] ${cand.base}: saison ${cand.season} (demandée ${effectiveSeason}) — écartée`);
+                } else {
+                    console.log(`[Vostfree] ${cand.base}: saison ${effectiveSeason} demandée mais fiche sans saison et absolu inconnu — écartée`);
+                }
+                continue;
+            }
+            let html = pageCache.get(cand.url);
+            if (html === undefined) {
+                pagesTried++;
+                try {
+                    html = await fetchText(cand.url, { signal });
+                } catch (e) {
+                    if (isAborted(signal)) break;
+                    continue;
+                }
+                pageCache.set(cand.url, html);
+            }
+            const $ = cheerio.load(html);
+
+            // En passe de repli, la saison réellement servie va dans le titre :
+            // marqueur du slug, sinon « Saison N » affichée sur la fiche.
+            let seasonNote = null;
+            if (allowOtherSeason) {
+                const real = cand.season != null ? cand.season : pageSeason($);
+                seasonNote = real != null
+                    ? `Saison ${real} (S${effectiveSeason} absente du site)`
+                    : `Saison du site (S${effectiveSeason} absente)`;
+            }
+
+            // Un film n'a qu'un lecteur : si la fiche expose un sélecteur multi-
+            // épisodes, c'est une fiche SÉRIE (ex. « le train de l'infini » = arc
+            // TV en 7 épisodes) → jamais l'épisode 1 pour une demande film.
+            if (isMovie && $('select.new_player_selector option').length > 1) {
+                console.log(`[Vostfree] ${cand.base}: fiche série ignorée pour une demande film`);
+                continue;
+            }
+
+            const target = findEpisodeButtons($, ambiguous && absNum && !allowOtherSeason ? [absNum] : episodeNums, isMovie);
+            if (!target) {
+                console.log(`[Vostfree] ${cand.base}: épisode ${episodeNums.join('/')} absent du sélecteur`);
+                continue;
+            }
+
+            const players = $(`#${target.buttonsId} div[id^="player_"]`).toArray();
+            if (!players.length) {
+                console.log(`[Vostfree] ${cand.base}: aucun lecteur dans ${target.buttonsId}`);
+                continue;
+            }
+
+            const priority = (el) => {
+                const cls = ($(el).attr('class') || '').toLowerCase();
+                for (let i = 0; i < HOST_PRIORITY.length; i++) if (cls.includes(HOST_PRIORITY[i])) return i;
+                return HOST_PRIORITY.length;
+            };
+            const ordered = [...players].sort((a, b) => priority(a) - priority(b));
+
+            let resolvedHere = 0;
+            for (const el of ordered) {
+                if (resolvedHere >= TARGET_DIRECT_PER_LANG) break;
+                if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+
+                const id = ($(el).attr('id') || '').replace('player_', '');
+                const elClass = ($(el).attr('class') || '').toLowerCase();
+                const rawContent = $(`#content_player_${id}`).text().trim();
+                const url = playerUrl(elClass, rawContent);
+                if (!url || seenEmbeds.has(url)) continue;
+                seenEmbeds.add(url);
+
+                const label = `${($(el).text().trim() || 'Lecteur')}${target.num ? ` - Ép.${target.num}` : ''}${seasonNote ? ` · ${seasonNote}` : ''}`;
+                const st = await resolvePlayer(url, cand.lang, label, signal, startTime);
+                if (!st) continue;
+                st.name = st.name || `Vostfree (${cand.lang})`;
+                st.title = st.title || `[${cand.lang}] ${label}`;
+                st.language = cand.lang === 'VF' ? 'fr' : 'ja';
+                streams.push(st);
+                resolvedHere++;
+            }
+
+            if (resolvedHere > 0) found.add(cand.lang);
+            else console.log(`[Vostfree] ${cand.base} (${cand.lang}): 0 flux résolu`);
+        }
+        if (streams.length) break;
+    }
+
+    if (!streams.length) {
+        console.warn(`[Vostfree] 0 flux (${pagesTried} fiche(s) sondée(s))`);
+        return [];
+    }
+    console.log(`[Vostfree] ${streams.length} flux en ${Date.now() - startTime} ms`);
+    return sortStreamsByLanguage(streams);
 }

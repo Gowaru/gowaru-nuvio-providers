@@ -31,7 +31,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | # | Provider | 🎬 Content | 🌐 Lang | 💾 Formats | 📱 App | 📺 TV | 🏷️ Ver. |
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
 | 1 | **ADKami** | 🎬📺 | FR / JA | — | ✅ | ✅ | 0.1.2 |
-| 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.61 |
+| 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.2.0 |
 | 3 | **AnimeSite** | 🎬📺 | VOSTFR | HLS, MP4 | ✅ | ✅ | 0.2.0 |
 | 4 | **Anime-Ultime** ¹ | 🎬📺 | VF / VOSTFR | MP4 | ✅ | ✅ | 0.0.6 |
 | 5 | **AnimeVOST.fr** | 📺 _only_ | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.2.0 |
@@ -44,17 +44,17 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 12 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
 | 13 | **French-Anime** | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
 | 14 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
-| 15 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.1.3 |
+| 15 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.2.0 |
 | 16 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.21 |
-| 17 | **Neko-Sama** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.4 |
+| 17 | **Neko-Sama** ⁷ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.6 |
 | 18 | **SenAnimes** ⁶ | 🎬📺 | FR / JA | — | ⚠️ | ⚠️ | 0.1.3 |
-| 19 | **Sekai** ² | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.26 |
-| 20 | **VoirAnime** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.2.28 |
-| 21 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.2.0 |
-| 22 | **VoirAnime.one** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.3 |
-| 23 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.16 |
+| 19 | **Sekai** ² | 🎬📺 | VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.27 |
+| 20 | **VoirAnime** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.3.1 |
+| 21 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
+| 22 | **VoirAnime.one** ⁸ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ⚠️ | ⚠️ | 0.1.4 |
+| 23 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.17 |
 | 24 | **VoiranimeBE** | 🎬📺 | VOSTFR / JA | — | ✅ | ✅ | 0.1.2 |
-| 25 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.1.57 |
+| 25 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.3.1 |
 | 26 | **WaveAnime** ⁴ | 🎬📺 | VF / VOSTFR | DASH | ✅ | ✅ | 0.0.10 |
 
 ### 🎬 Movies & Series (11)
@@ -66,8 +66,8 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 29 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
 | 30 | **Frenchstream** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.24 |
 | 31 | **Movix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 0.1.6 |
-| 32 | **Nakios** | 🎬📺 | FR / EN | MP4 | ✅ | ✅ | 1.0.4 |
-| 33 | **Papadustream** | 🎬📺 | FR / EN | M3U8 | ✅ | ✅ | 1.1.1 |
+| 32 | **Nakios** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.1.1 |
+| 33 | **Papadustream** | 🎬📺 | FR / EN | M3U8 | ✅ | ✅ | 1.1.2 |
 | 34 | **StreamZo** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 1.0.7 |
 | 35 | **Voirdrama** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.4 |
 | 36 | **Webflix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.4 |
@@ -82,11 +82,13 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 >
 > **Notes:**
 > - ¹ **Anime-Ultime**: licensed series are excluded by the site (catalog limited to unlicensed animes).
-> - ² **Sekai**: direct MP4s (1080p/720p/360p) — multi-variant probing with rate limiting can exceed NuvioTV's 30 s window on large titles; disabled on TV (`disabledPlatforms: ["tv"]`).
+> - ² **Sekai**: VOSTFR uniquement (aucune VF sur le site). Direct MP4s (1080p/720p/360p) — multi-variant probing with rate limiting can exceed NuvioTV's 30 s window on large titles; disabled on TV (`disabledPlatforms: ["tv"]`).
 > - ³ **VoirAnime**: multi-host resolution (Sibnet, Uqload, Voe, Dood, Vidzy…) — the slowest titles can exceed NuvioTV's 30 s window; disabled on TV. The site also rate-limits by IP (Cloudflare 503 after a few dozen requests): the provider detects it and aborts the current run instead of burning its budget on retries.
 > - ⁴ **WaveAnime**: native DASH (MPD) playback via ExoPlayer/Media3 on NuvioMobile (Android) **and NuvioTV**. External ASS subtitles: NuvioMobile only (NuvioTV ignores the `subtitles` field).
 > - ⁵ **Coflix**: the site rotates domains (`coflix.wiki` → `301` → `coflix.gold`, root redirect) — the provider probes the live domain at runtime, then uses the theme AJAX API (`suggest` → `list-episode` → `player`) with a `/filter?keyword=` fallback. Streams hosted on `*.tnmr.org` (403) are dropped instead of being returned unplayable, and `dood.*`/`playmogo` embeds are detected as Cloudflare-Turnstile-gated instead of burning the budget (optional Turnstile solver available in the provider settings, disabled by default, needs your own CapSolver/2Captcha key).
 > - ⁶ **SenAnimes**: since 2026-10 the site requires a server-side Cloudflare Turnstile check (`403 {"error":"verification-humaine"}` on `/api/episode/source`, whatever the headers sent) — no source can be resolved from a plugin runtime, so the provider is kept for its catalogue/mapping logic but returns no stream. It detects the gate, exits in < 2 s and logs the reason instead of wasting the budget.
+> - ⁷ **Neko-Sama**: catalogue récupéré via le sitemap WordPress (1440 fiches, 1 requête) → plus de sondage de slugs à l'aveugle ni de faux matches ; les arcs One Piece en numérotation absolue sont remappés (`saga-2` = 62..143) ; jusqu'à 2 hébergeurs distincts par langue (vidmoly, sendvid…). Le site ne publie en général que de la VOSTFR (groupes `SUB:`). Titres absents du site : 0 stream en ~2 s.
+> - ⁸ **VoirAnime.one**: le domaine `voiranime.one` (moteur Next.js « Anisama ») a une délégation DNS cassée depuis 2026-11 et aucun miroir vivant n'est connu → 0 stream en ~2 s. Le provider sonde une liste de domaines à l'exécution (`CANDIDATE_HOSTS`) et repart automatiquement dès qu'un hôte répond.
 
 ---
 
@@ -98,7 +100,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 - **Fake-Direct filtering**: rejects sample links (Big Buck Bunny, known test URLs) before they reach the player.
 - **HLS quality expansion**: HLS masters are expanded into selectable resolutions (`2160p`, `1080p`, `720p`, `480p`, `360p`).
 - **Direct-Only Safety**: strictly outputs direct links (`.m3u8`, `.mp4`…) to reduce ExoPlayer errors; unresolved HTML embeds (`isDirect:false`) are **never** returned.
-- **Episode-mismatch guard**: strict season/episode validation (no silent fallback to another season), ArmSync for absolute numbering, anti-fan-edit and anti-homonym safeguards (title scoring).
+- **Episode-mismatch guard**: strict season/episode validation first; when the requested season is missing from the site, an explicit fallback serves the available season with the real season and episode number written in the stream title (never a silent substitution). ArmSync for absolute numbering, anti-fan-edit and anti-homonym safeguards (title scoring).
 - **Per-provider settings**: in-app UI (header/info/text/select/toggle) via `SCRAPER_SETTINGS` — driving providers: Frenchstream, Movix, Webflix.
 - **QuickJS-optimized**: string ops + `atob`/`btoa` polyfills, no `Buffer`/`setTimeout`/`process`, in-house time budgets (60 s plugin).
 
@@ -106,7 +108,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 
 | Variable | Provider | Default | Description |
 | :--- | :--- | :-: | :--- |
-| `NUVIO_NAKIOS_EXCLUDE_PREMIUM` | Nakios | `0` | `1` = excludes premium sources. If no free source is available, the provider returns 0 streams. |
+| `NUVIO_NAKIOS_SITE_URL` | Nakios | `https://nakios.live` | Overrides the scraping domain when the site rotates its TLD. |
 
 ---
 
