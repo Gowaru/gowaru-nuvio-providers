@@ -3214,7 +3214,9 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
         else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother') || urlLower.includes('jeremyparticipantanything') || urlLower.includes('teresapoliticallearn')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
-        else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5')) result = await resolveDood(originalUrl);
+        // `kokoflix.lol` (wrapper Nakios) et `playmogo.com` = même famille
+        // DoodStream : le wrapper 302 vers playmogo, que resolveDood suit déjà.
+        else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5') || urlLower.includes('kokoflix.') || urlLower.includes('playmogo.')) result = await resolveDood(originalUrl);
         else if (urlLower.includes('moonplayer') || urlLower.includes('filemoon')) result = await resolveMoon(originalUrl);
         else if (urlLower.includes('younetu.') || urlLower.includes('netu.')) result = await resolveYounetu(originalUrl);
         else if (urlLower.includes('vidoza.')) result = await resolveVidoza(originalUrl);

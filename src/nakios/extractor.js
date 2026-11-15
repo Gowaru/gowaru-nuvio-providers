@@ -1,367 +1,532 @@
 /**
- * Extractor for Nakios (nakios.store)
- * Films ET séries en streaming via API REST.
+ * Extractor for Nakios — **nakios.live** (2026-11)
  *
- * Cache intelligent :
- * - TTL séparé pour succès (5min) et échec (30s)
- * - Limite de taille avec éviction LRU
- * - Nettoyage périodique des entrées expirées
+ * Le site a changé de moteur : ce n'est plus l'API JSON `api.nakios.store`
+ * (morte, Cloudflare 525) mais une app **Laravel + Livewire**. Conséquences :
  *
- * Fallback search :
- * - Si les sources directes par TMDB ID échouent, recherche par titre
- * - Utilise /api/search/multi pour découvrir des TMDB IDs alternatifs
- * - Logging complet pour le debugging
+ *  - Les sources ne sont plus dans un JSON mais dans un attribut HTML
+ *    `wire:snapshot="…"` (JSON échappé en entités) des composants
+ *    `watch-component` (film/épisode) et `season-component` (série).
+ *  - Les URLs ne contiennent plus l'ID TMDB mais un **slug** :
+ *      film   → /movie/{slug}
+ *      série  → /tv-show/{slug}
+ *      épisode→ /episode/{slug}/{saison}-{episode}
+ *    D'où la résolution par slug (page directe puis /search/{titre}).
+ *  - Chaque source est un embed **iframe** (vidzy, uqload, kakaflix, byse…) et
+ *    l'API renvoie les DEUX versions (VF **et** VOSTFR) : l'ancien provider ne
+ *    renvoyait qu'UNE source → VF manquante et flux morts au premier host down.
  *
- * Métadonnées enrichies :
- * - Utilise les champs id, name, quality, lang, isPremium, isM3U8, provider
- * - Titre descriptif incluant le provider et la qualité
+ * Pipeline : titre TMDB → slug → page → snapshot → tous les embeds (VF+VOSTFR)
+ * → resolveStream (résolveurs maison) → streams directs.
  */
 
-import { fetchApi, BASE_URL, setCurrentSignal } from './http.js';
-import { createCache } from '../utils/cache.js';
-import { getTmdbTitleYear } from '../utils/search-fallback.js';
-import { safeConfig, isAborted, normalizeLanguageCode } from '../utils/resolvers.js';
+import { fetchPage, BASE_URL, setCurrentSignal } from './http.js';
+import {
+    resolveStream, withTimeout, isAborted, isBudgetExhausted, sortStreamsByLanguage,
+} from '../utils/resolvers.js';
+import { getTmdbTitles } from '../utils/metadata.js';
 import { resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
-const withCache = createCache('nk', 'Nakios', { failureTtl: 120_000 }); // 2min failure
+// ─── Réglages ────────────────────────────────────────────────────────────────
+const BUDGET_MS = 42000;
+const EMBED_TIMEOUT_MS = 9000;
+const MAX_SEARCH_TITLES = 4;
+const MAX_EMBEDS_PER_VERSION = 3;
+const MAX_STREAMS = 12;
 
-// ─── Configuration ───────────────────────────────────────────────────────────
-// NUVIO_NAKIOS_EXCLUDE_PREMIUM=1 → exclut toutes les sources premium
-// Par defaut (0), les sources premium sont utilisees en fallback si aucune
-// source libre n'est disponible.
-const EXCLUDE_PREMIUM = safeConfig('NUVIO_NAKIOS_EXCLUDE_PREMIUM', 0) === 1;
-
-// ─── URL Filter ───────────────────────────────────────────────────────────────
-// Nakios utilise un CDN (sv.citron-edge.lol) qui necessite un header Referer.
-// Sans Referer, le CDN redirige vers cheksum.lol → Telegram (t.me/zenhsvr).
-// Ce filtre detecte et exclut les URLs invalides ou publicitaires des sources.
-
-/** Domaines bloques (pubs, redirections, anti-leech echoue) */
-const BLOCKED_URL_PATTERNS = [
-    't.me',
-    'telegram.me',
-    'telegram.org',
-    'cheksum.lol',
-    'doubleclick.net',
-    'googleadservices.com',
-    'googlesyndication.com',
+// Un embed par version est déjà résolu avant ; on garde une marge pour les
+// variantes HLS (720p/480p) qui multiplient les entrées.
+const SKIP_EMBED_HOSTS = [
+    // bysebuho : player frontend qui exige un payload AES-256-GCM (WebCrypto
+    // absent de NuvioTV) → irrésoluble côté runtime, on ne gaspille pas 9 s.
+    'bysebuho.com',
 ];
 
-/**
- * Verifie si une URL de streaming est valide et jouable.
- * - Rejette les domaines de pub/redirect (Telegram, cheksum, etc.)
- * - Verifie que l'URL a un format valide
- * - Verifie que le protocole est HTTPS
- *
- * @param {string} url - URL a valider
- * @returns {boolean} true si l'URL est valide
- */
-function isValidStreamUrl(url) {
-    if (!url || typeof url !== 'string') return false;
-    const u = url.toLowerCase().trim();
-    if (!u.startsWith('https://')) return false;
-
-    // Rejeter les patterns bloques
-    for (const pattern of BLOCKED_URL_PATTERNS) {
-        if (u.includes(pattern)) {
-            console.log(`[Nakios] Filtered out blocked URL (${pattern}): ${u.slice(0, 80)}`);
-            return false;
-        }
-    }
-
-    return true;
+// Priorité de résolution : vidzy/fsvid répondent en HTML clair, uqload a un
+// résolveur natif, le reste est tenté ensuite (kakaflix/voe = packé + DNS
+// instable, kokoflix = famille DoodStream avec challenge Turnstile).
+function embedRank(url) {
+    const u = String(url || '').toLowerCase();
+    if (u.includes('vidzy') || u.includes('fsvid')) return 0;
+    if (u.includes('uqload') || u.includes('oneupload')) return 1;
+    if (u.includes('kakaflix') || u.includes('voe')) return 2;
+    if (u.includes('kokoflix') || u.includes('dood') || u.includes('playmogo')) return 3;
+    // luluvid/lulustream → CDN tnmr.org : 403 ou 302 vers un hôte injoignable
+    // (vérifié live 2026-11). Tenté en dernier, jamais retiré (ça remarche
+    // parfois depuis une IP résidentielle).
+    if (u.includes('luluvid') || u.includes('lulust') || u.includes('tnmr')) return 5;
+    return 4;
 }
 
-// ─── TMDB Helpers ────────────────────────────────────────────────────────────
-// getTmdbTitle est maintenant importé depuis ../utils/search-fallback.js
-// (module partagé avec cache global safeFetch 30s)
+// ─── Normalisation ───────────────────────────────────────────────────────────
+function normalize(s) {
+    if (!s) return '';
+    return String(s).toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[’'`:!.,?]/g, ' ')
+        .replace(/&/g, ' et ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\b(the|les|le|la|des|de|du|a|an|of|and|et)\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
-// ─── API Methods ─────────────────────────────────────────────────────────────
+function toSlug(title) {
+    if (!title) return '';
+    return String(title).toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[’'`:!.,?]/g, ' ')
+        .replace(/&/g, ' et ')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .replace(/-+/g, '-');
+}
 
-/**
- * Récupère une source de streaming depuis l'API Nakios.
- */
-async function fetchSource(path) {
-    return withCache(`source_${path}`, async () => {
-        const result = await fetchApi(path);
-        if (!result) return null;
+function tokens(s) {
+    return normalize(s).split(' ').filter(w => w.length > 1);
+}
 
-        if (result.sources && Array.isArray(result.sources) && result.sources.length > 0) {
-            // 1. Chercher une source non-premium (libre) en priorite
-            for (const source of result.sources) {
-                if (source.url && isValidStreamUrl(source.url) && source.isPremium !== true) {
-                    return source;
-                }
-            }
+/** Part des mots du titre TMDB présents dans la chaîne candidate (0..1). */
+function titleCoverage(candidate, title) {
+    const want = tokens(title);
+    if (!want.length) return 0;
+    const got = new Set(tokens(candidate));
+    let hit = 0;
+    for (const w of want) if (got.has(w)) hit++;
+    return hit / want.length;
+}
 
-            // 2. Si le flag EXCLUDE_PREMIUM est actif, ne PAS retourner de sources premium
-            if (EXCLUDE_PREMIUM) {
-                console.log(`[Nakios] Premium sources excluded (NUVIO_NAKIOS_EXCLUDE_PREMIUM=1)`);
-                return null;
-            }
+function stripSeasonSuffix(title) {
+    return String(title || '')
+        .replace(/\s*[-–:]\s*(?:saison|season|partie|part|cour|s)\s*\d{1,2}\s*$/i, '')
+        .replace(/\s+(?:saison|season|partie|part|cour)\s*\d{1,2}\s*$/i, '')
+        .trim();
+}
 
-            // 3. Fallback: source premium si aucune libre trouvee
-            for (const source of result.sources) {
-                if (source.url && isValidStreamUrl(source.url)) {
-                    console.log(`[Nakios] Using premium source (${source.name || '?'}) - no free source available`);
-                    return source;
-                }
-            }
-            // Si aucune source valide trouvee, logger et retourner null
-            console.warn(`[Nakios] All ${result.sources.length} source(s) filtered out (invalid URLs)`);
-            return null;
-        }
-        if (result.url) {
-            if (isValidStreamUrl(result.url)) {
-                return result;
-            }
-            console.warn(`[Nakios] Source filtered out (invalid URL): ${(result.url || '').slice(0, 80)}`);
-            return null;
-        }
-        return null;
-    });
+// ─── Parsing Livewire ────────────────────────────────────────────────────────
+
+/** Décode les entités HTML d'un attribut `wire:snapshot` (JSON échappé). */
+function unescapeAttr(raw) {
+    return String(raw)
+        .replace(/&quot;/g, '"')
+        .replace(/&#0?39;/g, "'")
+        .replace(/&apos;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&');
 }
 
 /**
- * Recherche du contenu sur Nakios par titre.
- * @param {string} query - Titre à rechercher
- * @returns {Promise<Array<{id: number, media_type: string, title: string, name: string}>>}
+ * Tous les snapshots Livewire de la page, parsés.
+ * Un snapshot = {data, memo, checksum} ; `data` porte les infos utiles.
  */
-async function searchContent(query) {
-    const path = `/api/search/multi?query=${encodeURIComponent(query)}`;
-    return withCache(`search_${query.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`, async () => {
+function readSnapshots(html) {
+    const out = [];
+    if (!html) return out;
+    let from = 0;
+    for (;;) {
+        const mark = html.indexOf('wire:snapshot="', from);
+        if (mark < 0) break;
+        const start = mark + 'wire:snapshot="'.length;
+        const end = html.indexOf('"', start);
+        if (end < 0) break;
+        from = end + 1;
+        const raw = unescapeAttr(html.slice(start, end));
         try {
-            const result = await fetchApi(path);
-            if (!result || !result.results || !Array.isArray(result.results)) {
-                return [];
-            }
-            // Filtrer uniquement movie et tv, retourner les champs utiles
-            return result.results
-                .filter(r => r.media_type === 'movie' || r.media_type === 'tv')
-                .map(r => ({
-                    id: r.id,
-                    media_type: r.media_type,
-                    title: r.title || r.name || '',
-                    year: (r.release_date || r.first_air_date || '').slice(0, 4),
-                }));
-        } catch (e) {
-            console.warn(`[Nakios] Search error: ${e?.message}`);
-            return [];
-        }
-    });
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.data) out.push(parsed);
+        } catch (e) { /* snapshot non JSON (markup) → ignoré */ }
+    }
+    return out;
 }
 
 /**
- * Tente de trouver une source via le fallback search.
- * Stratégie : récupère le titre TMDB, cherche sur Nakios, puis réessaie les sources
- * avec les IDs TMDB trouvés (utile si l'ID original n'est pas indexé).
- *
- * @param {string|number} tmdbId
- * @param {'movie'|'tv'} mediaType
- * @param {number} season
- * @param {number} episode
- * @returns {Promise<object|null>}
+ * Entrées vidéo d'un snapshot `watch-component` :
+ * `videos` est un tableau imbriqué de records
+ *   { server_name, label, version: 'VF'|'VOSTFR', embed_type, type, link }
+ * (les tableaux Livewire sont marqués par `{"s":"arr"}` — d'où le walk récursif).
  */
-async function fallbackSearch(tmdbId, mediaType, season, episode) {
-    console.log(`[Nakios] Fallback search for ${mediaType} ${tmdbId}...`);
-
-    // Normalisation dispatch : l'app peut envoyer 'series' (convention repo)
-    // alors que TMDB attend 'tv' — sans normalisation, getTmdbTitle requête
-    // /movie/{id} → 404 → fallback mort (5e occurrence du bug dans le repo).
-    const normType = mediaType === 'tv' || mediaType === 'series' ? 'tv' : 'movie';
-
-    // 1. Récupérer le titre + année depuis TMDB (même URL que getTmdbTitle →
-    // cache safeFetch partagé, pas de requête supplémentaire).
-    const { title, year } = await getTmdbTitleYear(tmdbId, normType);
-    if (!title) {
-        console.warn(`[Nakios] Fallback: cannot get TMDB title for ${tmdbId}`);
-        return null;
-    }
-
-    // 2. Chercher sur Nakios par titre
-    const results = await searchContent(title);
-    if (results.length === 0) {
-        // Essayer avec le titre simplifié (avant le premier ':')
-        const shortTitle = title.split(':')[0].trim();
-        if (shortTitle !== title) {
-            const results2 = await searchContent(shortTitle);
-            if (results2.length > 0) {
-                return trySearchResults(results2, tmdbId, normType, season, episode, title, year);
+function collectEntries(data) {
+    const out = [];
+    const seen = new Set();
+    const walk = (node) => {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) { for (const v of node) walk(v); return; }
+        if (typeof node.link === 'string' && /^https?:/i.test(node.link)) {
+            const key = `${node.version || ''}|${node.link}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                out.push({
+                    link: node.link,
+                    version: String(node.version || '').toUpperCase() || 'VF',
+                    server: node.server_name || 'Server',
+                    label: node.label || 'HD',
+                    embedType: node.embed_type || '',
+                });
             }
         }
-        console.warn(`[Nakios] Fallback: no results for \"${title}\"`);
-        return null;
-    }
-
-    return trySearchResults(results, tmdbId, normType, season, episode, title, year);
+        for (const k of Object.keys(node)) {
+            const v = node[k];
+            if (v && typeof v === 'object') walk(v);
+        }
+    };
+    walk(data.videos);
+    if (!out.length) walk(data.videosByVersion);
+    return out;
 }
 
-/**
- * Parcourt les résultats de recherche et tente de récupérer une source
- * avec les TMDB IDs alternatifs trouvés.
- */
-async function trySearchResults(results, originalTmdbId, mediaType, season, episode, wantTitle, wantYear) {
-    console.log(`[Nakios] Fallback: ${results.length} result(s) from search`);
-
-    // Garde anti faux-positif : l'API nakios renvoie TOUTES les œuvres du même
-    // nom — sans filtre, l'anime One Piece (1999) se faisait servir le live
-    // action Netflix (2023) → « l'épisode ne correspond pas au titre ».
-    // On n'accepte qu'un contenu : même type, même titre normalisé, année à ±1.
-    const normType = mediaType === 'tv' || mediaType === 'series' ? 'tv' : 'movie';
-    const normTitle = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
-    const target = normTitle(wantTitle);
-    const strict = results.filter(r => {
-        if ((r.media_type === 'tv') !== (normType === 'tv')) {
-            console.log(`[Nakios] Fallback: skip ${r.id} (${r.media_type} ≠ ${normType})`);
-            return false;
-        }
-        if (normTitle(r.title) !== target) {
-            console.log(`[Nakios] Fallback: skip ${r.id} (titre "${r.title}" ≠ "${wantTitle}")`);
-            return false;
-        }
-        if (wantYear && r.year && Math.abs(parseInt(r.year, 10) - wantYear) > 1) {
-            console.log(`[Nakios] Fallback: skip ${r.id} (année ${r.year} ≠ ${wantYear}±1)`);
-            return false;
-        }
-        return true;
-    });
-    if (strict.length === 0) {
-        console.log(`[Nakios] Fallback: aucun résultat de même type/titre/année — abandon (évite le faux-positif)`);
-        return null;
+/** Snapshot du lecteur (film ou épisode). */
+function watchSnapshot(html) {
+    const snaps = readSnapshots(html);
+    for (const s of snaps) {
+        if (s.data && (s.data.videos || s.data.videosByVersion)) return s;
     }
-
-    // Trier : mettre l'ID original en premier (si trouvé), puis les autres
-    const sorted = [...strict].sort((a, b) => {
-        if (a.id === Number(originalTmdbId)) return -1;
-        if (b.id === Number(originalTmdbId)) return 1;
-        return 0;
-    });
-
-    // Essayer chaque ID (limité à 3 tentatives pour éviter le spam)
-    const attempts = sorted.filter(r => r.id !== Number(originalTmdbId)).slice(0, 3);
-    for (const r of attempts) {
-        console.log(`[Nakios] Fallback: trying TMDB ${r.id} (${r.title})`);
-
-        // Utiliser le media_type du résultat de recherche (pas l'original)
-        let altPath;
-        if (r.media_type === 'movie') {
-            altPath = `/api/sources/movie/${r.id}`;
-        } else if (r.media_type === 'tv') {
-            altPath = `/api/sources/tv/${r.id}/${Number(season) || 1}/${Number(episode) || 1}`;
-        } else {
-            console.log(`[Nakios] Fallback: skipping ${r.id} (unknown type: ${r.media_type})`);
-            continue;
-        }
-
-        const source = await fetchSource(altPath);
-        if (source && source.url) {
-            console.log(`[Nakios] Fallback SUCCESS: TMDB ${r.id} → source found!`);
-            return source;
-        }
-    }
-
-    console.warn(`[Nakios] Fallback: no alternate ID yielded a source`);
     return null;
 }
 
-/**
- * Crée un objet stream enrichi à partir de la réponse API.
- * @param {object} source - Objet source de l'API Nakios
- * @returns {object} Objet stream standardisé
- */
-function createStream(source) {
-    const quality = source.quality || 'HD';
-    // Normalisation : 'VF'/'VOSTFR' bruts sont classés "Unknown" par les filtres
-    // app — on garde le libellé dans le title et on expose le code normalisé.
-    const rawLang = source.lang || source.language || 'VF';
-    const language = normalizeLanguageCode(rawLang) || 'fr';
-    const providerName = source.name || source.provider || 'Nakios';
-    const isHls = source.isM3U8 === true;
-    const format = isHls ? 'hls' : 'mp4';
-
-    const stream = {
-        name: providerName,
-        title: `[${rawLang}] ${providerName} - ${quality}`,
-        url: source.url,
-        quality: quality,
-        language: language,
-        type: format,
-        headers: {
-            'Referer': `${BASE_URL}/`,
-            'Origin': BASE_URL,
-        },
-    };
-
-    // Enrichissement : champs supplémentaires de l'API
-    if (source.id) {
-        stream.id = source.id;
+/** Saison + nombre d'épisodes exposés par la fiche série. */
+function seasonInfo(html) {
+    const info = { season: null, count: 0, hasVf: false, hasVostfr: false };
+    if (!html) return info;
+    const snaps = readSnapshots(html);
+    for (const s of snaps) {
+        const d = s.data || {};
+        if (d.season_number != null && info.season == null) info.season = parseInt(d.season_number, 10) || null;
+        const versions = d.availableVersions;
+        if (Array.isArray(versions)) {
+            const flat = JSON.stringify(versions).toUpperCase();
+            if (flat.includes('VF')) info.hasVf = true;
+            if (flat.includes('VOSTFR')) info.hasVostfr = true;
+        }
     }
-    if (source.isPremium === true) {
-        stream.isPremium = true;
-    }
-    if (source.isEmbed === true) {
-        stream.isEmbed = true;
-    }
-    if (source.size) {
-        stream.size = source.size;
-    }
-
-    return stream;
+    const eps = html.match(/\/episode\/[a-z0-9-]+\/\d+-\d+/g) || [];
+    info.count = new Set(eps).size;
+    return info;
 }
 
-// ─── Main Export ────────────────────────────────────────────────────────────
+/** Cartes de `/search/{q}` : {slug, type, title, year}. */
+function parseSearchCards(html) {
+    const cards = [];
+    if (!html) return cards;
+    const seen = new Set();
+    const re = /href="(?:https?:\/\/[^/"]+)?\/(movie|tv-show)\/([a-z0-9][a-z0-9-]*)"/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const type = m[1];
+        const slug = m[2];
+        if (seen.has(slug)) continue;
+        seen.add(slug);
+        // Le titre et l'année sont rendus juste après le lien de la carte.
+        const seg = html.slice(m.index, m.index + 3000);
+        const h3 = seg.match(/<h3[^>]*>([\s\S]*?)<\/h3>/);
+        const year = seg.match(/<span>\s*(\d{4})\s*<\/span>/);
+        const title = h3 ? unescapeAttr(h3[1].replace(/<[^>]+>/g, '')).trim() : '';
+        cards.push({ slug, type, title, year: year ? parseInt(year[1], 10) : null });
+    }
+    return cards;
+}
+
+function pageTitle(html) {
+    const m = String(html || '').match(/<title>\s*([\s\S]*?)\s*<\/title>/i);
+    if (!m) return '';
+    return unescapeAttr(m[1])
+        .replace(/\s*\|.*$/, '')
+        .replace(/\s*[-–]\s*Nakios\s*$/i, '')
+        .replace(/\s+streaming\b.*$/i, '')
+        .trim();
+}
 
 /**
- * Point d'entrée principal.
- * @param {string|number} tmdbId
- * @param {'movie'|'tv'} mediaType
- * @param {number} season
- * @param {number} episode
- * @returns {Promise<Array>}
+ * Années affichées par la fiche (`<span>1999</span>`). On ne scanne PAS le
+ * HTML brut : les `viewBox="0 0 24 24"` / durées produisaient des faux
+ * positifs (2000) qui faisaient rejeter la bonne fiche.
  */
+function pageYears(html) {
+    const out = [];
+    const re = /<span>\s*((?:19|20)\d{2})\s*<\/span>/g;
+    let m;
+    while ((m = re.exec(String(html || ''))) !== null) out.push(parseInt(m[1], 10));
+    return out;
+}
+
+// ─── Résolution du slug ──────────────────────────────────────────────────────
+
+function typePath(isMovie) {
+    return isMovie ? 'movie' : 'tv-show';
+}
+
+/**
+ * Vérifie qu'une fiche correspond bien au contenu TMDB (garde anti
+ * faux-positif : `lego-one-piece` pour « One Piece », `the-boys-in-the-band`…).
+ */
+function matchesContent(html, titles, year) {
+    const title = pageTitle(html);
+    if (!title) return false;
+    let best = 0;
+    for (const t of titles) best = Math.max(best, titleCoverage(title, stripSeasonSuffix(t)));
+    if (best < 0.6) return false;
+    if (year) {
+        const ys = pageYears(html);
+        if (ys.length && !ys.some(y => Math.abs(y - year) <= 1)) {
+            console.log(`[Nakios] Fiche "${title}" rejetée (années ${ys.slice(0, 3).join('/')} ≠ ${year})`);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Trouve la fiche Nakios : d'abord le slug direct (le site slugifie le titre
+ * TMDB tel quel), puis `/search/{titre}` avec scoring.
+ */
+async function findPost(ctx) {
+    const { titles, isMovie, year, startTime, signal } = ctx;
+    const path = typePath(isMovie);
+
+    // 1. Slug direct — 1 requête, validation forte par le <title>.
+    for (const t of titles.slice(0, 3)) {
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+        const slug = toSlug(stripSeasonSuffix(t));
+        if (!slug || slug.length < 2) continue;
+        const html = await fetchPage(`/${path}/${slug}`, { signal });
+        if (!html) continue;
+        if (matchesContent(html, titles, year)) {
+            console.log(`[Nakios] Fiche directe: /${path}/${slug}`);
+            return { slug, html };
+        }
+    }
+
+    // 2. Recherche du site (page publique /search/{q}, pas de Livewire requis).
+    const cards = [];
+    const bySlug = new Set();
+    for (const q of titles.slice(0, MAX_SEARCH_TITLES)) {
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) break;
+        const html = await fetchPage(`/search/${encodeURIComponent(q)}`, { signal });
+        if (!html) continue;
+        for (const c of parseSearchCards(html)) {
+            if (c.type !== path) continue;
+            if (bySlug.has(c.slug)) continue;
+            bySlug.add(c.slug);
+            cards.push(c);
+        }
+        if (cards.length) break; // le 1er titre qui indexe quelque chose suffit
+    }
+    if (!cards.length) {
+        console.warn('[Nakios] Aucune fiche trouvée pour ce contenu');
+        return null;
+    }
+
+    let best = null;
+    let bestScore = 0;
+    for (const c of cards) {
+        let score = 0;
+        for (const t of titles) score = Math.max(score, titleCoverage(c.title || c.slug.replace(/-/g, ' '), stripSeasonSuffix(t)));
+        if (year && c.year) {
+            const diff = Math.abs(c.year - year);
+            if (diff > 2) continue;
+            if (diff === 0) score += 0.1;
+        }
+        if (score > bestScore) { bestScore = score; best = c; }
+    }
+    if (!best || bestScore < 0.5) {
+        console.warn(`[Nakios] Aucune fiche assez proche (meilleur score ${bestScore.toFixed(2)})`);
+        return null;
+    }
+
+    const html = await fetchPage(`/${path}/${best.slug}`, { signal });
+    if (!html) return null;
+    console.log(`[Nakios] Fiche via recherche: /${path}/${best.slug} (score ${bestScore.toFixed(2)})`);
+    return { slug: best.slug, html };
+}
+
+// ─── Page à lire (film ou épisode) ───────────────────────────────────────────
+
+/**
+ * Charge la page porteuse des sources.
+ * Un épisode vit sur /episode/{slug}/{saison}-{episode}. Deux replis :
+ *  - numérotation ABSOLUE stockée en saison 1 (animes : `/episode/x/1/{abs}`) ;
+ *  - saison demandée absente du catalogue (le site ne garde que la **dernière**
+ *    saison) → repli explicite sur la saison présente, **annoncé dans le titre**
+ *    du flux (`Saison 5 (S1 absente du site)`) pour ne jamais faire croire à
+ *    l'épisode d'origine.
+ *
+ * Retour : `{ html, servedSeason }` ou `null`.
+ */
+async function loadWatchPage(ctx, slug) {
+    const { isMovie, seasonNum, epNum, absEp, signal } = ctx;
+    if (isMovie) {
+        const html = await fetchPage(`/movie/${slug}`, { signal });
+        return html ? { html, servedSeason: null } : null;
+    }
+
+    const attempts = [`/${'episode'}/${slug}/${seasonNum}-${epNum}`];
+    if (absEp && absEp !== epNum && absEp > 0) {
+        attempts.push(`/episode/${slug}/1-${absEp}`);
+    }
+
+    for (const path of attempts) {
+        const html = await fetchPage(path, { signal });
+        if (html && watchSnapshot(html)) {
+            console.log(`[Nakios] Épisode: ${path}`);
+            return { html, servedSeason: null };
+        }
+    }
+
+    // Diagnostic : la série est-elle limitée à sa dernière saison ?
+    if (!isAborted(signal) && !isBudgetExhausted(ctx.startTime, BUDGET_MS)) {
+        const post = await fetchPage(`/tv-show/${slug}`, { signal });
+        const info = seasonInfo(post);
+        if (info.season != null) {
+            if (info.season !== seasonNum) {
+                // `info.count` ne compte que les liens d'épisodes rendus sur la
+                // fiche (souvent paginés/partiels) : pas de garde dessus, c'est
+                // la présence du `wire:snapshot` sur la page qui décide.
+                const fbPath = `/episode/${slug}/${info.season}-${epNum}`;
+                const fbHtml = await fetchPage(fbPath, { signal });
+                if (fbHtml && watchSnapshot(fbHtml)) {
+                    console.warn(`[Nakios] Saison ${seasonNum} absente du catalogue — repli explicite sur la saison ${info.season} (${fbPath})`);
+                    return { html: fbHtml, servedSeason: info.season };
+                }
+                console.warn(`[Nakios] Saison ${seasonNum} absente (site: saison ${info.season}) et pas d'épisode ${epNum} dans celle-ci`);
+                return null;
+            }
+            console.warn(`[Nakios] Épisode ${epNum} absent de la saison ${seasonNum} (${info.count} ép. listés)`);
+        } else {
+            console.warn(`[Nakios] Aucune page épisode pour S${seasonNum}E${epNum}`);
+        }
+    }
+    return null;
+}
+
+// ─── Streams ─────────────────────────────────────────────────────────────────
+
+/** Langue exposée à l'app (VF→fr, VOSTFR→langue originale, défaut ja). */
+function versionLanguage(version, meta) {
+    const v = String(version || '').toUpperCase();
+    if (v.includes('VOSTFR') || v.includes('VOSTA') || v === 'VO' || v === 'SUBFRENCH') {
+        const orig = meta && meta.originalLanguage ? String(meta.originalLanguage).toLowerCase() : '';
+        if (orig && orig !== 'fr') return orig;
+        return meta && meta.isAnime ? 'ja' : (orig || 'fr');
+    }
+    if (v.includes('MULTI')) return 'multi';
+    return 'fr';
+}
+
+async function resolveEmbed(entry, lang, meta, signal, startTime, note) {
+    if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) return null;
+    const label = String(entry.label || 'HD').toUpperCase();
+    const versionTag = entry.version.includes('VOSTFR') ? 'VOSTFR' : entry.version;
+    const base = {
+        name: 'Nakios',
+        title: `[${versionTag}] ${entry.server} - ${label}${note ? ` · ${note}` : ''}`,
+        url: entry.link,
+        quality: label === 'HD' ? 'HD' : label,
+        language: lang,
+        headers: { Referer: `${BASE_URL}/`, Origin: BASE_URL },
+    };
+    try {
+        const resolved = await withTimeout(resolveStream(base, 0), EMBED_TIMEOUT_MS, 'Nakios embed');
+        if (!resolved || !resolved.url) return null;
+        if (resolved.isDirect === false) return null;
+        if (String(resolved.url).includes('[object')) return null;
+        delete resolved.isDirect;
+        delete resolved.originalUrl;
+        return resolved;
+    } catch (e) {
+        if (isAborted(signal)) return null;
+        return null;
+    }
+}
+
+// ─── Entrée ──────────────────────────────────────────────────────────────────
+
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
     const signal = options?.signal || null;
     if (isAborted(signal)) return [];
     setCurrentSignal(signal);
 
-    console.log(`[Nakios] Looking up ${mediaType} ${tmdbId}`);
+    const startTime = Date.now();
+    const type = mediaType === 'movie' ? 'movie' : 'tv';
+    const isMovie = type === 'movie';
 
-    // NuvioTV (videoId anime kitsu:/mal:/anilist:) envoie season=null + épisode
-    // ABSOLU. L'API Nakios est indexée par saison : sans reverse-map, on
-    // demandait /tv/{id}/1/{absolu} → 0 stream.
-    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType });
-    season = se.season;
-    episode = se.episode;
+    // Convention app : season=null + épisode ABSOLU (IDs anime kitsu:/mal:).
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: type, startTime, budgetMs: BUDGET_MS });
+    const seasonNum = isMovie ? 1 : Math.max(1, se.season || 1);
+    const epNum = Math.max(1, se.episode || 1);
+    const absEp = se.absolute != null ? se.absolute : epNum;
 
-    // Étape 1: Construire le chemin API direct
-    let apiPath;
-    if (mediaType === 'movie') {
-        apiPath = `/api/sources/movie/${tmdbId}`;
-    } else {
-        const targetSeason = Number(season) || 1;
-        const targetEpisode = Number(episode) || 1;
-        apiPath = `/api/sources/tv/${tmdbId}/${targetSeason}/${targetEpisode}`;
-        console.log(`[Nakios] Looking for S${targetSeason}E${targetEpisode} (TMDB: ${tmdbId})`);
+    console.log(`[Nakios] ${type} ${tmdbId} → S${seasonNum}E${epNum}${absEp !== epNum ? ` (abs ${absEp})` : ''}`);
+
+    let titles = [];
+    try {
+        titles = await getTmdbTitles(tmdbId, type, { season: seasonNum });
+    } catch (e) {
+        if (isAborted(signal)) return [];
     }
-
-    // Étape 2: Tentative directe
-    let source = await fetchSource(apiPath);
-
-    // Étape 3: Fallback search si la tentative directe échoue
-    if (!source || !source.url) {
-        console.warn(`[Nakios] No source for ${apiPath}, trying search fallback...`);
-        source = await fallbackSearch(tmdbId, mediaType, season, episode);
-    }
-
-    // Étape 4: Si toujours rien trouvé, abandon
-    if (!source || !source.url) {
-        console.warn(`[Nakios] No source found for ${mediaType} ${tmdbId}`);
+    if (!titles || titles.length === 0) {
+        console.warn('[Nakios] Aucun titre TMDB');
         return [];
     }
+    const meta = titles._metadata || {};
+    const year = meta.year || null;
 
-    // Étape 5: Créer le stream enrichi
-    const stream = createStream(source);
-    console.log(`[Nakios] Stream: ${stream.quality} ${stream.type} | ${stream.name} | ${stream.language}`);
+    const post = await findPost({ titles, isMovie, year, startTime, signal });
+    if (!post) return [];
 
-    return [stream];
+    const page = await loadWatchPage({ isMovie, seasonNum, epNum, absEp, startTime, signal }, post.slug);
+    if (!page) return [];
+    const { html } = page;
+    // Repli cross-saison assumé et visible par l'utilisateur.
+    const seasonNote = page.servedSeason && page.servedSeason !== seasonNum
+        ? `Saison ${page.servedSeason} (S${seasonNum} absente du site)`
+        : null;
+
+    const snap = watchSnapshot(html);
+    const entries = snap ? collectEntries(snap.data) : [];
+    if (!entries.length) {
+        console.warn('[Nakios] Aucune source dans la page (lecteur vide ou nouveau layout)');
+        return [];
+    }
+    console.log(`[Nakios] ${entries.length} source(s) déclarée(s): ${entries.map(e => `${e.version}/${e.server}`).join(', ')}`);
+
+    // Ordre : VF d'abord (attendu par la plupart des utilisateurs), puis VOSTFR ;
+    // à version égale, les hosts les plus rapides.
+    const ordered = entries
+        .filter(e => {
+            const u = e.link.toLowerCase();
+            return !SKIP_EMBED_HOSTS.some(h => u.includes(h));
+        })
+        .sort((a, b) => {
+            const va = a.version.includes('VOSTFR') ? 1 : 0;
+            const vb = b.version.includes('VOSTFR') ? 1 : 0;
+            if (va !== vb) return va - vb;
+            return embedRank(a.link) - embedRank(b.link);
+        });
+
+    const streams = [];
+    const perVersion = new Map();
+    for (const entry of ordered) {
+        if (streams.length >= MAX_STREAMS) break;
+        if (isAborted(signal) || isBudgetExhausted(startTime, BUDGET_MS)) {
+            console.warn('[Nakios] Budget atteint — arrêt de la résolution');
+            break;
+        }
+        const vKey = entry.version.includes('VOSTFR') ? 'VOSTFR' : 'VF';
+        const done = perVersion.get(vKey) || 0;
+        if (done >= MAX_EMBEDS_PER_VERSION) continue;
+
+        const lang = versionLanguage(entry.version, meta);
+        const st = await resolveEmbed(entry, lang, meta, signal, startTime, seasonNote);
+        if (!st) continue;
+        perVersion.set(vKey, done + 1);
+        streams.push(st);
+    }
+
+    if (!streams.length) {
+        console.warn(`[Nakios] 0 flux résolu sur ${entries.length} source(s) — hosts morts ou protégés`);
+        return [];
+    }
+    console.log(`[Nakios] ${streams.length} flux résolu(s) en ${Date.now() - startTime} ms`);
+    return sortStreamsByLanguage(streams);
 }

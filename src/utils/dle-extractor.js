@@ -512,8 +512,13 @@ export async function resolveTargetEpisodes(tmdbId, mediaType, season, episode, 
     // correspondance → sans ce fallback, l'épisode absolu est indisponible
     // pour beaucoup d'anime (ex: JJK) et les garde-fous anti cross-saison
     // des providers n'ont plus le disambiguisateur.
+    // ⚠ ARM renvoie parfois une valeur absurde (Demon Slayer S2E1 → 1) qui
+    // bloquait le fallback TMDB : pour une saison ≥ 2, l'absolu est
+    // forcément > numéro local. On rejette toute valeur incohérente.
+    if (absoluteEpisode && season > 1 && absoluteEpisode <= epNum) absoluteEpisode = null
     if (!absoluteEpisode && (startTime == null || !isBudgetExhausted(startTime, budgetMs))) {
-      absoluteEpisode = await getAbsoluteEpisodeFromTmdb(tmdbId, season, epNum)
+      const fromTmdb = await getAbsoluteEpisodeFromTmdb(tmdbId, season, epNum)
+      if (fromTmdb && season > 1 && fromTmdb > epNum) absoluteEpisode = fromTmdb
     }
     if (absoluteEpisode && absoluteEpisode !== epNum) {
       episodes.push(absoluteEpisode)

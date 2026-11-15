@@ -2,7 +2,7 @@
  * HTTP Utilities for Vostfree
  */
 
-import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted, USER_AGENT } from '../utils/resolvers.js';
 
 const DOMAIN = 'ipv4.vostfree.ws';
 const rateLimit = createProviderRateLimiter();
@@ -11,7 +11,7 @@ let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
 export const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Cache-Control": "max-age=0",

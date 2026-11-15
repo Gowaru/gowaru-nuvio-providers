@@ -1,69 +1,58 @@
 /**
  * HTTP Utilities for Nakios
+ *
+ * ⚠️ Historique des domaines (le site tourne tous les 6-12 mois) :
+ *   nakios.store → nakios.cyou (DNS mort) → **nakios.live** (vérifié 2026-11)
+ * L'ancien backend `api.nakios.store/api/sources/...` est mort (Cloudflare 525)
+ * et la nouvelle plateforme (Laravel + Livewire) n'expose plus d'API JSON pour
+ * les sources : tout est rendu dans le HTML (`wire:snapshot`). L'URL de base
+ * reste surchargeable sans rebuild le jour où le domaine bouge encore.
  */
 
-import { safeFetch, createProviderRateLimiter, isAborted, safeConfig } from '../utils/resolvers.js';
+import { safeFetch, createProviderRateLimiter, isAborted, safeConfig, USER_AGENT } from '../utils/resolvers.js';
 
 const rateLimit = createProviderRateLimiter();
+const DOMAIN = 'nakios.live';
 
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-const DOMAIN = 'api.nakios.store';
-
-// Domaines : le site a migré nakios.store → nakios.cyou (09/2026) et le
-// backend sources de .store est mort (404 sur tout, seul le proxy TMDB
-// /api/movies|/api/series répond). La surcharge d'env permet de pointer vers
-// la future API du nouveau domaine sans rebuild — les rotations de domaine
-// sont la norme sur ce site (5ᵉ mouvement en 2 ans).
-export const BASE_URL = safeConfig('NUVIO_NAKIOS_SITE_URL', 'https://nakios.cyou');
-export const API_BASE = safeConfig('NUVIO_NAKIOS_API_URL', 'https://api.nakios.store');
+export const BASE_URL = safeConfig('NUVIO_NAKIOS_SITE_URL', 'https://nakios.live');
 export const GLOBAL_TIMEOUT_MS = 15000;
 
 export const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
+    'User-Agent': USER_AGENT,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': `${BASE_URL}/`,
-    'Origin': BASE_URL,
+    'Upgrade-Insecure-Requests': '1',
 };
 
 /**
- * Fetch JSON from the Nakios API.
- * @param {string} path - Chemin API (ex: /api/sources/movie/550)
- * @param {object} [options]
- * @returns {Promise<object|null>}
+ * GET HTML sur le site. Renvoie le texte, ou null si erreur/404.
+ * (Un 404 est une information utile : « cet épisode n'existe pas ».)
  */
-export async function fetchApi(path, options = {}) {
+export async function fetchPage(url, options = {}) {
     const signal = options.signal || _currentSignal;
     if (isAborted(signal)) return null;
 
-    const url = `${API_BASE}${path}`;
+    const absolute = /^https?:/i.test(url) ? url : `${BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
     await rateLimit(DOMAIN);
-    console.log(`[Nakios] API: ${url}`);
+    if (isAborted(signal)) return null;
 
-    const mergedHeaders = {
-        ...HEADERS,
-        ...(options.headers || {}),
-    };
-
-    const res = await safeFetch(url, {
-        headers: mergedHeaders,
+    const res = await safeFetch(absolute, {
+        headers: { ...HEADERS, ...(options.headers || {}) },
         timeout: options.timeout || GLOBAL_TIMEOUT_MS,
         signal,
     });
 
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
-        console.warn(`[Nakios] HTTP ${status} for ${url}`);
+        if (status !== 404) console.warn(`[Nakios] HTTP ${status} for ${absolute}`);
         return null;
     }
-
     try {
-        const data = await res.json();
-        return data;
+        return await res.text();
     } catch (e) {
-        console.warn(`[Nakios] JSON parse error for ${url}: ${e?.message}`);
         return null;
     }
 }
