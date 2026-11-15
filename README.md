@@ -54,7 +54,7 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 22 | **VoirAnime.one** ⁸ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ⚠️ | ⚠️ | 0.1.4 |
 | 23 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.17 |
 | 24 | **VoiranimeBE** | 🎬📺 | VOSTFR / JA | — | ✅ | ✅ | 0.1.2 |
-| 25 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.3.0 |
+| 25 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.3.1 |
 | 26 | **WaveAnime** ⁴ | 🎬📺 | VF / VOSTFR | DASH | ✅ | ✅ | 0.0.10 |
 
 ### 🎬 Movies & Series (11)

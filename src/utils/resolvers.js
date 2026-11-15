@@ -2538,6 +2538,68 @@ export async function resolveDood(url) {
     return { url };
 }
 
+/**
+ * ok.ru / odnoklassniki — sans login ni JS.
+ *
+ * ⚠ `https://ok.ru/dk?cmd=videoPlayerMetadata&mid=…` (l'ancienne API) renvoie
+ * désormais une page HTML du site (login) : inutilisable. La page EMBED
+ * `https://ok.ru/videoembed/{id}` publie en revanche tout le manifest dans son
+ * attribut `data-options` (JSON échappé en entités) : `flashvars.metadata`
+ * porte `hlsManifestUrl` (master m3u8 ok*.vkuser.net) et la liste `videos[]`
+ * (MP4 progressifs mobile/lowest/low/sd/hd/full). Vérifié live 2026-11 sur des
+ * vidéos VOD et live.
+ *
+ * Les URLs sont signées **par IP** (`srcIp=…`) : elles restent valides pour
+ * l'appelant, qui est aussi celui qui a fait la requête.
+ */
+export async function resolveOkRu(url) {
+    try {
+        const idMatch = url.match(/(?:videoembed|video|live)\/(\d+)/) || url.match(/[?&]mid=(\d+)/);
+        const id = idMatch ? idMatch[1] : null;
+        const embedUrl = id ? `https://ok.ru/videoembed/${id}` : url;
+        const res = await safeFetch(embedUrl, {
+            headers: { 'User-Agent': USER_AGENT, 'Referer': 'https://ok.ru/' },
+        });
+        if (!res) return { url };
+        const html = await res.text();
+
+        // Vidéo supprimée / privée : le lecteur est rendu sans movie-id.
+        if (/data-movie-id="(?:null|)"/i.test(html)) return { url };
+
+        const optMatch = html.match(/data-options="([\s\S]*?)"/);
+        if (!optMatch) return { url };
+        let opts;
+        try {
+            const raw = optMatch[1]
+                .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+                .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                .replace(/&amp;/g, '&');
+            opts = JSON.parse(raw);
+        } catch (e) {
+            return { url };
+        }
+
+        const meta = (opts.flashvars && opts.flashvars.metadata) || {};
+        const movie = meta.movie || {};
+        if (movie.status && movie.status !== 'OK') return { url };
+
+        const headers = { 'Referer': 'https://ok.ru/', 'Origin': 'https://ok.ru' };
+        if (meta.hlsManifestUrl) return { url: meta.hlsManifestUrl, headers };
+
+        // Repli MP4 progressif : du meilleur au plus léger.
+        const videos = Array.isArray(meta.videos) ? meta.videos : [];
+        const RANK = ['full', 'hd', 'sd', 'low', 'mobile', 'lowest'];
+        const usable = videos.filter(v => v && typeof v.url === 'string' && v.url && v.disallowed !== true);
+        usable.sort((a, b) => {
+            const ra = RANK.indexOf(String(a.name).toLowerCase());
+            const rb = RANK.indexOf(String(b.name).toLowerCase());
+            return (ra < 0 ? RANK.length : ra) - (rb < 0 ? RANK.length : rb);
+        });
+        if (usable.length) return { url: usable[0].url, headers };
+    } catch (e) {}
+    return { url };
+}
+
 export async function resolveMyTV(url) {
     try {
         // myvi.ru / mytv: try the embed page then look for mp4/m3u8
@@ -3214,6 +3276,9 @@ export async function resolveStream(stream, depth = 0) {
         else if (urlLower.includes('uqload.') || urlLower.includes('oneupload.')) result = await resolveUqload(originalUrl);
         else if (urlLower.includes('voe') || urlLower.includes('weneverbeenfree') || urlLower.includes('maryspecialwatch') || urlLower.includes('charlestoughrace') || urlLower.includes('sandratableother') || urlLower.includes('jeremyparticipantanything') || urlLower.includes('teresapoliticallearn')) result = await resolveVoe(originalUrl);
         else if (urlLower.includes('streamtape.com') || urlLower.includes('stape')) result = await resolveStreamtape(originalUrl);
+        // ok.ru / odnoklassniki : manifest lu dans `data-options` de la page
+        // embed (l'API `videoPlayerMetadata` est passée derrière le login).
+        else if (urlLower.includes('ok.ru') || urlLower.includes('odnoklassniki.')) result = await resolveOkRu(originalUrl);
         // `kokoflix.lol` (wrapper Nakios) et `playmogo.com` = même famille
         // DoodStream : le wrapper 302 vers playmogo, que resolveDood suit déjà.
         else if (urlLower.includes('dood') || urlLower.includes('ds2play') || urlLower.includes('bigwar5') || urlLower.includes('kokoflix.') || urlLower.includes('playmogo.')) result = await resolveDood(originalUrl);

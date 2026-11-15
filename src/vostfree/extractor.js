@@ -39,11 +39,12 @@ const MAX_STREAMS = 8;
 // plus de DNS, voe/streamtape/dood sont derrière un captcha, et les autres
 // hôtes du site sont carrément disparus : myvi.ru (→ domaine en vente),
 // myvi.tv (injoignable), iframedream.com (`gtv` → page de pub), kaztube.kz
-// (DNS mort), fembed.com/vfree.to (DNS mort), ok.ru (métadonnées derrière
-// login). `mail2` (my.mail.ru) reste tenté : les résolveurs savent le lire.
+// (DNS mort), fembed.com/vfree.to (DNS mort). `mail2` (my.mail.ru) et
+// `ok` (ok.ru/videoembed, manifest dans `data-options`) restent tentés : les
+// résolveurs savent les lire.
 const UNRESOLVABLE_HOSTS = ['voe.sx', 'streamtape', 'stape', 'dood.', 'ds2play', 'bigwar5',
     'ninjastream', 'upvid', 'opvid', 'jetload', 'getvid.', 'lvturbo', 'streamlare', 'filemoon',
-    'myvi.ru', 'myvi.tv', 'iframedream', 'kaztube', 'fembed.', 'vfree.', 'ok.ru'];
+    'myvi.ru', 'myvi.tv', 'iframedream', 'kaztube', 'fembed.', 'vfree.'];
 
 // `sibnet` est le lecteur le plus courant du catalogue mais répond **403**
 // depuis un datacenter : il est tenté quand même (il fonctionne depuis une IP

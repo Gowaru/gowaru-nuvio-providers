@@ -132,7 +132,7 @@ Keep responses concise and to the point in French - unless the user asks otherwi
   - `sibnet` 120/120 — le plus courant, **403 depuis un datacenter** (OK en résidentiel) ;
   - `uqload` 92/120 — **seul hôte fiable partout** (`.is`→`.co`) ;
   - `mail2` 10/120 — `my.mail.ru/video/embed/{id}` : **6/12 embeds rendent un MP4 direct signé** (`cdn*.my.mail.ru/v/….mp4?slave[]=…`) → second hôte exploitable, `HOST_PRIORITY` juste après uqload ;
-  - morts/vérifiés inutilisables : `vip` 63 (getvid.club DNS mort, upvid/vudeo), `myvi` 49 (`myvi.ru` = domaine **en vente**, `myvi.tv` injoignable), `ok` 27 (métadonnées `videoPlayerMetadata` derrière login), `fembed` 13 (DNS mort), `moevideo` 13 (ninjastream), `gtv` 10 (`iframedream.com` = page de pub), `kaztube` 7 (DNS mort), `rutube` 7 (plateforme vivante mais tous les IDs du catalogue supprimés), `mp4` 3 (flash mail.ru, contenu non résoluble) → tous filtrés par `UNRESOLVABLE_HOSTS` (sauf `rutube`, `mail2`).
+  - morts/vérifiés inutilisables : `vip` 63 (getvid.club DNS mort, upvid/vudeo), `myvi` 49 (`myvi.ru` = domaine **en vente**, `myvi.tv` injoignable), `ok` 27 (résolvable via `resolveOkRu`, mais **0/28 IDs du catalogue encore en ligne** — `data-movie-id="null"`), `fembed` 13 (DNS mort), `moevideo` 13 (ninjastream), `gtv` 10 (`iframedream.com` = page de pub), `kaztube` 7 (DNS mort), `rutube` 7 (plateforme vivante mais tous les IDs du catalogue supprimés), `mp4` 3 (flash mail.ru, contenu non résoluble) → tous filtrés par `UNRESOLVABLE_HOSTS` (sauf `rutube`, `mail2`, `ok`).
   Aucun autre hôte de secours n'existe sur le site : quand uqload, sibnet et mail2 sont morts pour un épisode, le 0 flux est réel.
 
 ## Runtime Constraints (QuickJS)
@@ -174,6 +174,7 @@ Keep responses concise and to the point in French - unless the user asks otherwi
 - **404 déguisés** : un 404 FullAnime renvoie la home en 200 avec les derniers épisodes d'autres séries → **scoper le parsing des liens `/episode/N` au slug demandé**.
 - **VF** : `fullanime` et `sekai` sont **VOSTFR uniquement** (aucune page `-vf`, sitemap sans VF). Ne pas promettre de VF dans le manifest/README ; garder le label dans `title`, `language: 'ja'`.
 - **Hébergeurs** : résoudre **tous** les embeds (pas de `break` à 2 flux) — sibnet est géo-bloqué (403) et vidmoly peut tomber.
+- **ok.ru** (`resolveOkRu`) : l'ancienne API `dk?cmd=videoPlayerMetadata&mid=…` renvoie désormais une page de login. Le manifest est dans l'attribut `data-options` de `https://ok.ru/videoembed/{id}` (JSON échappé en entités) : `flashvars.metadata.hlsManifestUrl` (master `ok*.vkuser.net`) ou `metadata.videos[]` (MP4 mobile/lowest/low/sd/hd/full). URLs signées **par IP** — valides pour l'appelant ; `data-movie-id="null"` = vidéo supprimée.
 
 ## Testing
 - **Test script**: `node test_providers.js [provider1 provider2 ...]` (tests all if none specified)
