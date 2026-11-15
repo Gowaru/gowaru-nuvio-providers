@@ -41,12 +41,12 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 | 9 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.20 |
 | 10 | **Aniverse** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 0.3.0 |
 | 11 | **Franime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.3 |
-| 12 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.6 |
+| 12 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
 | 13 | **French-Anime** | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
 | 14 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
 | 15 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.2.0 |
 | 16 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.21 |
-| 17 | **Neko-Sama** ⁷ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
+| 17 | **Neko-Sama** ⁷ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.6 |
 | 18 | **SenAnimes** ⁶ | 🎬📺 | FR / JA | — | ⚠️ | ⚠️ | 0.1.3 |
 | 19 | **Sekai** ² | 🎬📺 | VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.27 |
 | 20 | **VoirAnime** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.3.1 |
