@@ -23,7 +23,7 @@
 
 import { fetchText, setCurrentSignal } from './http.js';
 import { isBudgetExhausted, isAborted, resolveStream, fetchBatch } from '../utils/resolvers.js';
-import { resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { resolveTargetEpisodes, getAbsoluteEpisodeFromTmdb } from '../utils/dle-extractor.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { createCache } from '../utils/cache.js';
 
@@ -579,7 +579,11 @@ async function buildStreams(candidates, signal, startTime) {
             title: `Sekai ${cand.quality} - VOSTFR`,
             url: cand.url,
             quality: cand.quality,
-            language: 'VOSTFR',
+            // VOSTFR = audio japonais sous-titré : code `ja` (convention repo,
+            // cf. papadustream/voiranime-homes). L'ancien `VOSTFR` laissait
+            // `createProvider` normaliser en `fr` → le flux apparaissait comme
+            // un doublage français dans les filtres de l'app.
+            language: 'ja',
             type: isDirectMedia(cand.url) ? (/\.m3u8/i.test(cand.url) ? 'hls' : 'mp4') : undefined,
             headers: { Referer: `${BASE_URL}/`, 'User-Agent': USER_AGENT },
         };
@@ -618,13 +622,32 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];
 
-    const [ep, absoluteEp] = await resolveTargetEpisodes(tmdbId, isTv ? 'tv' : mediaType, season, episodeNum, { startTime, budgetMs: BUDGET_MS });
-    const targetEpisode = absoluteEp || ep;
-    console.log(`[Sekai] ${mediaType} S${season}E${episodeNum} → épisode site ${targetEpisode}`);
+    const epNum = parseInt(episodeNum, 10) || 1;
 
-    // Le site indexe ses épisodes en numérotation absolue ; on cible les deux
-    // formes (relative et absolue) pour absorber les écarts d'ArmSync.
-    const targetKeys = [targetEpisode, ep].filter((v, i, arr) => v != null && arr.indexOf(v) === i);
+    // Numérotation ABSOLUE — source autoritaire = cumul des `episode_count`
+    // TMDB (getAbsoluteEpisodeFromTmdb). L'ancien code prenait la valeur ARM en
+    // premier : pour One Piece elle vaut 9 pour S2E1 (au lieu de 62) et 196
+    // pour S10E1 (au lieu de 337) → l'épisode 9/196 d'une AUTRE saison était
+    // servi ("les épisodes ne correspondent pas").
+    let absoluteEp = null;
+    if (isTv && season != null) {
+        absoluteEp = await getAbsoluteEpisodeFromTmdb(tmdbId, season, epNum);
+    }
+    if (absoluteEp == null) {
+        const [ep, armAbsolute] = await resolveTargetEpisodes(
+            tmdbId, isTv ? 'tv' : mediaType, season, epNum, { startTime, budgetMs: BUDGET_MS },
+        );
+        absoluteEp = armAbsolute || ep;
+    }
+    const targetEpisode = absoluteEp || epNum;
+    console.log(`[Sekai] ${mediaType} S${season}E${epNum} → épisode site ${targetEpisode}`);
+
+    // Les pages du site sont numérotées en ABSOLU (One Piece saga-10 = 890+).
+    // On cherche donc d'abord l'absolu seul : inclure aussi le numéro de
+    // saison (1) ferait matcher l'épisode 1 de la saga 1 en premier.
+    const primaryKeys = targetEpisode !== epNum ? [targetEpisode] : [epNum];
+    const fallbackKeys = targetEpisode !== epNum ? [epNum] : [];
+    const targetKeys = primaryKeys;
 
     // 1. Slugs candidats depuis le sitemap
     const slugs = await getSitemapSlugs();
@@ -657,6 +680,8 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
         // 3. Parse en parallèle, arrêt dès qu'un épisode cible est trouvé
         const requests = pages.map((url, i) => ({ url, opts: { isFirst: i === 0 } }));
         let hits = null;
+        // Pages déjà téléchargées : évite de refetch pour la passe de repli.
+        const fetched = new Map();
 
         await fetchBatch(requests, async (url, opts) => {
             if (isAborted(signal)) return null;
@@ -667,6 +692,7 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
                 } catch (e) { return null; }
             }
             if (!content || content.length < 200) return null;
+            fetched.set(url, content);
 
             const found = collectEpisodeSources(content, targetKeys);
             if (found.length) {
@@ -675,6 +701,15 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
             }
             return null;
         }, { concurrency: 5, staggerMs: 60, stopOnFirst: true });
+
+        // Repli : pages en numérotation locale (par saison) — aucune requête
+        // supplémentaire, on re-scanne le HTML déjà en mémoire.
+        if ((!hits || !hits.length) && fallbackKeys.length) {
+            for (const content of fetched.values()) {
+                const found = collectEpisodeSources(content, fallbackKeys);
+                if (found.length) { hits = found; break; }
+            }
+        }
 
         if (hits && hits.length) {
             console.log(`[Sekai] Épisode ${targetEpisode} trouvé (${hits.length} source(s))`);
@@ -748,8 +783,9 @@ function collectEpisodeSources(html, targetKeys) {
     };
 
     for (const entry of playerEntries) {
-        const q = qualityForFamily(null, null);
-        push(entry.url, q.quality, entry.rank);
+        // Le player JS porte déjà sa qualité (1080p et 480p/low) : la forcer à
+        // 720p faisait afficher deux flux identiques dans le sélecteur.
+        push(entry.url, entry.quality || '1080p', entry.rank == null ? 0 : entry.rank);
     }
 
     for (const [family, entries] of families) {
@@ -759,14 +795,5 @@ function collectEpisodeSources(html, targetKeys) {
         }
     }
 
-    // Priorité aux KAI sur les anime remasterisés encore (re-run ci-dessus avec
-    // qualité « 1080p » consolidée — on n'édite pas la liste des URLs en place ici).
-    for (let i = out.length - 1; i >= 0; i--) {
-        const o = out[i];
-        for (const fam of families.keys()) {
-            const q = qualityForFamily(fam, families.keys());
-            if (q.quality === '1080p' && q.rank === 0) { o.rank = -1; break; }
-        }
-    }
     return out;
 }

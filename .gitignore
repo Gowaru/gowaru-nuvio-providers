@@ -85,5 +85,4 @@ benchmark*
 test/
 *.test.js
 *.spec.js
-test_providers.js
 _check_site.js
