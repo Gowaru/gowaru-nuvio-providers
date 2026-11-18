@@ -4,20 +4,62 @@ import cheerio from 'cheerio-without-node-native';
 import { resolveStream, safeFetch, isBudgetExhausted, sortStreamsByLanguage, isAborted, USER_AGENT } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 
-// FIX 2026-09 : ww.animesultra.org est MORT (TCP/TLS KO sur les 2 IP, vérifié
-// live). Le site actif est animesultra.com — mais son moteur DLE distant est
-// lui aussi en panne (full-story 404, /dist/ 404, www1 → 525 SSL failed).
-//
-// DIAG 2026-11 : animesultra.com (et www1/api/cdn.*) renvoie **525
-// (SSL handshake origin KO)** en continu depuis l'EU, et 520/522 depuis des
-// relais US — l'origin monte/descend en boucle. Quelques 200 observés : le
-// HTML est bien l'ancien template DLE (a.film-poster-ahref, /xfsearch/…),
-// mais la nav pointe désormais vers un préfixe /www1-sub/ — structure
-// inutilisable tant que l'hébergement ne tient pas. www.animesultra.com est
-// parqué (« /lander »), animesultra.org/.fr/.net sont morts ou sans rapport.
-// Le provider reste pointé sur le domaine officiel, sort vite quand l'origin
-// est down (sonde 6 s) et renverra 0 stream proprement.
-const BASE_URL = "https://animesultra.com";
+// DIAG 2026-11-16 (revérifié en direct) : AnimesUltra est **hors service**.
+//   - animesultra.com / www1 / v2 / api → **525** (SSL handshake origin KO)
+//     en quasi-permanence ; quelques 200 quand l'origin remonte brièvement.
+//   - ces 200 sont eux aussi cassés : toutes les cartes de l'accueil et des
+//     rubriques pointent sur `href="/"` (seul un fragment `/www1-sub/…` est
+//     réécrit), le bouton « Regarder » d'une fiche vaut aussi `href="/"`,
+//     aucune page épisode n'existe et `/index.php?do=search` répond 404.
+//     → impossible d'atteindre le moindre lecteur, même en HTML brut.
+//   - animesultra.org/.fr/.net/.tv/.to… ne résolvent pas ; `animesultra.fr`
+//     est un annuaire sans rapport (redirige vers gupy.fr) ; `animesultra.net`
+//     est un domaine de monétisation (302 → click-v4.plarclck.com).
+// Le provider sonde donc les hôtes connus en parallèle, détecte le template
+// cassé (liens placeholder) et sort en ~1 requête au lieu de consumer 45 s.
+const HOSTS = [
+    "https://animesultra.com",
+    "https://www1.animesultra.com",
+    "https://v2.animesultra.com",
+];
+let BASE_URL = HOSTS[0];
+
+/**
+ * Le template servi en 200 est cassé : toutes les cartes pointent sur "/" et
+ * aucune page épisode n'existe. Détection = au moins une carte affichée mais
+ * zéro href réellement navigable.
+ */
+function isBrokenTemplate(html) {
+    if (!html) return true;
+    const posters = [...html.matchAll(/class="film-poster-ahref[^"]*"[^>]*href="([^"]*)"/g)];
+    if (posters.length === 0) return html.length < 20000 || !/ep-item|content_player|server-item/.test(html);
+    const real = posters.filter(m => m[1] && m[1] !== "/" && m[1] !== "#" && m[1].includes("-"));
+    return real.length === 0;
+}
+
+/**
+ * Sonde les hôtes en parallèle et retient le premier qui sert un template
+ * utilisable. `false` = site injoignable ou cassé (0 stream, sans requête
+ * supplémentaire).
+ */
+async function resolveBase(signal) {
+    const results = await Promise.allSettled(HOSTS.map(async (host) => {
+        const html = await fetchText(`${host}/`, { timeout: 5000, retries: 0, signal });
+        return { host, html };
+    }));
+    for (const r of results) {
+        if (r.status !== "fulfilled") continue;
+        const { host, html } = r.value;
+        if (!html || html.length < 5000) continue;
+        if (isBrokenTemplate(html)) {
+            console.log(`[AnimesUltra] ${host} : template cassé (liens placeholder, aucune page épisode)`);
+            continue;
+        }
+        BASE_URL = host;
+        return true;
+    }
+    return false;
+}
 
 const searchCache = {};
 const searchPromisesCache = {};
@@ -146,17 +188,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const BUDGET_MS = 45000;
     const startTime = Date.now();
     const epNum = episode || 1;
-    // Sonde de disponibilité : l'origin est en 525/522 la plupart du temps.
-    // Un aller-retour de 6 s évite 6-8 requêtes qui échoueront en cascade
-    // (budget inutilement consommé sur TV où le timeout HTTP est de 30 s).
-    try {
-        const probe = await fetchText(`${BASE_URL}/`, { timeout: 6000, retries: 0 });
-        if (!probe || probe.length < 5000) {
-            console.log('[AnimesUltra] Site injoignable (origin 525/522) — 0 stream');
-            return [];
-        }
-    } catch (e) {
-        console.log(`[AnimesUltra] Site injoignable (${e && e.message}) — 0 stream`);
+    // Sonde multi-hôtes + garde-fou « template cassé » : ~5 s max au lieu de
+    // 45 s de requêtes vouées à l'échec (525 / liens placeholder).
+    if (!(await resolveBase(signal))) {
+        console.log('[AnimesUltra] Site injoignable ou cassé (525 / liens placeholder) — 0 stream');
         return [];
     }
 

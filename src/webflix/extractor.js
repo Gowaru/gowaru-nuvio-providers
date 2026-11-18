@@ -4,7 +4,7 @@ import {
   isBudgetExhausted, getScraperSettings, sanitizeSearchQuery,
 } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { scoreMatch, getUrlOrigin } from '../utils/dle-extractor.js';
+import { scoreMatch, getUrlOrigin, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import {
   API, SITE, TIMEOUTS, MAX_STREAMS, TARGET_STREAMS, BUDGET_MS,
   PROVIDER_NAME, SLOW_HOSTS, SCORES,
@@ -821,6 +821,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   // Nuvio passe 'series' (jamais 'tv') → normaliser
   const isMovie = mediaType === 'movie';
   const prefs = getPrefs();
+
+  // NuvioTV (anime videoIds) sends season=null + an ABSOLUTE episode:
+  // reverse-map it to (season, episode) once, before any URL is built.
+  if (!isMovie) {
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv' });
+    season = se.season;
+    episode = se.episode;
+  }
 
   try {
     if (isMovie) {

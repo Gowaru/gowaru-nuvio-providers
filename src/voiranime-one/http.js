@@ -1,21 +1,18 @@
 /**
- * HTTP Utilities for VoirAnime.one (moteur Next.js/RSC "Anisama").
+ * HTTP Utilities for VoirAnime.one — rebranché 2026-11 sur le moteur **Anisama**
+ * (`anisama.fr`).
  *
- * ⚠ Diagnostic live 2026-11 : `voiranime.one` et son clone `anisama.org` ont
- * une délégation DNS cassée ("No Reachable Authority at delegation") → plus
- * aucune requête n'aboutit, quel que soit le titre demandé. Le moteur change
- * de domaine en permanence (nomadisme Arcom) : on ne code donc plus l'hôte en
- * dur. `resolveBase()` sonde les domaines connus en parallèle (1 GET chacun,
- * réponse JSON `{ animes: [...] }` exigée) et mémorise le premier vivant.
- * Si aucun ne répond, le provider rend 0 stream en ~6 s au lieu de brûler le
- * budget de 60 s de l'app en 404/ENOTFOUND.
+ * ⚠ Diagnostic live 2026-11 : les anciens domaines du moteur Next.js
+ * (`voiranime.one`, `anisama.org`, `anisama.net`) ont une délégation DNS cassée
+ * (« No Reachable Authority ») → plus aucune requête. Le moteur tourne
+ * désormais en **Laravel** sur `anisama.fr` (titre « Anisama — Streaming anime
+ * & lecture de scans ») avec une arborescence différente :
  *
- * Chaîne validée quand un domaine est vivant :
- *  - GET /api/anime/search?q=&langue=&type=&page=  → { animes:[…], total, totalPages }
- *  - Fiches /{slug} : payload RSC (self.__next_f.push) contenant
- *    seasons:[{number,episodes:[{number,released,langues:[…]}]}]
- *  - Pages épisode /{slug}/{saison}/{VF|VOSTFR}/{ep} (films : /{slug}/film/{LANG}/1)
- *    avec une iframe /embed/{cuid} → iframe externe (vidmoly, sibnet…).
+ *   recherche  → GET /recherche?q={q}            → cartes /catalogue/{slug}/
+ *   fiche      → GET /catalogue/{slug}/          → /saison-N/, /saga-…/, /film/
+ *   épisode    → GET /{fiche}/episode-{n}/{vf|vostfr}/ → <option value="embed">
+ *
+ * `CANDIDATE_HOSTS` reste une liste ordonnée : ajouter un miroir ici suffit.
  */
 
 import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolvers.js';
@@ -23,15 +20,8 @@ import { safeFetch, createProviderRateLimiter, isAborted } from '../utils/resolv
 let _currentSignal = null;
 export function setCurrentSignal(signal) { _currentSignal = signal; }
 
-/**
- * Domaines connus du moteur (du plus récent au plus ancien). L'ordre sert de
- * priorité quand plusieurs répondent. Ajouter ici un nouveau miroir suffit.
- */
 export const CANDIDATE_HOSTS = [
-    'voiranime.one',
-    'anisama.org',
-    'anisama.net',
-    'voiranime.lol',
+    'anisama.fr',
 ];
 
 export const BASE = `https://${CANDIDATE_HOSTS[0]}`;
@@ -40,8 +30,8 @@ const DOMAIN = CANDIDATE_HOSTS[0];
 const rateLimit = createProviderRateLimiter();
 
 export const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
     Referer: `${BASE}/`,
 };
@@ -60,22 +50,26 @@ export function isBaseAlive() {
 }
 
 async function probeHost(host, signal) {
-    try {
-        const res = await safeFetch(`https://${host}/api/anime/search?q=a&page=1`, {
-            headers: { ...HEADERS, Referer: `https://${host}/` },
-            timeout: 6000,
-            signal,
-        });
-        if (!res || !res.ok) return null;
-        const text = await res.text();
-        if (!text || text.charAt(0) !== '{') return null;
-        const data = JSON.parse(text);
-        if (!data || !Array.isArray(data.animes)) return null;
-        return `https://${host}`;
-    } catch (e) {
-        if (e && String(e.message || e).includes('AbortError')) throw e;
-        return null;
+    // 2 tentatives : une 403/429 transitoire du moteur ne doit pas condamner
+    // tout le run (la résolution du domaine est mémoïsée).
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const res = await safeFetch(`https://${host}/recherche/?q=a`, {
+                headers: { ...HEADERS, Referer: `https://${host}/` },
+                timeout: 8000,
+                redirect: 'follow',
+                signal,
+            });
+            if (!res || !res.ok) continue;
+            const text = await res.text();
+            // Le moteur doit servir sa page de recherche (cartes /catalogue/).
+            if (!text || (!text.includes('/catalogue/') && !text.includes('Anisama'))) continue;
+            return `https://${host}`;
+        } catch (e) {
+            if (e && String(e.message || e).includes('AbortError')) throw e;
+        }
     }
+    return null;
 }
 
 /**
@@ -105,11 +99,10 @@ export function resolveBase(signal = _currentSignal) {
 }
 
 /**
- * GET générique. Retourne le texte, ou null si non-OK/erreur/timeout.
- * Le JSON est parsé nous-mêmes avec garde (response.json() du runtime
- * renvoie null silencieusement en cas de JSON invalide).
+ * GET HTML générique sur le moteur. Retourne le texte, ou null si
+ * non-OK/erreur/timeout.
  */
-export async function fetchAny(pathOrUrl, options = {}) {
+export async function fetchHtml(pathOrUrl, options = {}) {
     const signal = options.signal || _currentSignal;
     if (isAborted(signal)) throw new Error('AbortError: aborted');
 
@@ -121,19 +114,15 @@ export async function fetchAny(pathOrUrl, options = {}) {
             headers: { ...HEADERS, Referer: `${base}/`, ...(options.headers || {}) },
             timeout: options.timeout ?? 12000,
             signal,
+            redirect: 'follow',
         });
         if (!res || !res.ok) return null;
         const text = await res.text();
-        if (!text) return null;
-        if (options.responseType === 'json') {
-            try { return JSON.parse(text); } catch { return null; }
-        }
-        return text;
+        return text || null;
     } catch (e) {
         if (e && String(e.message || e).includes('AbortError')) throw e;
         return null;
     }
 }
 
-export const fetchText = (path, opts = {}) => fetchAny(path, { ...opts, responseType: 'text' });
-export const fetchJson = (path, opts = {}) => fetchAny(path, { ...opts, responseType: 'json' });
+export const fetchText = fetchHtml;

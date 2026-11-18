@@ -26,6 +26,7 @@ import { fetchText, fetchPage, isHomepageUrl, setCurrentSignal } from './http.js
 import { resolveStream, isAborted, isBudgetExhausted, normalizeLanguageCode, withTimeout } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
 import { createCache } from '../utils/cache.js';
+import { resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 const withCache = createCache('vbe', 'VoiranimeBE');
 
@@ -412,9 +413,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         return extractMovie(tmdbId, inventory, signal, startTime);
     }
 
-    const epNum = Math.max(1, parseInt(episode, 10) || 1);
-    // season=null (IDs anime absolus côté TV) → S1
-    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+    // season=null (IDs anime absolus côté TV): reverse-map absolute -> (S,E)
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv' });
+    const epNum = Math.max(1, se.episode);
+    const seasonNum = Math.max(1, se.season);
 
     const titles = await getTmdbTitles(tmdbId, 'tv', { season: seasonNum });
     if (!titles || titles.length === 0) return [];

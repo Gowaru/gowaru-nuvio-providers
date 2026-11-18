@@ -20,7 +20,9 @@
 
 import { nativeCryptoAvailable } from '../utils/resolvers.js';
 
-const PLAYER_HOSTS = ['hdsplay', 'secured.lol', 'sentinel'];
+// `bysedikamoum.com` = domaine actuel du frontend Byse (constaté 2026-11) :
+// sans lui, isByseUrl() renvoyait false et l'embed restait non résolu.
+const PLAYER_HOSTS = ['hdsplay', 'secured.lol', 'sentinel', 'bysedikamoum'];
 
 /** Teste si une URL pointe vers un player hdsplay/Byse (direct ou via raccourcisseur). */
 export function isByseUrl(url) {

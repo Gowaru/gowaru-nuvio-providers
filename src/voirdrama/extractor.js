@@ -21,15 +21,60 @@
  */
 
 import { fetchText, fetchTextSafe, postAjax, isCloudflareChallenge, SITE } from './http.js';
-import { safeFetch, resolveStream, withTimeout, isAborted } from '../utils/resolvers.js';
+import { safeFetch, resolveStream, withTimeout, isAborted, verifyPlayableUrl } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 // ─── Budgets ────────────────────────────────────────────────────────────────
 const PAGE_TIMEOUT = 15000;      // page série / épisode
 const SEARCH_TIMEOUT = 12000;    // recherche AJAX
 const RESOLVE_TIMEOUT = 8000;    // resolveStream par lecteur
 const MAX_LANGS = 2;             // max variantes langue sondées (VF + VOSTFR)
-const MAX_EMBEDS_PER_LANG = 2;   // max lecteurs résolus par langue
+const MAX_EMBEDS_PER_LANG = 3;   // max lecteurs résolus par langue (site: 3 lecteurs)
+
+// Hôtes de lecteurs définitivement illisibles en lecture directe (vérifié en
+// live 2026-11) : cdn*.my.mail.ru répond 403 sur HEAD comme sur GET, avec ou
+// sans Referer mail.ru → ExoPlayer n'affiche jamais l'image. Ces flux étaient
+// retournés à l'app et passaient devant les flux VidMoly valides.
+const DEAD_EMBED_HOSTS = /(^|\.)my\.mail\.ru$|(^|\.)ok\.ru$/i;
+
+/** Hostname d'une URL ('' si invalide). */
+function hostOf(url) {
+    const m = String(url || '').match(/^https?:\/\/([^/?#]+)/i);
+    return m ? m[1].toLowerCase() : '';
+}
+
+function isDeadEmbedHost(url) {
+    const h = hostOf(url);
+    return !!h && DEAD_EMBED_HOSTS.test(h);
+}
+
+/**
+ * Corrige/valide une URL finale avant de la retourner à l'app :
+ *  - VOE sert parfois la BASE de playlist (`…/x_,n,.urlset/`) sans le
+ *    `master.m3u8` → sans ce segment l'app reçoit un 403 (vérifié en live).
+ *  - Une URL qui n'est ni un manifeste HLS/DASH ni un fichier progressif est
+ *    rejetée (l'app ne saurait pas la lire).
+ */
+function fixFinalUrl(url) {
+    let u = String(url || '').trim();
+    if (!u) return null;
+    if (/\/urlset\/?$/i.test(u)) u = u.replace(/\/$/, '') + '/master.m3u8';
+    if (/\.(mp4|m3u8|mkv|webm|mpd)(\?.*)?$/i.test(u)) return u;
+    if (/\/(hls2|hls)\/.*(master|index)[^/]*\.m3u8/i.test(u)) return u;
+    if (/\/master\.m3u8/i.test(u)) return u;
+    return null;
+}
+
+/** Ordre de fiabilité des lecteurs du site (mesuré en live) : voembed/VidMoly
+ *  d'abord, VOE ensuite, le reste en dernier. */
+function embedRank(url) {
+    const u = String(url || '').toLowerCase();
+    if (u.includes('voembed.') || u.includes('vidmoly.') || u.includes('vmpx.')) return 0;
+    if (u.includes('voe.sx') || u.includes('cloudwindow')) return 1;
+    if (u.includes('my.mail.ru') || u.includes('ok.ru')) return 9;
+    return 5;
+}
 
 // ─── Normalisation mediaType (Nuvio passe parfois "series") ────────────────
 function normalizeMediaType(mediaType) {
@@ -60,7 +105,7 @@ function cleanTitleForSlug(title) {
  * nettoyées donnent `the-glory-season-2` qui n'existe pas → on ajoute
  * systématiquement les suffixes numériques pour season > 1.
  */
-function buildSlugCandidates(baseTitle, lang, searchTitles, seasonNum) {
+function buildSlugCandidates(baseTitle, lang, searchTitles, seasonNum, realSlugs = []) {
     const wanted = cleanTitleForSlug(baseTitle);
     const cands = [];
     const push = (s) => { if (s && !cands.includes(s)) cands.push(s); };
@@ -79,6 +124,20 @@ function buildSlugCandidates(baseTitle, lang, searchTitles, seasonNum) {
     } else {
         push(`${wanted}${seasonSuffix}`);
         if (seasonNum === 1) push(wanted);
+    }
+    // 1bis. Slugs RÉELS du site : la recherche Madara renvoie les URLs exactes
+    // (`/drama/squid-game-2-vf/`, `/drama/the-glory-2/`…) qui ne se déduisent
+    // pas toujours du titre TMDB (suffixes numériques de saison, variantes de
+    // translittération). On les injecte après les formes canoniques.
+    for (const raw of realSlugs) {
+        const s = String(raw || '').replace(/^https?:\/\/voirdrama\.to\/drama\//i, '').replace(/\/$/, '');
+        if (!s || /\//.test(s)) continue;
+        if (lang === 'fr' ? !s.endsWith('-vf') : s.endsWith('-vf')) continue;
+        if (seasonNum > 1 && !new RegExp(`-${seasonNum}(?:-vf)?$`).test(s)) continue;
+        // Saison 1 : refuser les slugs qui portent un suffixe de saison ≥ 2
+        // (`squid-game-2`, `the-glory-3-vf`) → sinon on servirait S2/S3 pour S1.
+        if (seasonNum === 1 && /-\d{1,2}(?:-vf)?$/.test(s)) continue;
+        push(s);
     }
     // 2. Variantes dérivées des titres TMDB (Season/Saison/S1 nettoyés) en
     //    repli — certains slugs du site intègrent l'année ou un sous-titre.
@@ -301,8 +360,10 @@ async function resolveEmbedToStream(embedUrl, baseStream, signal) {
 // ─── Pipeline principal ─────────────────────────────────────────────────────
 export async function extractStreams(tmdbId, mediaType, season, episode, { signal } = {}) {
     const type = normalizeMediaType(mediaType);
-    const epNum = Math.max(1, parseInt(episode, 10) || 1);
-    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: type === 'movie' ? 'movie' : 'tv' });
+    const epNum = Math.max(1, se.episode);
+    const seasonNum = Math.max(1, se.season);
 
     // 1. Titres TMDB (variants saison inclus)
     let titles = [];
@@ -326,12 +387,17 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
         // Une recherche qui couvre bien suffit (titre principal)
         if (searchResults.length >= 3) break;
     }
-    if (!searchResults.length) return [];
+    if (!searchResults.length) {
+        console.warn('[Voirdrama] Aucun résultat de recherche (' + queries.slice(0, 2).join(' / ') + ')');
+        return [];
+    }
+    console.log('[Voirdrama] ' + searchResults.length + ' résultat(s) de recherche');
 
     // 3. Pour chaque langue (VOSTFR d'abord, puis VF) : slug candidats →
     //    page série → liste d'épisodes → page épisode → lecteurs
     const streams = [];
     const seenEmbeds = new Set();
+    const seenFinalUrls = new Set();
     const langs = ['ja', 'fr']; // VOSTFR, VF
     let langsResolved = 0;
 
@@ -345,7 +411,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
             .filter((r) => r.score >= 0.34)
             .sort((a, b) => b.score - a.score)
             .slice(0, 3);
-        if (!scored.length) continue;
+        if (!scored.length) {
+            console.warn('[Voirdrama] Aucun résultat ne correspond au titre TMDB (lang=' + lang + ')');
+            continue;
+        }
 
         // VOSTFR : slugs standards ; VF : uniquement slugs suffixés -vf.
         // FIX 2026-10 (VF manquante S2+) : quand la VOSTFR de la saison N est
@@ -357,9 +426,14 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
         // numéro absolu (offset = nb d'épisodes des saisons précédentes,
         // mesuré sur la VOSTFR de la saison). Jamais de repli si le numéro
         // absolu n'existe pas → pas de faux contenu.
-        let slugCands = buildSlugCandidates(titles[0], lang, titles, seasonNum)
+        // Slugs réels issus des URLs de recherche (les plus fiables) :
+        // `/drama/squid-game-2-vf/` → `squid-game-2-vf`.
+        const realSlugs = searchResults
+            .map((r) => String(r.url || '').replace(/^https?:\/\/voirdrama\.to\/drama\//i, '').replace(/\/$/, ''))
+            .filter((s) => s && !s.includes('/'));
+        let slugCands = buildSlugCandidates(titles[0], lang, titles, seasonNum, realSlugs)
             .filter((s) => (lang === 'fr' ? s.endsWith('-vf') : true))
-            .slice(0, 5);
+            .slice(0, 8);
         // EXTENSION VF S2+ : ajouter la série VF RACINE (sans suffixe saison)
         // si une série -vf de la saison demandée n'existe pas forcément — la
         // VF y est alors numérotée en continu (ex: The Glory S2 → eps 17+ de
@@ -373,7 +447,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
             if (isAborted(signal)) break;
             const seriesUrl = `${SITE}/drama/${slug}/`;
             const episodes = await extractEpisodeList(seriesUrl, { signal });
-            if (!episodes.length) continue;
+            if (!episodes.length) {
+                console.log('[Voirdrama] Pas d\'épisodes sur ' + slug);
+                continue;
+            }
 
             // Épisode demandé (le site peut être en retard → pas de repli
             // silencieux sur un autre numéro : jamais de faux contenu).
@@ -408,6 +485,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
             if (!epHtml || isCloudflareChallenge(epHtml)) continue;
 
             const sources = parseChapterSources(epHtml);
+            console.log(`[Voirdrama] ${slug} S${seasonNum}E${epNum}: ${sources.length} lecteur(s)`);
             if (!sources.length) {
                 // Fallback : iframe inline unique (certains épisodes n'ont
                 // pas thisChapterSources mais un iframe direct).
@@ -416,19 +494,39 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
             }
 
             let resolvedThisLang = 0;
-            for (const src of sources) {
+            // Lecteurs du site triés par fiabilité mesurée (VidMoly > VOE > RU) :
+            // le premier flux retourné est celui que l'app essaie en priorité.
+            const candidates = sources
+                .filter((src) => !isDeadEmbedHost(src.embedUrl))
+                .sort((a, b) => embedRank(a.embedUrl) - embedRank(b.embedUrl));
+            for (const src of candidates) {
                 if (resolvedThisLang >= MAX_EMBEDS_PER_LANG) break;
                 if (seenEmbeds.has(src.embedUrl)) continue;
                 seenEmbeds.add(src.embedUrl);
 
+                // Label du site nettoyé (« ☰ LECTEUR 6 VIDM » → « LECTEUR 6 VIDM ») :
+                // l'app n'affiche que `name`, donc il doit distinguer les lecteurs.
+                const label = String(src.label || 'Lecteur')
+                    .replace(/^[^A-Za-z0-9]+/, '')
+                    .replace(/\s+/g, ' ')
+                    .trim() || 'Lecteur';
                 const baseStream = {
-                    name: 'Voirdrama',
-                    title: `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] ${src.label || 'Lecteur'} — Épisode ${epNum}`,
+                    name: `Voirdrama ${label}`,
+                    title: `[${lang === 'fr' ? 'VF' : 'VOSTFR'}] ${label} — Épisode ${epNum}`,
                     language: lang,
                     quality: 'HD',
                 };
                 const st = await resolveEmbedToStream(src.embedUrl, baseStream, signal);
                 if (!st) continue;
+                const finalUrl = fixFinalUrl(st.url);
+                if (!finalUrl) {
+                    console.log(`[Voirdrama] URL finale non jouable ignorée: ${String(st.url).slice(0, 70)}`);
+                    continue;
+                }
+                const dedupKey = `${lang}|${finalUrl}`;
+                if (seenFinalUrls.has(dedupKey)) continue;
+                seenFinalUrls.add(dedupKey);
+                st.url = finalUrl;
                 delete st.isDirect;
                 delete st.originalUrl;
                 streams.push(st);
@@ -439,5 +537,31 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
         }
     }
 
-    return streams;
+    return filterPlayable(streams);
+}
+
+/**
+ * Écarte les flux dont l'URL finale ne se lance pas (403/404/502, page HTML
+ * d'erreur). Vérifié en live : cdn*.my.mail.ru renvoie 403 même avec Referer,
+ * et une chaîne CDN VidMoly peut être en 502 sur un master alors que l'autre
+ * répond — sans sonde, l'app ouvrait le flux mort en premier.
+ * Une langue qui perd tous ses flux est restaurée (mieux que rien).
+ */
+async function filterPlayable(streams) {
+    if (!streams.length) return streams;
+    const verdicts = await Promise.all(streams.map((s) =>
+        verifyPlayableUrl(s.url, s.headers || {}, { timeoutMs: 6000 }).catch(() => 'unknown')
+    ));
+    const alive = streams.filter((_, i) => verdicts[i] !== 'dead');
+    const langs = new Set(streams.map((s) => s.language || ''));
+    const aliveLangs = new Set(alive.map((s) => s.language || ''));
+    for (const lang of langs) {
+        if (!aliveLangs.has(lang)) {
+            alive.push(...streams.filter((s) => (s.language || '') === lang));
+            console.log(`[Voirdrama] Aucun flux ${lang} ne répond à la sonde → flux conservés par défaut`);
+        }
+    }
+    const deadCount = streams.filter((_, i) => verdicts[i] === 'dead').length;
+    if (deadCount > 0) console.log(`[Voirdrama] ${deadCount} flux mort(s) écarté(s) par la sonde`);
+    return alive;
 }

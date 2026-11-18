@@ -21,6 +21,7 @@ import { fetchText, fetchMeta, fetchJson, postForm, setCurrentSignal } from './h
 import { resolveByse, isByseUrl } from './byse.js';
 import { isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 import { createCache } from '../utils/cache.js';
 
 const withCache = createCache('jta', 'Jetanimes');
@@ -432,8 +433,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     if (mediaType === 'movie') return []; // catalogue séries/animes (films : section /films/ non mappée TMDB)
 
-    const epNum = Math.max(1, parseInt(episode, 10) || 1);
-    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv' });
+    const epNum = Math.max(1, se.episode);
+    const seasonNum = Math.max(1, se.season);
 
     const titles = await getTmdbTitles(tmdbId, 'tv', { season: seasonNum });
     if (!titles || titles.length === 0) return [];

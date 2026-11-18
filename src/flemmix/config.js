@@ -9,6 +9,12 @@ export const ENDPOINTS = {
   SITEMAP_INDEX: `${SITE.BASE_URL}/sitemap.xml`,
   SITEMAP_MOVIES: `${SITE.BASE_URL}/sitemap-movies-1.xml`,
   SITEMAP_TVSHOWS: `${SITE.BASE_URL}/sitemap-tvshows-1.xml`,
+  // Sitemaps de structure : listent les pages saison et CHAQUE page épisode
+  // (`/{slug}/{s}x{e}`), y compris pour les séries dont la page série est
+  // incomplète (saisons absentes du HTML). Vérifié en live 2026-11 :
+  // 74 saisons / 848 épisodes sur 192 séries.
+  SITEMAP_SEASONS: `${SITE.BASE_URL}/sitemap-seasons-1.xml`,
+  SITEMAP_EPISODES: `${SITE.BASE_URL}/sitemap-episodes-1.xml`,
 }
 
 export const SELECTORS = {
@@ -44,10 +50,14 @@ export const SELECTORS = {
 }
 
 export const PATTERNS = {
-  // Pages saison : /{slug}-{id}/saison-{n} (ex: /house-of-the-dragon-04/saison-2)
-  SEASON_LINK: /\/saison-(\d+)(?:-vf|-vostfr)?$/i,
-  // Pages épisode : /{slug}/{s}x{e} (ex: /house-of-the-dragon/3x2) — slug SANS suffixe id
-  EPISODE_LINK: /\/([a-z0-9-]+)\/(\d+)x(\d+)$/i,
+  // Pages saison : /{slug}/saison-{n} — le site ajoute souvent un SOUS-TITRE
+  // après le numéro (`saison-1-murder-house`, `saison-3-partie-3`,
+  // `saison-3-vf`). Sans ce suffixe optionnel, parseSeasons() renvoyait [] et
+  // TOUTE la série tombait à 0 flux (vérifié en live 2026-11 sur AHS).
+  SEASON_LINK: /\/saison-(\d+)(?:-[^/?#]+)?$/i,
+  // Pages épisode : /{slug}/{s}x{e} — même chose, le slug porte le titre de
+  // l'épisode (`1x1-la-maison`, `5x1-the-crawl`).
+  EPISODE_LINK: /\/([a-z0-9-]+)\/(\d+)x(\d+)(?:-[^/?#]+)?$/i,
   IMDB_ID: /tt(\d+)/,
   TMDB_IMAGE: /image\.tmdb\.org\/t\/p\/[^/]+\/([a-zA-Z0-9]+)\.jpg/,
 }

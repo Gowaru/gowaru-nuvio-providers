@@ -2,7 +2,7 @@ import { stripSeasonSuffix, toStream, resolveTargetEpisodes, resolveSeasonEpisod
 import cheerio from 'cheerio-without-node-native';
 import { safeFetch, resolveStream, verifyPlayableUrl, isBudgetExhausted, isAborted, getScraperSettings, isTvMediaType } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { fetchText, fetchJson, fetchPost, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
+import { fetchText, fetchJsonFailover, fetchPost, isDomainCooling, BASE_URL, BASE_URLS, setCurrentSignal } from './http.js';
 import { createCache } from '../utils/cache.js';
 
 const withCache = createCache('fs', 'FrenchStream', { failureTtl: 120_000, maxSize: 200 }); // 2min failure (rate limiting)
@@ -10,8 +10,8 @@ const withCache = createCache('fs', 'FrenchStream', { failureTtl: 120_000, maxSi
 const MIN_MATCH_SCORE = 60;
 const MOVIE_MATCH_SCORE = 55;
 const MAX_SEARCH_QUERIES = 3;
-const MAX_CANDIDATES = 6;   // était 3 : kakaflix (netu/voe) timeout → 2/3 candidats morts
-const TARGET_DIRECT = 4;     // VF + VOSTFR même si les 1ers hosts échouent
+const MAX_CANDIDATES = 8;   // était 3 : kakaflix (netu/voe) timeout → 2/3 candidats morts
+const TARGET_DIRECT = 6;     // VF + VOSTFR même si les 1ers hosts échouent
 // Budget de la phase de résolution (~5s par host fsvid/vidzy : embed + master +
 // variante). 15s ne laissait la place qu'à 2 résolutions → VOSTFR jamais atteinte
 // (les candidats VF passent avant). 22s ≈ 4 résolutions, reste < 45s de budget plugin.
@@ -269,18 +269,30 @@ function extractSerieTag(html) {
 async function searchByTitle(title, mediaType, season) {
     // Normaliser : l'app passe 'series', le scoring attend 'tv'
     const mt = mediaType === 'series' ? 'tv' : mediaType;
-    const allCards = [];
     // Le site bloque la recherche GET (302 → /). Utiliser POST.
-    const results = await Promise.allSettled(
-        BASE_URLS.map(baseUrl => {
-            const url = baseUrl + '/index.php';
-            const body = 'do=search&subaction=search&story=' + encodeURIComponent(title);
-            return fetchPost(url, body, { baseUrl }).then(html => parseSearchCards(html, baseUrl));
-        })
-    );
-    for (const r of results) {
-        if (r.status === 'fulfilled') allCards.push(...r.value);
-    }
+    // Séquentiel (pas les 2 domaines en parallèle) : la recherche POST est
+    // l'appel le plus coûteux en quota → on s'arrête au 1er domaine qui
+    // répond, en commençant par celui qui n'est pas en cooldown 429.
+    const allCards = await withCache('search_' + mt + '_' + title, async () => {
+        const body = 'do=search&subaction=search&story=' + encodeURIComponent(title);
+        const ordered = BASE_URLS.filter(b => !isDomainCooling(b))
+            .concat(BASE_URLS.filter(b => isDomainCooling(b)));
+        let lastErr = null;
+        for (const baseUrl of ordered) {
+            try {
+                const html = await fetchPost(baseUrl + '/index.php', body, { baseUrl });
+                const cards = parseSearchCards(html, baseUrl);
+                if (cards.length > 0) return cards;
+            } catch (e) {
+                lastErr = e;
+                console.warn('[Frenchstream] search "' + title + '" failed on ' + baseUrl + ': ' + e.message);
+            }
+        }
+        // Aucune carte + dernière erreur transitoire (429, timeout) : ne pas
+        // mettre ce faux négatif en cache, l'appel suivant doit réessayer.
+        if (lastErr && !/\b404\b/.test(lastErr.message)) throw lastErr;
+        return [];
+    }, { successTtl: CACHE_TTL_MS, failureTtl: 60000 });
     const filtered = allCards.filter(c => mt === 'tv' ? c.isSeries : !c.isSeries);
     if (filtered.length === 0) return [];
     return filtered.map(c => ({ ...c, _score: scoreCard(c, title, mt, season), _matchedTitle: title }))
@@ -334,12 +346,20 @@ function languageLabel(k) {
     return l ? l.toUpperCase() : 'VFF';
 }
 
-function makeStream(name, host, language, url, quality, subType) {
+function makeStream(name, host, language, url, quality, subType, info) {
     const lang = languageLabel(language);
     const origin = getOrigin(url);
     const opts = { quality: quality || 'HD', subType };
-    // Frenchstream utilise le nom de l'hôte (FSVID, UQLOAD, etc.) dans le titre
-    opts.title = '[' + lang + '] ' + hostLabel(host) + (quality && quality !== 'HD' ? ' [' + quality + ']' : '');
+    // Frenchstream utilise le nom de l'hôte (FSVID, UQLOAD, etc.) dans le titre.
+    // Le label S/E + le nom de série sont ajoutés quand on les connaît : sans
+    // eux, tous les épisodes d'une série partagent le même titre → l'app les
+    // regroupe (bingeGroup identique) et peut relancer le mauvais épisode.
+    const parts = ['[' + lang + ']', hostLabel(host)];
+    if (quality && quality !== 'HD') parts.push('[' + quality + ']');
+    if (info && info.label) parts.push(info.label);
+    if (info && info.series) parts.push('· ' + info.series);
+    opts.title = parts.join(' ');
+    if (info && info.series) opts.name = info.series;
     return toStream(url, lang, name, origin, opts);
 }
 
@@ -357,23 +377,23 @@ async function fetchSeasons(tmdbId) {
 }
 
 async function fetchSeasonsRaw(tag, cacheKey) {
-    const url = BASE_URL + '/engine/ajax/get_seasons.php?serie_tag=' + encodeURIComponent(tag) + '&news_id=0';
+    const path = '/engine/ajax/get_seasons.php?serie_tag=' + encodeURIComponent(tag) + '&news_id=0';
     return withCache('seasons_' + (cacheKey || tag), async () => {
-        const data = await fetchJson(url, { baseUrl: BASE_URL });
+        const data = await fetchJsonFailover(path);
         if (!Array.isArray(data)) return [];
         return data;
     }, { successTtl: CACHE_TTL_MS, failureTtl: 60000 });
 }
 
 async function fetchEpisodeData(seasonNewsId) {
-    const url = BASE_URL + '/data/eps_' + seasonNewsId + '.txt?v=' + Math.floor(Date.now() / 30000);
+    const path = '/data/eps_' + seasonNewsId + '.txt?v=' + Math.floor(Date.now() / 30000);
     return withCache('eps_' + seasonNewsId, async () => {
-        const data = await fetchJson(url, { baseUrl: BASE_URL });
+        const data = await fetchJsonFailover(path);
         return data;
     }, { successTtl: 30000, failureTtl: 10000 });
 }
 
-function collectTvSiteCandidates(epData, episode, subType) {
+function collectTvSiteCandidates(epData, episode, subType, info) {
     const epNum = Number(episode) || 1;
     const { excludeHosts } = getPrefs();
     // Vérifié en live : eps file = {vf:{1:{host:url}}, vostfr:{...}, vo:{...}, info:{...}}
@@ -388,7 +408,7 @@ function collectTvSiteCandidates(epData, episode, subType) {
         const hosts = Object.keys(players)
             .filter(h => (players[h] || '').startsWith('http'))
             .sort((a, b) => hostPriority(a, excludeHosts, players[a]) - hostPriority(b, excludeHosts, players[b]));
-        perLang.push(hosts.map(host => makeStream('Frenchstream', host, lang, players[host], null, subType)));
+        perLang.push(hosts.map(host => makeStream('Frenchstream', host, lang, players[host], null, subType, info)));
     }
     // Interleave par langue : [VF1, VOSTFR1, VF2, VOSTFR2, ...]. Sans ça, les
     // 5 VF (dont certaines lentes) épuisent le budget AVANT la 1ère VOSTFR →
@@ -561,6 +581,9 @@ async function filterPlayableStreams(streams, probeCtx = {}) {
 async function searchByTmdbTag(tmdbId, mediaType) {
     const prefix = mediaType === 'movie' ? 'f' : 's';
     const url = BASE_URL + '/index.php?do=xfsearch&xfname=tagz&xf=' + prefix + '-' + encodeURIComponent(tmdbId);
+    // Cache (y compris les 404 « tag absent ») : sans lui, chaque appel du
+    // provider refaisait la requête xfsearch qui échoue → quota 429 gaspillé.
+    return withCache('tag_' + prefix + '_' + tmdbId, async () => {
     try {
         const html = await fetchText(url, { baseUrl: BASE_URL, timeout: 10000 });
         const cards = parseSearchCards(html, BASE_URL);
@@ -572,8 +595,12 @@ async function searchByTmdbTag(tmdbId, mediaType) {
         return result;
     } catch (e) {
         console.warn('[Frenchstream] xfsearch failed: ' + e.message);
-        return [];
+        // 404 = tag absent (résultat stable, cachable). 429/timeout = transitoire :
+        // ne pas empoisonner le cache avec un faux négatif.
+        if (/\b404\b/.test(e.message)) return [];
+        throw e;
     }
+    }, { successTtl: CACHE_TTL_MS, failureTtl: 120000 });
 }
 
 /* ---------- MOVIE CATEGORY BROWSING ---------- */
@@ -600,13 +627,14 @@ async function fetchCategoryMovies(catPath) {
     }, { successTtl: CACHE_TTL_MS, failureTtl: 60000 });
 }
 
-async function verifyAndExtractMovieStreams(newsId, tmdbId, subType) {
-    const url = BASE_URL + '/engine/ajax/film_api.php?id=' + newsId;
+async function verifyAndExtractMovieStreams(newsId, tmdbId, subType, info) {
     try {
-        const data = await fetchJson(url, { baseUrl: BASE_URL });
+        const data = await fetchJsonFailover('/engine/ajax/film_api.php?id=' + newsId);
         const tagz = data?.meta?.tagz || '';
         const expectedTag = 'f-' + tmdbId;
-        if (tagz !== expectedTag) {
+        // tagz peut contenir plusieurs tags séparés par des virgules/espaces.
+        const tagList = String(tagz).split(/[,\s|]+/).filter(Boolean);
+        if (!tagList.includes(expectedTag)) {
             console.log('[Frenchstream] Tagz mismatch: got ' + tagz + ', expected ' + expectedTag);
             return null;
         }
@@ -632,11 +660,12 @@ async function verifyAndExtractMovieStreams(newsId, tmdbId, subType) {
             for (const lang of Object.keys(versions)) {
                 const url = versions[lang];
                 if (typeof url === 'string' && url.startsWith('http')) {
-                    // FIX : les wrappers kakaflix (dood/voe/netu) sont morts en
-                    // live (timeout 18 s) → jamais proposés, sinon ils brûlent
-                    // le budget de résolution et la VOSTFR n'est jamais atteinte.
-                    if (hostPriority(host, excludeHosts, url) >= 200) continue;
-                    streams.push(makeStream('Frenchstream', host, lang, url, null, subType));
+                    // Les hosts "morts" (kakaflix/dood/netu) ne sont plus
+                    // écartés : ils sont triés en dernier (hostPriority=200),
+                    // donc proposés seulement si aucun host fiable ne répond.
+                    // Les exclure faisait perdre les films qui n'ont QUE ces
+                    // wrappers côté site.
+                    streams.push(makeStream('Frenchstream', host, lang, url, null, subType, info));
                 }
             }
         }
@@ -679,15 +708,21 @@ async function searchMovieOnSite(tmdbId, titles, subType) {
     try {
         const tagged = await searchByTmdbTag(tmdbId, 'movie');
         if (tagged.length > 0) {
-            const streams = await verifyAndExtractMovieStreams(tagged[0].newsId, tmdbId, subType);
-            if (streams && streams.length > 0) {
-                const resolved = await resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
-                console.log('[Frenchstream] Movie found via TMDB tag: ' + resolved.length + ' streams');
-                return resolved;
+            // Le site peut taguer plusieurs fiches pour le même film (VF, VOSTFR,
+            // remaster, doublon de newsid) : les essayer TOUTES avant d'abandonner.
+            for (const card of tagged) {
+                const streams = await verifyAndExtractMovieStreams(card.newsId, tmdbId, subType);
+                if (streams && streams.length > 0) {
+                    const resolved = await resolveCandidates(streams, { startTime, budgetMs: BUDGET_MS });
+                    if (resolved.length > 0) {
+                        console.log('[Frenchstream] Movie found via TMDB tag (' + card.newsId + '): ' + resolved.length + ' streams');
+                        return resolved;
+                    }
+                }
             }
-            // Tag trouvé mais players vides → le film existe sans source, pas la
-            // peine de scanner les catégories pour retomber sur la même fiche.
-            console.log('[Frenchstream] Tag match ' + tagged[0].newsId + ' has no players');
+            // Toutes les fiches taguées sont sans source → pas la peine de
+            // scanner les catégories pour retomber sur les mêmes fiches.
+            console.log('[Frenchstream] Tag matches (' + tagged.length + ') have no playable players');
             return [];
         }
     } catch (e) {
@@ -918,7 +953,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 const epData = await fetchEpisodeData(firstSeasonNewsId);
                 if (epData) {
                     for (const ep of targetEpisodes) {
-                        const candidates = collectTvSiteCandidates(epData, ep, subType);
+                        const candidates = collectTvSiteCandidates(epData, ep, subType, { label: 'S' + (Number(effectiveSeason)||1) + 'E' + episode, series: typeof titles[0] === 'string' ? titles[0] : '' });
                         if (candidates.length > 0) {
                             const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                             console.log('[Frenchstream] Direct eps ' + firstSeasonNewsId + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
@@ -930,10 +965,20 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                 console.warn('[Frenchstream] Direct episode data failed: ' + e.message);
             }
         }
+        const snForLog = Number(effectiveSeason) || 1;
+        const epInfo = {
+            label: 'S' + snForLog + 'E' + episode,
+            series: typeof titles[0] === 'string' ? titles[0] : ''
+        };
         if (seasons.length > 0) {
-            const sn = Number(effectiveSeason) || 1;
-            const sIdx = seasons.findIndex(s => /saison\s*(\d+)/i.test(s.title) && parseInt(s.title.match(/saison\s*(\d+)/i)[1]) === sn);
-            let target = sIdx !== -1 ? seasons[sIdx] : null;
+            const sn = snForLog;
+            const seasonOf = (t) => { const m = /saison\s*(\d+)/i.exec(t || ''); return m ? parseInt(m[1], 10) : null; };
+            // FIX « l'épisode d'une autre saison s'affiche » : le site peut
+            // exposer la MÊME saison sur plusieurs fiches (parties 1/2, ou
+            // doublons) — findIndex n'en testait qu'une seule. On tente toutes
+            // les fiches de la saison demandée, dans l'ordre du site.
+            const sameSeason = seasons.filter(s => seasonOf(s.title) === sn);
+            let target = sameSeason.length > 0 ? sameSeason[0] : null;
             // FIX « l'épisode d'une autre saison s'affiche » : si la saison
             // demandée n'existe PAS sur le site et que le site expose plusieurs
             // saisons numérotées, l'ancien code retombait sur seasons[0] → la
@@ -948,48 +993,41 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                     return [];
                 }
                 target = seasons[0];
+                sameSeason.push(target);
             }
+            // Fiche UNIQUE couvrant plusieurs saisons en numérotation
+            // ABSOLUE (ex. « One Piece » : 1 fiche, eps 1..1100) : le numéro
+            // local vise alors le mauvais épisode, l'absolu est prioritaire.
+            const singleCard = seasons.length === 1 && sameSeason.length === 1;
+            const epsToTry = (singleCard && sn > 1 && targetEpisodes.length > 1)
+                ? [targetEpisodes[targetEpisodes.length - 1], targetEpisodes[0]]
+                : targetEpisodes;
             if (target) {
-                let epData = null;
-                try {
-                    epData = await fetchEpisodeData(target.id);
-                } catch (e) {
-                    console.warn(`[Frenchstream] fetchEpisodeData failed: ${e.message}`);
+                // Fiches de la même saison : toutes tentées (parties / doublons),
+                // puis la dernière saison du site en repli (épisodes récents
+                // publiés dans la saison suivante).
+                const tries = [];
+                const seenIds = new Set();
+                for (const s of sameSeason.concat(seasons.length > 1 ? [seasons[seasons.length - 1]] : [])) {
+                    if (s && !seenIds.has(String(s.id))) { seenIds.add(String(s.id)); tries.push(s); }
                 }
-                if (epData) {
-                    for (const ep of targetEpisodes) {
-                        const candidates = collectTvSiteCandidates(epData, ep, subType);
-                        if (candidates.length > 0) {
-                            const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
-                            if (streams.length > 0) {
-                                console.log('[Frenchstream] Site eps ' + target.id + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
-                                return streams;
-                            }
-                        }
-                    }
-                }
-                // FIX "épisode ne correspond pas" : la saison ciblée n'a pas
-                // l'épisode demandé (cas fréquent : les derniers épisodes sont
-                // publiés dans une autre saison du site) → retenter sur la
-                // dernière saison disponible avant d'abandonner.
-                const last = seasons[seasons.length - 1];
-                if (last && last.id !== target.id) {
+                for (const card of tries) {
+                    let epData = null;
                     try {
-                        const lastData = await fetchEpisodeData(last.id);
-                        if (lastData) {
-                            for (const ep of targetEpisodes) {
-                                const candidates = collectTvSiteCandidates(lastData, ep, subType);
-                                if (candidates.length > 0) {
-                                    const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
-                                    if (streams.length > 0) {
-                                        console.log('[Frenchstream] Last-season fallback ' + last.id + ': ' + streams.length + ' streams (ep=' + ep + ')');
-                                        return streams;
-                                    }
-                                }
-                            }
-                        }
+                        epData = await fetchEpisodeData(card.id);
                     } catch (e) {
-                        console.warn('[Frenchstream] Last-season fallback failed: ' + e.message);
+                        console.warn(`[Frenchstream] fetchEpisodeData failed: ${e.message}`);
+                    }
+                    if (!epData) continue;
+                    for (const ep of epsToTry) {
+                        if (isBudgetExhausted(startTime, BUDGET_MS)) return [];
+                        const candidates = collectTvSiteCandidates(epData, ep, subType, epInfo);
+                        if (candidates.length === 0) continue;
+                        const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
+                        if (streams.length > 0) {
+                            console.log('[Frenchstream] Site eps ' + card.id + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');
+                            return streams;
+                        }
                     }
                 }
             }
@@ -1014,7 +1052,7 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
                         const epData = await fetchEpisodeData(modalMatch);
                         if (epData) {
                             for (const ep of targetEpisodes) {
-                                const candidates = collectTvSiteCandidates(epData, ep, subType);
+                                const candidates = collectTvSiteCandidates(epData, ep, subType, { label: 'S' + (Number(effectiveSeason)||1) + 'E' + episode, series: typeof titles[0] === 'string' ? titles[0] : '' });
                                 if (candidates.length > 0) {
                                     const streams = await resolveCandidates(candidates, { startTime, budgetMs: BUDGET_MS });
                                     console.log('[Frenchstream] DLE fallback eps ' + modalMatch + ': ' + candidates.length + ' candidates, ' + streams.length + ' streams (ep=' + ep + ')');

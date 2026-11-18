@@ -37,7 +37,7 @@ import {
   normalizeLanguageCode,
 } from '../utils/resolvers.js'
 import { getTmdbTitles } from '../utils/metadata.js'
-import { normalize, scoreMatch, hasForeignLeadingTokens } from '../utils/dle-extractor.js'
+import { normalize, scoreMatch, hasForeignLeadingTokens, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js'
 
 const PROVIDER = 'SenAnimes'
 const BUDGET_MS = 42000
@@ -223,6 +223,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
   if (isAborted(signal)) return []
   resetHumanGate()
   const startTime = Date.now()
+
+  // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+  if (mediaType !== 'movie') {
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv', startTime })
+    season = se.season
+    episode = se.episode
+  }
 
   const titles = await getTmdbTitles(tmdbId, mediaType === 'movie' ? 'movie' : 'tv', { season })
   if (!titles || titles.length === 0) {

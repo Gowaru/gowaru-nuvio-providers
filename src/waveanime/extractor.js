@@ -13,7 +13,7 @@
 import { fetchJson, fetchText, setCurrentSignal } from './http.js';
 import { isBudgetExhausted, isAborted, normalizeLanguageCode, isTvMediaType } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { normalize, hasForeignLeadingTokens } from '../utils/dle-extractor.js';
+import { normalize, hasForeignLeadingTokens, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://waveanime.fr";
 const BUDGET_MS = 45000;
@@ -407,6 +407,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     if (isAborted(signal)) return [];
     setCurrentSignal(signal);
     const startTime = Date.now();
+
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    if (mediaType !== 'movie') {
+        const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv', startTime });
+        season = se.season;
+        episode = se.episode;
+    }
 
     const titles = await getTmdbTitles(tmdbId, mediaType, { season });
     if (!titles || titles.length === 0) return [];

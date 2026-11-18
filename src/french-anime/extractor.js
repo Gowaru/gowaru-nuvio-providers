@@ -31,6 +31,7 @@ import { resolveStream, isAborted, safeFetch, withTimeout } from '../utils/resol
 import { createCache } from '../utils/cache.js';
 import { isTurnstileSolverEnabled } from '../utils/turnstile.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 const withCache = createCache('fra', 'FrenchAnime');
 
@@ -745,9 +746,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
 
     if (signal) setCurrentSignal(signal);
 
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: type === 'movie' ? 'movie' : 'tv' });
+
     let titles = [];
     try {
-        titles = await getTmdbTitles(tmdbId, type, { season: parseInt(season, 10) || 1 });
+        titles = await getTmdbTitles(tmdbId, type, { season: se.season });
     } catch (e) {
         if (isAborted(signal)) throw e;
     }

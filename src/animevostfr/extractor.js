@@ -357,7 +357,7 @@ function isDeadPlayerHost(url) {
 /**
  * Lecteurs « Byse » (bysewihe.com, hdsplay*, secured.lol) : SPA Vite dont
  * l'API /api/videos/{code} renvoie un playback AES-256-GCM. resolveByse
- * (partagé avec jetanimes/adkami/animesite) le déchiffre via crypto.subtle
+ * (partagé avec jetanimes/animesite) le déchiffre via crypto.subtle
  * (Mobile) ou CryptoJS-CTR (les deux runtimes) → master.m3u8 direct.
  */
 function isBysePlayer(url) {

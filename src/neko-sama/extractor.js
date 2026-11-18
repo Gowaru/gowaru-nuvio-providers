@@ -27,13 +27,19 @@
 
 import { fetchText, setCurrentSignal } from './http.js';
 import { isAborted, isBudgetExhausted, resolveStream, normalizeLanguageCode } from '../utils/resolvers.js';
+import { resolveSeasonEpisodeInputs, getAbsoluteEpisodeFromTmdb } from '../utils/dle-extractor.js';
 
 const BASE_URL = "https://animes-sama.su";
 const SITEMAP_URL = `${BASE_URL}/wp-sitemap-posts-anime-1.xml`;
+const SITEMAP_INDEX = `${BASE_URL}/wp-sitemap.xml`;
 const BUDGET_MS = 38000;
-const MAX_PAGE_FETCHES = 4;
-const MAX_BUTTONS_PER_LANG = 4;
-const MAX_HOSTS_PER_LANG = 2;
+const MAX_PAGE_FETCHES = 6;
+const MAX_PART_PAGES = 4;
+// Un server-group contient TOUTES les langues (VO-1…, VF-1…, VA-1…, VKR-1…).
+// On sonde plus de boutons par langue et on garde plusieurs CDN distincts :
+// un seul hébergeur mort ne doit jamais vider une langue.
+const MAX_BUTTONS_PER_LANG = 8;
+const MAX_HOSTS_PER_LANG = 3;
 
 // ---- helpers ----
 
@@ -93,16 +99,23 @@ function extractEpisodesFromHtml(html) {
     if (start === -1) return eps;
     const endUl = html.indexOf('</ul>', start);
     const scope = endUl > -1 ? html.slice(start, endUl) : html.slice(start, start + 200000);
-    const re = /<a[^>]+href="([^"]*episode-(\d+)(?:-saison-(\d+))?[^"?]*)"[^>]*>[\s\S]{0,400}?<(?:div|span)[^>]*class="[^"]*epl-num[^"]*"[^>]*>([^<]{0,30})<\/(?:div|span)>/gi;
+    const re = /<a[^>]+href="([^"]*episode-(\d+)(?:-saison-(\d+))?(?:-partie-(\d+))?[^"?]*)"[^>]*>[\s\S]{0,400}?<(?:div|span)[^>]*class="[^"]*epl-num[^"]*"[^>]*>([^<]{0,30})<\/(?:div|span)>/gi;
     let m;
     while ((m = re.exec(scope)) !== null) {
         const url = absoluteUrl(m[1]);
         if (!url) continue;
         // Numéro affiché (epl-num) prioritaire sur le numéro d'URL
-        const num = parseInt((m[4] || '').trim(), 10) || parseInt(m[2], 10);
-        if (!num || seen.has(num)) continue;
-        seen.add(num);
-        eps.push({ url, num, season: m[3] ? parseInt(m[3], 10) : null, label: `Épisode ${num}` });
+        const num = parseInt((m[5] || '').trim(), 10) || parseInt(m[2], 10);
+        if (!num) continue;
+        const season = m[3] ? parseInt(m[3], 10) : null;
+        const part = m[4] ? parseInt(m[4], 10) : 1;
+        // Dédup par (numéro, saison, partie) : une page peut exposer plusieurs
+        // parties (Dr. Stone S3 partie 1/2) qui renumérotent à 1 → l'ancien
+        // dédoublonnage par numéro seul supprimait la moitié des épisodes.
+        const key = `${num}|${season == null ? 'x' : season}|${part}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        eps.push({ url, num, season, part, label: `Épisode ${num}` });
     }
     return eps;
 }
@@ -122,7 +135,15 @@ function getCatalog() {
 }
 
 async function loadCatalog() {
-    const xml = await fetchText(SITEMAP_URL, { timeout: 12000 });
+    let xml = await fetchText(SITEMAP_URL, { timeout: 12000 });
+    if (!xml || xml.indexOf('/anime/') === -1) {
+        // Sitemap paginé/renommé : on lit l'index WordPress pour retrouver
+        // la page posts-anime courante. Sans ça, un changement côté site
+        // faisait tomber tout le catalogue sur le repli HTML (lent, partiel).
+        const index = await fetchText(SITEMAP_INDEX, { timeout: 10000 });
+        const alt = index && (index.match(/<loc>([^<]*posts-anime[^<]*)<\/loc>/i) || [])[1];
+        if (alt) xml = await fetchText(alt, { timeout: 12000 });
+    }
     if (!xml || xml.indexOf('<loc>') === -1) return null;
     const entries = [];
     const re = /<loc>(https?:\/\/[^<]*?\/anime\/([a-z0-9][a-z0-9-]*)\/?)\s*<\/loc>/gi;
@@ -133,13 +154,18 @@ async function loadCatalog() {
         if (!url || !slug) continue;
         // 2 hiérarchies : …-saison-N/ et les catalogues par arc …-saga-N-…/
         // (One Piece : TMDB S1 = saga 1). Le numéro pilote la garde saison.
-        const seasonM = slug.match(/-saison-(\d+)$/);
+        // …-saison-3-partie-2 : le suffixe partie ne doit pas casser la
+        // détection de saison (sinon ces pages passaient pour des hubs et
+        // un épisode d'une AUTRE saison était servi).
+        const seasonM = slug.match(/-saison-(\d+)(?:-partie-(\d+))?$/);
         const sagaM = slug.match(/-saga-(\d+)/);
+        const partM = slug.match(/-partie-(\d+)/);
         entries.push({
             slug,
             url,
             base: seasonM ? slug.slice(0, seasonM.index) : slug,
             season: seasonM ? parseInt(seasonM[1], 10) : (sagaM ? parseInt(sagaM[1], 10) : null),
+            part: partM ? parseInt(partM[1], 10) : 1,
         });
     }
     if (entries.length) console.log(`[NekoSama] catalogue sitemap : ${entries.length} pages`);
@@ -210,9 +236,10 @@ function pickCandidates(catalog, titles, wantedSeason, isMovie, signal) {
         let s = best + typeBias(e.slug, isMovie);
         if (wantedSeason) {
             // Un hub (eplister vide) n'est qu'un conteneur : il ne doit pas
-            // passer devant la page saison/saga réellement demandée.
-            if (e.season == null) s -= 25;
-            else if (e.season === wantedSeason) s += 35;
+            // passer devant la page saison/saga réellement demandée (constaté :
+            // hub 140 > saison 139 → 1 fetch gaspillé + épisode d'une autre saison).
+            if (e.season == null) s -= 70;
+            else if (e.season === wantedSeason) s += 35 + (e.part === 1 ? 2 : 0);
             else s -= Math.min(30, Math.abs(e.season - wantedSeason) * 4);
         }
         scored.push({ ...e, score: s });
@@ -234,13 +261,15 @@ async function searchSeries(query) {
 
 function linkToEntry(url) {
     const slug = url.replace(/.*\/anime\//, '').replace(/\/$/, '').toLowerCase();
-    const seasonM = slug.match(/-saison-(\d+)$/);
+    const seasonM = slug.match(/-saison-(\d+)(?:-partie-(\d+))?$/);
     const sagaM = slug.match(/-saga-(\d+)/);
+    const partM = slug.match(/-partie-(\d+)/);
     return {
         slug,
         url,
         base: seasonM ? slug.slice(0, seasonM.index) : slug,
         season: seasonM ? parseInt(seasonM[1], 10) : (sagaM ? parseInt(sagaM[1], 10) : null),
+        part: partM ? parseInt(partM[1], 10) : 1,
         score: 0,
     };
 }
@@ -288,46 +317,73 @@ async function searchCandidates(titles, wantedSeason, isMovie) {
 // ---- page épisode ----
 
 /**
- * Groupes serveurs d'une page épisode (SUB = VOSTFR, VF = doublage).
- * Split sur `<div class="server-group">` : la lookahead précédente exigeait
- * `</div></div><div class="server-divider"` et ratait des groupes.
- * Retourne [{ lang, servers: [src,…] }] dans l'ordre du DOM.
+ * Langue d'un libellé de bouton/serveur.
+ * Le thème regroupe TOUTES les langues dans un même `server-group` (label
+ * « SUB: ») : boutons VO-1… (VOSTFR), VF-1…/VF1-…/VF2-… (VF), VA-1… (anglais),
+ * VKR-1… (coréen). L'ancien code déduisait la langue du label du GROUPE et
+ * plafonnait à 4 boutons → les VF (toujours après les VO) n'étaient jamais
+ * résolues et étaient étiquetées VOSTFR.
+ */
+function buttonLang(raw) {
+    const t = String(raw || '').toUpperCase().replace(/\s+/g, '');
+    if (!t) return '';
+    if (/^VOST/.test(t) || /^SUB/.test(t) || /^VO([-\d]|$)/.test(t)) return 'VOSTFR';
+    if (/^VF/.test(t) || /^FRENCH/.test(t)) return 'VF';
+    if (/^VA([-\d]|$)/.test(t)) return 'VA';
+    if (/^VKR/.test(t)) return 'VKR';
+    return '';
+}
+
+/** Code langue app Nuvio (fr/en/multi/ja) depuis le libellé du site. */
+function langCode(lang) {
+    if (lang === 'VF') return 'fr';
+    if (lang === 'VA') return 'en';
+    if (lang === 'VKR') return 'ko';
+    return normalizeLanguageCode(lang) || 'fr';
+}
+
+/**
+ * Serveurs d'une page épisode, groupés PAR LANGUE (un bouton = une langue).
+ * Retourne [{ lang, servers: [src,…] }] : VF, VOSTFR, puis VA/VKR.
  */
 function extractServerGroups(html) {
     const zoneStart = html.indexOf('class="server-right"');
-    const zone = zoneStart >= 0 ? html.slice(zoneStart, zoneStart + 60000) : html;
+    const zone = zoneStart >= 0 ? html.slice(zoneStart, zoneStart + 80000) : html;
     const parts = zone.split('<div class="server-group">');
-    const groups = [];
-    parts.slice(1).forEach((raw, gi) => {
-        const body = raw.slice(0, 12000);
-        const labelM = body.match(/<label[^>]*>([\s\S]*?)<\/label>/);
-        const label = labelM ? labelM[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().toUpperCase() : '';
-        let lang = '';
-        if (/^VF/.test(label) || /FRENCH/.test(label) || /^VA/.test(label)) lang = 'VF';
-        else if (/^SUB/.test(label) || /VOSTFR/.test(label) || /^VO/.test(label)) lang = 'VOSTFR';
+    const byLang = new Map();
+    let hint = '';
+    const push = (lang, src) => {
+        if (!lang || !src) return;
+        if (!byLang.has(lang)) byLang.set(lang, []);
+        const list = byLang.get(lang);
+        if (!list.includes(src)) list.push(src);
+    };
 
-        const servers = [];
-        const seen = new Set();
+    for (let i = 1; i < parts.length; i++) {
+        // Commentaire de section précédent (<!-- VF SERVERS -->) : indice de
+        // dernier recours seulement, le thème l'affiche parfois à l'envers.
+        const before = parts[i - 1] || '';
+        const cm = before.match(/<!--\s*(VOSTFR|VO|VF|VA|VKR)\s+SERVERS?\s*-->/gi);
+        if (cm) hint = buttonLang(cm[cm.length - 1].replace(/<!--|-->|SERVERS?/gi, '').trim());
+
+        const body = parts[i].slice(0, 20000);
+        const labelM = body.match(/<label[^>]*>([\s\S]*?)<\/label>/);
+        const groupLang = buttonLang(labelM ? labelM[1].replace(/<[^>]+>/g, '') : '');
         const btnRe = /loadMi\(\{\s*value:\s*'([A-Za-z0-9+/=]{20,})'\s*\}\)[^>]*>\s*([^<]{0,24})</g;
         let b;
         while ((b = btnRe.exec(body)) !== null) {
-            const text = (b[2] || '').trim().toUpperCase();
-            if (!lang) {
-                if (/^VF/.test(text)) lang = 'VF';
-                else if (/^(VO|SUB|VOST)/.test(text)) lang = 'VOSTFR';
-            }
+            const lang = buttonLang(b[2]) || groupLang || hint || 'VOSTFR';
             try {
                 const decoded = atob(b[1]);
                 const srcM = decoded.match(/src="([^"]+)"/);
-                const src = srcM ? absoluteUrl(srcM[1]) : null;
-                if (!src || seen.has(src)) continue;
-                seen.add(src);
-                servers.push(src);
+                push(lang, srcM ? absoluteUrl(srcM[1]) : null);
             } catch (_) { /* base64 invalide */ }
         }
-        if (servers.length) groups.push({ lang: lang || 'VOSTFR', servers, order: gi });
-    });
-    return groups;
+    }
+    const order = { VF: 0, VOSTFR: 1, VA: 2, VKR: 3 };
+    return [...byLang.entries()]
+        .map(([lang, servers]) => ({ lang, servers }))
+        .sort((a, b) => (order[a.lang] ?? 9) - (order[b.lang] ?? 9));
 }
 
 /** Page player du thème → iframe hébergeur réelle. */
@@ -342,6 +398,152 @@ async function resolvePlayerIframe(src, referer) {
     return abs || null;
 }
 
+/**
+ * Numérotation ABSOLUE : les catalogues par arc (one-piece-saga-N) et
+ * certaines fiches uniques numérotent en continu alors que TMDB redémarre à 1.
+ * Si la plage est contiguë et ne commence pas à 1, on décale l'épisode TMDB.
+ */
+function remapAbsolute(list, targetEp) {
+    if (!list.length) return null;
+    const nums = list.map(e => e.num).sort((a, b) => a - b);
+    const min = nums[0];
+    const max = nums[nums.length - 1];
+    if (min < 2) return null;
+    if (max - min + 1 !== nums.length) return null;
+    const abs = min + targetEp - 1;
+    if (abs > max) return null;
+    const hit = list.find(e => e.num === abs);
+    if (hit) {
+        console.log(`[NekoSama] numérotation absolue : E${targetEp} → ép. ${abs}`);
+        return hit;
+    }
+    return null;
+}
+
+/**
+ * Trouve la page + l'épisode cible.
+ * - Saison demandée : on charge les pages de CETTE saison (toutes parties),
+ *   on cherche le numéro, puis on assemble les parties dans l'ordre (partie 1
+ *   = E1..N, partie 2 = E(N+1)..) — Dr. Stone S3, Fate, etc.
+ * - Puis hubs / autres saisons, avec remap absolu.
+ * Retourne { page, ep, episodes } ou null.
+ */
+async function findEpisodePage(candidates, wantedSeason, targetEp, tmdbId, isMovie, t0, signal) {
+    let tried = 0;
+    const triedUrls = new Set();
+    const maxFetches = wantedSeason ? MAX_PAGE_FETCHES : MAX_PAGE_FETCHES + 2;
+    // Numéro ABSOLU TMDB (S2E1 → 62 sur One Piece) : indispensable pour les
+    // catalogues par arc et les fiches uniques qui numérotent en continu.
+    let absoluteEp = null;
+    if (wantedSeason && wantedSeason > 1) {
+        try {
+            absoluteEp = await getAbsoluteEpisodeFromTmdb(tmdbId, wantedSeason, targetEp);
+        } catch (_) { absoluteEp = null; }
+    }
+
+    const fetchPage = async (c) => {
+        if (!c || triedUrls.has(c.url) || tried >= maxFetches) return null;
+        if (isAborted(signal) || isBudgetExhausted(t0, BUDGET_MS)) return null;
+        triedUrls.add(c.url);
+        tried++;
+        const html = await fetchText(c.url, { timeout: 12000 });
+        if (!html || html.length < 2000) return null;
+        const eps = extractEpisodesFromHtml(html);
+        return eps.length ? { c, eps } : null;
+    };
+
+    // Un épisode ne peut être retenu que si ses métadonnées (quand elles
+    // existent) désignent bien la saison demandée.
+    const inSeason = (e) => !wantedSeason || e.season == null || e.season === wantedSeason;
+
+    // 1) Pages de la saison demandée, dans l'ordre des parties.
+    if (wantedSeason) {
+        const seasonPages = candidates
+            .filter(c => c.season === wantedSeason)
+            .sort((a, b) => (a.part || 1) - (b.part || 1) || b.score - a.score);
+        const loaded = [];
+        for (const c of seasonPages.slice(0, MAX_PART_PAGES)) {
+            const p = await fetchPage(c);
+            if (p) loaded.push(p);
+        }
+        if (loaded.length) {
+            for (const p of loaded) {
+                const ep = p.eps.find(e => e.num === targetEp && inSeason(e));
+                if (ep) return { page: p.c, ep, episodes: p.eps };
+            }
+            if (loaded.length > 1) {
+                // Saison découpée en parties : la partie N renumérote à 1.
+                // On décale par la taille d'une partie (max d'épisodes observé :
+                // la page peut avoir des trous, le compteur exact est faux).
+                const ordered = [];
+                for (const p of loaded) {
+                    p.eps.slice().sort((a, b) => a.num - b.num)
+                        .forEach(e => ordered.push({ ...e, page: p.c }));
+                }
+                const partSize = Math.max(0, ...loaded.map(p => Math.max(...p.eps.map(e => e.num))));
+                if (partSize > 0) {
+                    const partIndex = Math.floor((targetEp - 1) / partSize);
+                    const epInPart = targetEp - partIndex * partSize;
+                    const target = loaded[partIndex];
+                    const hit = target && target.eps.find(e => e.num === epInPart);
+                    if (hit) {
+                        console.log(`[NekoSama] saison en plusieurs parties : E${targetEp} → ${target.c.slug} ép. ${hit.num}`);
+                        return { page: target.c, ep: hit, episodes: target.eps };
+                    }
+                }
+                if (targetEp <= ordered.length) {
+                    const hit = ordered[targetEp - 1];
+                    console.log(`[NekoSama] saison en plusieurs parties (repli index) : E${targetEp} → ${hit.page.slug} ép. ${hit.num}`);
+                    return { page: hit.page, ep: hit, episodes: ordered };
+                }
+            }
+            const all = [];
+            for (const p of loaded) p.eps.forEach(e => all.push({ ...e, page: p.c }));
+            if (absoluteEp != null) {
+                const hit = all.find(e => e.num === absoluteEp && inSeason(e));
+                if (hit) {
+                    console.log(`[NekoSama] numérotation absolue TMDB : E${targetEp} → ép. ${absoluteEp}`);
+                    return { page: hit.page, ep: hit, episodes: all };
+                }
+            }
+            const remapped = remapAbsolute(all, targetEp);
+            if (remapped) return { page: remapped.page, ep: remapped, episodes: all };
+        }
+    }
+
+    // 2) Hubs (saison inconnue) puis autres saisons : match direct, absolu, remap.
+    for (const phase of ['hub', 'other']) {
+        for (const c of candidates) {
+            if (phase === 'hub' && c.season != null) continue;
+            if (phase === 'other' && c.season == null) continue;
+            if (c.season === wantedSeason) continue;
+            const p = await fetchPage(c);
+            if (!p) continue;
+            const list = p.eps.map(e => ({ ...e, page: c }));
+            // Hub « toute la franchise » (numérotation continue) : en S2+, le
+            // numéro local 1 désigne le début de la S1 → on ne l'accepte
+            // JAMAIS, seul l'absolu TMDB fait foi.
+            const franchiseHub = c.season == null && wantedSeason > 1 && absoluteEp != null;
+            if (!franchiseHub) {
+                const direct = list.find(e => e.num === targetEp && inSeason(e));
+                if (direct) return { page: c, ep: direct, episodes: p.eps };
+            }
+            if (absoluteEp != null) {
+                const hit = list.find(e => e.num === absoluteEp && inSeason(e));
+                if (hit) {
+                    console.log(`[NekoSama] numérotation absolue TMDB : E${targetEp} → ép. ${absoluteEp}`);
+                    return { page: c, ep: hit, episodes: p.eps };
+                }
+            }
+            if (phase === 'other') continue; // jamais de match local sur une autre saison
+            const remapped = remapAbsolute(list, targetEp);
+            if (remapped) return { page: remapped.page, ep: remapped, episodes: p.eps };
+        }
+    }
+    console.log(`[NekoSama] épisode ${targetEp} introuvable (pages testées: ${tried})`);
+    return null;
+}
+
 // ---- export ----
 
 export async function extractStreams(tmdbId, mediaType, season, episodeNum, options = {}) {
@@ -351,6 +553,13 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
 
     const t0 = Date.now();
     const isMovie = mediaType === 'movie';
+    // NuvioTV (IDs anime) envoie season=null + épisode ABSOLU → reverse-map
+    // TMDB avant toute sélection de page.
+    if (!isMovie) {
+        const se = await resolveSeasonEpisodeInputs(season, episodeNum, tmdbId, { mediaType: 'tv' });
+        season = se.season;
+        episodeNum = se.episode;
+    }
     const wantedSeason = isMovie ? null : (parseInt(season, 10) || null);
     const targetEp = parseInt(episodeNum, 10) || 1;
 
@@ -382,52 +591,9 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
     console.log(`[NekoSama] candidats: ${candidates.slice(0, 3).map(c => `${c.slug}(${Math.round(c.score)})`).join(', ')}`);
 
     // 3. page contenant l'épisode cible
-    let found = null;
-    let tried = 0;
-    const triedBases = new Set();
-    // Sans saison (IDs traceurs kitsu:…:ep absolu), l'épisode peut vivre sur
-    // n'importe quelle page saison/saga de la franchise → plus de tentatives.
-    const maxFetches = wantedSeason ? MAX_PAGE_FETCHES : MAX_PAGE_FETCHES + 2;
-    for (const c of candidates) {
-        if (tried >= maxFetches) break;
-        if (isBudgetExhausted(t0, BUDGET_MS)) break;
-        // Hub + page saison du même numéro = même contenu utile : on évite le doublon
-        const key = `${c.base}|${c.season == null ? 'hub' : c.season}`;
-        if (triedBases.has(key)) continue;
-        triedBases.add(key);
-        const html = await fetchText(c.url, { timeout: 12000 });
-        tried++;
-        if (!html || html.length < 2000) continue;
-        const eps = extractEpisodesFromHtml(html);
-        if (!eps.length) continue; // hub vide → les pages saison sont aussi candidates
-        let ep = eps.find(e => e.num === targetEp);
-        if (!ep) {
-            // Catalogues par arc (one-piece-saga-N) : la page numérote en ABSOLU
-            // (saga 2 = 62..143) alors que TMDB redémarre à 1 → sans remap,
-            // S2E1 rendait 0 stream. On décale si la plage est contiguë.
-            const isSaga = /-saga-\d+/.test(c.slug);
-            if (isSaga && c.season === wantedSeason) {
-                const nums = eps.map(e => e.num).sort((a, b) => a - b);
-                const min = nums[0];
-                const max = nums[nums.length - 1];
-                const contiguous = max - min + 1 === nums.length;
-                const absolute = min + targetEp - 1;
-                if (contiguous && min >= 2 && absolute <= max) {
-                    ep = eps.find(e => e.num === absolute);
-                    if (ep) console.log(`[NekoSama] saga absolue : E${targetEp} → ép. ${absolute}`);
-                }
-            }
-        }
-        if (ep) {
-            console.log(`[NekoSama] série ${c.url} (${eps.length} ép.)`);
-            found = { page: c, ep, episodes: eps };
-            break;
-        }
-    }
-    if (!found) {
-        console.log(`[NekoSama] épisode ${targetEp} introuvable (pages testées: ${tried})`);
-        return [];
-    }
+    const found = await findEpisodePage(candidates, wantedSeason, targetEp, tmdbId, isMovie, t0, signal);
+    if (!found) return [];
+    console.log(`[NekoSama] série ${found.page.url} (${found.episodes.length} ép.)`);
     console.log(`[NekoSama] épisode ${targetEp}: ${found.ep.url}`);
 
     // 4. groupes serveurs par langue
@@ -436,12 +602,10 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
     const groups = extractServerGroups(epHtml);
     console.log(`[NekoSama] groupes: ${groups.map(g => `${g.lang}:${g.servers.length}`).join(', ') || 'aucun'}`);
 
-    // 5. résolution multi-hébergeurs : VF d'abord, puis VOSTFR
-    const ordered = [
-        ...groups.filter(g => g.lang === 'VF'),
-        ...groups.filter(g => g.lang !== 'VF'),
-    ];
+    // 5. résolution multi-hébergeurs : déjà trié VF, VOSTFR, VA, VKR
+    const ordered = groups;
     const label = isMovie ? 'Film' : `S${wantedSeason || 1}E${targetEp}`;
+    const seriesName = (titles._metadata && titles._metadata.name) || titles[0] || '';
     const streams = [];
 
     for (const group of ordered) {
@@ -467,9 +631,13 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
                 hosts.add(host);
                 streams.push({
                     url: resolved.url,
-                    title: `NekoSama [${group.lang}] ${label}`,
-                    name: `NekoSama (${group.lang})`,
-                    language: normalizeLanguageCode(group.lang) || 'fr',
+                    // S/E dans name+title : NuvioTV dérive son bingeGroup de
+                    // name/title/language/quality — sans épisode, tous les
+                    // épisodes partageaient le même groupe (reprise/auto-next
+                    // pouvaient rejouer le même fichier).
+                    title: `NekoSama [${group.lang}] ${label} - ${seriesName} (${host})`,
+                    name: `NekoSama (${group.lang}) ${label}`,
+                    language: langCode(group.lang),
                     provider: 'NekoSama',
                     type: /\.m3u8/i.test(resolved.url) ? 'hls' : 'mp4',
                     headers: resolved.headers || undefined,

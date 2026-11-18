@@ -539,6 +539,33 @@ export function dedupeStreams(streams) {
 }
 
 /**
+ * Lightweight field normalization for providers that bypass `createProvider`
+ * (they skip `expandStreamQualities` and therefore never get normalized
+ * quality/language/name). No network: safe to run on already-resolved streams.
+ *
+ * @param {Array} streams
+ * @returns {Array}
+ */
+export function normalizeStreamFields(streams) {
+  const list = Array.isArray(streams) ? streams : [];
+  return list.map((s) => {
+    if (!s || typeof s.url !== 'string' || !s.url) return s;
+    const rawLang = inferLanguage(s) || s.language || null;
+    const lang = normalizeLanguageCode(rawLang);
+    const baseTitle = s.title || s.name || null;
+    const displayName = s.name || baseTitle;
+    return {
+      ...s,
+      ...(displayName ? { name: displayName } : {}),
+      ...(baseTitle ? { title: baseTitle } : {}),
+      quality: buildEnrichedQuality(s),
+      type: s.type || inferType(s.url),
+      language: lang,
+    };
+  });
+}
+
+/**
  * Crée un provider standardisé avec timeout, error handling et expandStreamQualities.
  * Élimine la duplication de boilerplate dans tous les index.js.
  *
@@ -1332,9 +1359,15 @@ export async function expandStreamQualities(streams, options = {}) {
         // depuis l'expansion HLS. Le debrid filter de NuvioTV parse ces tokens
         // depuis streamSearchText() qui inclut stream.quality.
         const enrichedQuality = buildEnrichedQuality(s);
+        // Stable `name`/`title` for NuvioTV's derived bingeGroup: the group is
+        // keyed on name/title/language/quality, so a missing name would make
+        // equivalent streams land in different groups between runs.
+        const displayName = s.name || baseTitle || null;
         return {
             ...s,
             ...(title !== s.title ? { title } : {}),
+            ...(displayName && displayName !== s.name ? { name: displayName } : {}),
+            ...(title || !displayName ? {} : { title: displayName }),
             ...(enrichedQuality !== s.quality ? { quality: enrichedQuality } : {}),
             type: s.type || inferType(s.url),
             language: lang,

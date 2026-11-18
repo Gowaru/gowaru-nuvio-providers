@@ -26,7 +26,7 @@
 import { fetchText, setCurrentSignal } from './http.js';
 import { resolveStream, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { hasForeignLeadingTokens, getAbsoluteEpisodeFromTmdb } from '../utils/dle-extractor.js';
+import { hasForeignLeadingTokens, getAbsoluteEpisodeFromTmdb, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 const BASE_URL = 'https://www.fullanime.fr';
 const BUDGET_MS = 38000;
@@ -432,10 +432,12 @@ export async function extractStreams(tmdbId, mediaType, season, episodeNum, opti
 
     const startTime = Date.now();
     const isMovie = mediaType === 'movie';
-    const seasonNum = isMovie ? null : (parseInt(season, 10) || 1);
-    const epNum = isMovie ? 1 : (parseInt(episodeNum, 10) || 1);
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    const se = await resolveSeasonEpisodeInputs(season, episodeNum, tmdbId, { mediaType: isMovie ? 'movie' : 'tv' });
+    const seasonNum = isMovie ? null : se.season;
+    const epNum = isMovie ? 1 : se.episode;
 
-    const titles = await getTmdbTitles(tmdbId, mediaType, { season });
+    const titles = await getTmdbTitles(tmdbId, mediaType, { season: isMovie ? season : seasonNum });
     if (!titles || titles.length === 0) return [];
     console.log(`[FullAnime] Titles: ${titles.slice(0, 3).join(', ')}`);
 
