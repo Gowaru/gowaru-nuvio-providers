@@ -1,6 +1,6 @@
 /**
  * neko-sama - Built from src/neko-sama/
- * Generated: 2026-11-18T20:08:56.896536855Z
+ * Generated: 2026-11-18T20:39:46.423386397Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -2194,7 +2194,7 @@ var __provider = (() => {
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
       SILENT_TRUNCATION_MIN_CHARS = 700 * 1024;
-      BUILD_HASH = true ? "05e3ef20" : "dev";
+      BUILD_HASH = true ? "76a7e048" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
@@ -15247,34 +15247,226 @@ var __provider = (() => {
       return null;
     });
   }
-  function extractStreams(_0, _1, _2, _3) {
-    return __async(this, arguments, function* (tmdbId, mediaType, season, episodeNum, options = {}) {
-      const signal = (options == null ? void 0 : options.signal) || null;
-      if (isAborted(signal)) return [];
-      setCurrentSignal(signal);
-      const t0 = Date.now();
-      const isMovie = mediaType === "movie";
-      if (!isMovie) {
-        const se = yield resolveSeasonEpisodeInputs(season, episodeNum, tmdbId, { mediaType: "tv" });
-        season = se.season;
-        episodeNum = se.episode;
+  function getNsCatalog() {
+    if (!_nsCatalogPromise) _nsCatalogPromise = loadNsCatalog();
+    return _nsCatalogPromise;
+  }
+  function loadNsCatalog() {
+    return __async(this, null, function* () {
+      const txt = yield fetchText(NS_CATALOG_URL, { timeout: 12e3 });
+      if (!txt) return null;
+      try {
+        const arr = JSON.parse(txt);
+        const list = Array.isArray(arr) ? arr.filter((x) => x && x.slug) : [];
+        if (list.length) console.log(`[NekoSama] catalogue neko-sama.fr : ${list.length} animes`);
+        return list.length ? list : null;
+      } catch (_) {
+        return null;
       }
-      const wantedSeason = isMovie ? null : parseInt(season, 10) || null;
-      const targetEp = parseInt(episodeNum, 10) || 1;
-      const { getTmdbTitles: getTmdbTitles2 } = yield Promise.resolve().then(() => (init_metadata(), metadata_exports));
-      const titles = yield getTmdbTitles2(tmdbId, mediaType, { season });
-      if (!titles || titles.length === 0) {
-        console.log(`[NekoSama] aucun titre TMDB pour ${tmdbId}`);
+    });
+  }
+  function nsPickEntry(catalog, titles) {
+    let best = null;
+    let bestScore = 0;
+    for (const e of catalog) {
+      const slug = String(e.slug || "").toLowerCase();
+      if (!slug) continue;
+      const nameSlug = normalizeKey(e.name).replace(/\s+/g, "-");
+      let s = 0;
+      for (const t of titles) {
+        const tk = titleTokens(t);
+        if (!tk.length) continue;
+        s = Math.max(s, scoreSlug(tk, slug), nameSlug ? scoreSlug(tk, nameSlug) : 0);
+      }
+      if (s > bestScore) {
+        bestScore = s;
+        best = e;
+      }
+    }
+    return bestScore >= 55 ? { entry: best, score: bestScore } : null;
+  }
+  function nsSeasonInfo(name, idx) {
+    const n = String(name || "");
+    const sm = n.match(/saison\s*(\d+)/i);
+    const pm = n.match(/(?:partie|cour)\s*(\d+)/i);
+    return {
+      season: sm ? parseInt(sm[1], 10) : idx + 1,
+      part: pm ? parseInt(pm[1], 10) : 1,
+      isFilm: /\b(film|movie|oav|ova)\b/i.test(n)
+    };
+  }
+  function nsLoadSeasons(slug) {
+    return __async(this, null, function* () {
+      const html = yield fetchText(`${NS_BASE}/anime/${slug}`, { timeout: 12e3 });
+      if (!html) return null;
+      const m = html.match(/<script[^>]+id="js-seasons-data"[^>]*>([\s\S]*?)<\/script>/i);
+      if (!m) {
+        console.log(`[NekoSama] neko-sama.fr : pas de js-seasons-data sur ${slug}`);
+        return null;
+      }
+      try {
+        const arr = JSON.parse(m[1]);
+        return Array.isArray(arr) ? arr : null;
+      } catch (e) {
+        console.log(`[NekoSama] neko-sama.fr : JSON saisons invalide (${slug})`);
+        return null;
+      }
+    });
+  }
+  function nsSeasonParts(seasons, wantedSeason, isMovie) {
+    const decorated = seasons.map((s, idx) => __spreadValues({ raw: s }, nsSeasonInfo(s.name, idx)));
+    if (isMovie) {
+      const films = decorated.filter((d) => d.isFilm);
+      return { parts: films, isFilm: true };
+    }
+    const same = decorated.filter((d) => d.season === wantedSeason);
+    return { parts: same.sort((a, b) => a.part - b.part), isFilm: false };
+  }
+  function nsPlayersByLang(parts, targetEp, absoluteEp) {
+    const byLang = {};
+    for (const p of parts) {
+      const eps = p.raw && p.raw.episods || {};
+      for (const [lang, list] of Object.entries(eps)) {
+        if (!Array.isArray(list) || !list.length) continue;
+        byLang[lang] = byLang[lang] || [];
+        list.slice().sort((a, b) => (a.num || 0) - (b.num || 0)).forEach((e) => byLang[lang].push(e));
+      }
+    }
+    const out = {};
+    for (const [lang, list] of Object.entries(byLang)) {
+      let hit = list.find((e) => e.num === targetEp);
+      if (!hit && absoluteEp != null) hit = list.find((e) => e.num === absoluteEp);
+      if (!hit && parts.length === 1) {
+        const nums = list.map((e) => e.num).filter((n) => typeof n === "number").sort((a, b) => a - b);
+        const min = nums[0];
+        const max = nums[nums.length - 1];
+        if (min > 1 && max - min + 1 === nums.length) {
+          const abs = min + targetEp - 1;
+          if (abs <= max) {
+            const shifted = list.find((e) => e.num === abs);
+            if (shifted) {
+              console.log(`[NekoSama] neko-sama.fr num\xE9rotation continue : E${targetEp} \u2192 \xE9p. ${abs}`);
+              hit = shifted;
+            }
+          }
+        }
+      }
+      if (!hit && parts.length > 1 && list[targetEp - 1]) hit = list[targetEp - 1];
+      if (hit && Array.isArray(hit.players) && hit.players.length) out[lang] = hit.players;
+    }
+    return out;
+  }
+  function nsPlayerRank(src) {
+    const u = String(src || "").toLowerCase();
+    if (u.includes("ansembed")) return 0;
+    if (u.includes("smoothpre") || u.includes("earnvids")) return 8;
+    return 3;
+  }
+  function nsResolveEpisode(_0) {
+    return __async(this, arguments, function* ({ playersByLang, label, seriesName, signal, t0 }) {
+      const resolveLang = (langKey) => __async(null, null, function* () {
+        const players = playersByLang[langKey];
+        if (!players || !players.length) return [];
+        const out = [];
+        const siteLang = langKey === "vf" ? "VF" : langKey === "vostfr" ? "VOSTFR" : "VA";
+        const hosts = /* @__PURE__ */ new Set();
+        let attempts = 0;
+        const ordered = players.slice().sort((a, b) => nsPlayerRank(a.src) - nsPlayerRank(b.src));
+        for (const p of ordered) {
+          if (hosts.size >= NS_MAX_HOSTS_PER_LANG) break;
+          if (attempts >= NS_MAX_PLAYERS_PER_LANG) break;
+          if (isAborted(signal) || isBudgetExhausted(t0, BUDGET_MS)) break;
+          attempts++;
+          const embed = absoluteUrl(p.src);
+          if (!embed) continue;
+          try {
+            const resolved = yield resolveStream({ url: embed, language: siteLang });
+            if (!resolved || !resolved.url || resolved.url === embed) {
+              console.log(`[NekoSama] \u2717 neko-sama.fr ${siteLang} ${String(p.name || "").slice(0, 20)}`);
+              continue;
+            }
+            let host = "";
+            try {
+              host = new URL(resolved.url).hostname;
+            } catch (_) {
+              host = resolved.url.slice(0, 40);
+            }
+            if (hosts.has(host)) continue;
+            hosts.add(host);
+            out.push({
+              url: resolved.url,
+              title: `NekoSama [${siteLang}] ${label} - ${seriesName} (${host})`,
+              name: `NekoSama (${siteLang}) ${label}`,
+              language: langCode(siteLang),
+              provider: "NekoSama",
+              type: /\.m3u8/i.test(resolved.url) ? "hls" : "mp4",
+              headers: resolved.headers || void 0
+            });
+            console.log(`[NekoSama] \u2713 neko-sama.fr ${siteLang} ${host}`);
+          } catch (e) {
+            if (String(e && e.message).includes("AbortError")) throw e;
+            console.log(`[NekoSama] \u2717 neko-sama.fr ${siteLang}: ${e == null ? void 0 : e.message}`);
+          }
+        }
+        return out;
+      });
+      const results = yield Promise.allSettled(NS_LANG_ORDER.map((l) => resolveLang(l)));
+      const streams = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const r of results) {
+        if (r.status !== "fulfilled") {
+          if (String(r.reason && r.reason.message).includes("AbortError")) throw r.reason;
+          continue;
+        }
+        for (const st of r.value) {
+          const key = `${st.language}|${st.url}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          streams.push(st);
+        }
+      }
+      return streams;
+    });
+  }
+  function extractFromNekoSamaFr(_0) {
+    return __async(this, arguments, function* ({ isMovie, wantedSeason, targetEp, absoluteEp, titles, signal, t0 }) {
+      const catalog = yield getNsCatalog();
+      if (!catalog) return [];
+      if (isAborted(signal)) return [];
+      const picked = nsPickEntry(catalog, titles);
+      if (!picked) {
+        console.log("[NekoSama] neko-sama.fr : fiche introuvable");
         return [];
       }
-      console.log(`[NekoSama] titres: ${titles.slice(0, 3).join(", ")}`);
+      const seasons = yield nsLoadSeasons(picked.entry.slug);
+      if (!seasons || !seasons.length) return [];
+      const { parts } = nsSeasonParts(seasons, wantedSeason, isMovie);
+      if (!parts.length) {
+        console.log(`[NekoSama] neko-sama.fr : saison ${wantedSeason} absente (${seasons.map((s) => s.name).join(" / ")})`);
+        return [];
+      }
+      const playersByLang = nsPlayersByLang(parts, isMovie ? 1 : targetEp, absoluteEp);
+      const langs = Object.keys(playersByLang);
+      if (!langs.length) {
+        console.log("[NekoSama] neko-sama.fr : aucun lecteur pour cet \xE9pisode");
+        return [];
+      }
+      const label = isMovie ? "Film" : `S${wantedSeason || 1}E${targetEp}`;
+      const seriesName = picked.entry.name || titles[0] || "";
+      console.log(`[NekoSama] neko-sama.fr ${picked.entry.slug} (${parts.map((p) => p.raw.name).join(" + ")}) langues: ${langs.join(",")}`);
+      return nsResolveEpisode({ playersByLang, label, seriesName, signal, t0 });
+    });
+  }
+  function extractLegacy(_0) {
+    return __async(this, arguments, function* ({ tmdbId, mediaType, season, episodeNum, wantedSeason, targetEp, isMovie, titles, signal, t0, skipLangs }) {
+      if (isAborted(signal)) return [];
       const catalog = yield getCatalog();
       let candidates = catalog ? pickCandidates(catalog, titles, wantedSeason, isMovie, signal) : [];
       if (!candidates.length && !catalog) {
         candidates = yield searchCandidates(titles, wantedSeason, isMovie);
       }
       if (!candidates.length) {
-        console.log(`[NekoSama] s\xE9rie introuvable (${Date.now() - t0}ms)`);
+        console.log(`[NekoSama] animes-sama.su : s\xE9rie introuvable`);
         return [];
       }
       console.log(`[NekoSama] candidats: ${candidates.slice(0, 3).map((c) => `${c.slug}(${Math.round(c.score)})`).join(", ")}`);
@@ -15286,11 +15478,11 @@ var __provider = (() => {
       if (!epHtml || epHtml.length < 1e3) return [];
       const groups = extractServerGroups(epHtml);
       console.log(`[NekoSama] groupes: ${groups.map((g) => `${g.lang}:${g.servers.length}`).join(", ") || "aucun"}`);
-      const ordered = groups;
       const label = isMovie ? "Film" : `S${wantedSeason || 1}E${targetEp}`;
       const seriesName = titles._metadata && titles._metadata.name || titles[0] || "";
       const streams = [];
-      for (const group of ordered) {
+      for (const group of groups) {
+        if (skipLangs && skipLangs.has(group.lang)) continue;
         if (isBudgetExhausted(t0, BUDGET_MS)) break;
         const hosts = /* @__PURE__ */ new Set();
         let attempts = 0;
@@ -15335,11 +15527,92 @@ var __provider = (() => {
           }
         }
       }
+      return streams;
+    });
+  }
+  function extractStreams(_0, _1, _2, _3) {
+    return __async(this, arguments, function* (tmdbId, mediaType, season, episodeNum, options = {}) {
+      const signal = (options == null ? void 0 : options.signal) || null;
+      if (isAborted(signal)) return [];
+      setCurrentSignal(signal);
+      const t0 = Date.now();
+      const isMovie = mediaType === "movie";
+      if (!isMovie) {
+        const se = yield resolveSeasonEpisodeInputs(season, episodeNum, tmdbId, { mediaType: "tv" });
+        season = se.season;
+        episodeNum = se.episode;
+      }
+      const wantedSeason = isMovie ? null : parseInt(season, 10) || null;
+      const targetEp = parseInt(episodeNum, 10) || 1;
+      const { getTmdbTitles: getTmdbTitles2 } = yield Promise.resolve().then(() => (init_metadata(), metadata_exports));
+      const titles = yield getTmdbTitles2(tmdbId, mediaType, { season });
+      if (!titles || titles.length === 0) {
+        console.log(`[NekoSama] aucun titre TMDB pour ${tmdbId}`);
+        return [];
+      }
+      console.log(`[NekoSama] titres: ${titles.slice(0, 3).join(", ")}`);
+      let absoluteEp = null;
+      if (!isMovie && wantedSeason && wantedSeason > 1) {
+        try {
+          absoluteEp = yield getAbsoluteEpisodeFromTmdb(tmdbId, wantedSeason, targetEp);
+        } catch (_) {
+          absoluteEp = null;
+        }
+      }
+      const streams = [];
+      const seen = /* @__PURE__ */ new Set();
+      const pushAll = (list) => {
+        for (const st of list || []) {
+          const key = `${st.language}|${st.url}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          streams.push(st);
+        }
+      };
+      const hasLang = (tag) => streams.some((s) => String(s.name || "").includes(`(${tag})`));
+      try {
+        pushAll(yield extractFromNekoSamaFr({
+          isMovie,
+          wantedSeason,
+          targetEp,
+          absoluteEp,
+          titles,
+          signal,
+          t0
+        }));
+      } catch (e) {
+        if (String(e && e.message).includes("AbortError")) throw e;
+        console.log(`[NekoSama] neko-sama.fr en \xE9chec: ${e == null ? void 0 : e.message}`);
+      }
+      const missing = !hasLang("VF") || !hasLang("VOSTFR");
+      if (missing && !isBudgetExhausted(t0, BUDGET_MS - 1e4)) {
+        try {
+          const skip = /* @__PURE__ */ new Set();
+          if (hasLang("VF")) skip.add("VF");
+          if (hasLang("VOSTFR")) skip.add("VOSTFR");
+          pushAll(yield extractLegacy({
+            tmdbId,
+            mediaType,
+            season,
+            episodeNum,
+            wantedSeason,
+            targetEp,
+            isMovie,
+            titles,
+            signal,
+            t0,
+            skipLangs: skip
+          }));
+        } catch (e) {
+          if (String(e && e.message).includes("AbortError")) throw e;
+          console.log(`[NekoSama] animes-sama.su en \xE9chec: ${e == null ? void 0 : e.message}`);
+        }
+      }
       console.log(`[NekoSama] ${streams.length} stream(s) retourn\xE9(s) (${Date.now() - t0}ms)`);
       return streams;
     });
   }
-  var BASE_URL, SITEMAP_URL, SITEMAP_INDEX, BUDGET_MS, MAX_PAGE_FETCHES, MAX_PART_PAGES, MAX_BUTTONS_PER_LANG, MAX_HOSTS_PER_LANG, TITLE_STOP, _catalogPromise, FILM_RE;
+  var BASE_URL, SITEMAP_URL, SITEMAP_INDEX, BUDGET_MS, MAX_PAGE_FETCHES, MAX_PART_PAGES, MAX_BUTTONS_PER_LANG, MAX_HOSTS_PER_LANG, TITLE_STOP, _catalogPromise, FILM_RE, NS_BASE, NS_CATALOG_URL, NS_LANG_ORDER, NS_MAX_HOSTS_PER_LANG, NS_MAX_PLAYERS_PER_LANG, _nsCatalogPromise;
   var init_extractor = __esm({
     "src/neko-sama/extractor.js"() {
       init_http();
@@ -15390,6 +15663,12 @@ var __provider = (() => {
       ]);
       _catalogPromise = null;
       FILM_RE = /(^|-)(film|films|movie|oav|ova|special|speciales|recap|fan-letter)(-|$)/;
+      NS_BASE = "https://neko-sama.fr";
+      NS_CATALOG_URL = `${NS_BASE}/fr/data/search.json`;
+      NS_LANG_ORDER = ["vf", "vostfr", "en"];
+      NS_MAX_HOSTS_PER_LANG = 2;
+      NS_MAX_PLAYERS_PER_LANG = 4;
+      _nsCatalogPromise = null;
     }
   });
 
