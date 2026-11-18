@@ -892,6 +892,30 @@
       "limited": false,
       "disabledPlatforms": [],
       "supportsExternalPlayer": false
+    },
+    {
+      "id": "moviebox",
+      "name": "MovieBox",
+      "description": "Films et séries en VF, VOSTFR et VA sur moviebox01.com (catalogue FR, pistes audio multiples, MP4 1080p).",
+      "version": "0.1.0",
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/moviebox.js",
+      "enabled": true,
+      "logo": "https://moviebox01.com/favicon.png",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
     }
   ]
 }
