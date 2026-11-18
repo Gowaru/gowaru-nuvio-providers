@@ -1,6 +1,6 @@
 /**
  * neko-sama - Built from src/neko-sama/
- * Generated: 2026-11-18T20:39:46.423386397Z
+ * Generated: 2026-11-18T20:43:40.971620909Z
  */
 var __provider = (() => {
   var __create = Object.create;
@@ -2194,7 +2194,7 @@ var __provider = (() => {
       MAX_SAFE_FETCH_BODY_BYTES = 1024 * 1024;
       RUNTIME_TRUNCATION_SUFFIX = "\n...[truncated]";
       SILENT_TRUNCATION_MIN_CHARS = 700 * 1024;
-      BUILD_HASH = true ? "76a7e048" : "dev";
+      BUILD_HASH = true ? "1e258c6d" : "dev";
       HAS_NATIVE_CRYPTO = typeof crypto !== "undefined" && typeof crypto.subtle !== "undefined" && typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined";
       _nodeCrypto = null;
       try {
