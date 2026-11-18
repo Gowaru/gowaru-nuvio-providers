@@ -26,6 +26,7 @@ import {
     getMobileSubject,
     getMobileSeasons,
     getMobilePlay,
+    getWebCatalog,
 } from './http.js';
 import {
     BUDGET_MS,
@@ -100,9 +101,12 @@ function scoreItem(item, wantedTitleSets, wantedYear, wantedMovie) {
 
         const inWanted = inter / wanted.size;
         const inTitle = inter / titleTokens.size;
-        // Tolérance sur le titre (sous-titres, suffixes) mais exigence forte
-        // sur la requête : un seul mot commun ne suffit pas.
-        if (inWanted < 0.5) continue;
+        // Un seul mot commun ne suffit pas : « Aya de Yopougon » ne doit pas
+        // matcher « Aya D Owner 2 », ni « Christy » ce « Christy Hemme
+        // Entrance Evolution » (catch). D'où deux seuils : couverture de la
+        // requête (0,75 dès 2 mots) et du titre de l'item (0,5 minimum).
+        if (inWanted < (wanted.size >= 2 ? 0.75 : 0.5)) continue;
+        if (inTitle < 0.5) continue;
 
         let score = inWanted * 60 + inTitle * 20;
         best = Math.max(best, score);
@@ -156,6 +160,56 @@ function detailPathFrom(item) {
     const last = segs[segs.length - 1];
     if (!last || last === 'detail' || last === 'movies') return null;
     return last;
+}
+
+/**
+ * Titre lisible d'un slug web : `coco-version-francaise-0AKreyUBbT8` →
+ * `coco version francaise`. Le suffixe (9+ caractères) est l'identifiant.
+ */
+function slugTitle(slug) {
+    return String(slug || '')
+        .replace(/-[A-Za-z0-9]{9,}$/, '')
+        .replace(/-/g, ' ')
+        .trim();
+}
+
+/**
+ * Recherche dans l'index des slugs web la fiche correspondant aux titres TMDB.
+ * Utilisé quand la recherche ne fournit aucune fiche lisible (sans `detailUrl`).
+ */
+function matchCatalogSlugs(entries, wantedTitleSets, isMovie) {
+    const scored = [];
+    for (const entry of entries) {
+        const slug = entry.slug;
+        // Titre exact du payload Nuxt quand il est connu, sinon reconstruit
+        // depuis le slug (moins fidèle : « bleeding steel » pour « Sang d'acier »).
+        const tokens = tokenSet(entry.title || slugTitle(slug));
+        if (!tokens.size) continue;
+
+        let best = 0;
+        for (let i = 0; i < wantedTitleSets.length; i++) {
+            const wanted = wantedTitleSets[i];
+            if (!wanted.size) continue;
+            let inter = 0;
+            for (const t of wanted) if (tokens.has(t)) inter++;
+            if (!inter) continue;
+            const inWanted = inter / wanted.size;
+            const inSlug = inter / tokens.size;
+            if (inWanted < 0.5) continue;
+            // Un slug qui ajoute des mots non demandés désigne une autre œuvre :
+            // `avengers-endgame-encore-…` n'est pas « Avengers: Endgame ».
+            if (inSlug < 0.75) continue;
+            best = Math.max(best, inWanted * 60 + inSlug * 20 - i * 2);
+        }
+        if (!best) continue;
+
+        // Un slug de film porte souvent "version francaise" ; on ne peut pas
+        // déduire le type de façon fiable, on ordonne seulement.
+        if (!isMovie && /-s\d+-s\d+$/.test(slug)) best += 4;
+        scored.push({ slug, score: best });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 2).map(x => x.slug);
 }
 
 // ─── Recherche ───────────────────────────────────────────────────────────────
@@ -401,9 +455,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
         console.log('[MovieBox] token invité indisponible → abandon');
         return [];
     }
-    await getPlayerDomain(token, signal);    const wantedYear = null; // getTmdbTitles ne fournit pas l'année fiable
+    await getPlayerDomain(token, signal);
+    const wantedYear = null; // getTmdbTitles ne fournit pas l'année fiable
     const ranked = await rankCandidates({ titles, isMovie, wantedYear, signal });
-    if (!ranked.length) return [];
+    // Pas de sortie anticipée : un score trop faible côté recherche n'exclut pas
+    // une fiche du catalogue web (titre FR très différent du titre TMDB).
+    if (!ranked.length) console.log('[MovieBox] aucun candidat convaincant → repli index web');
     console.log(`[MovieBox] candidats: ${ranked.slice(0, 3).map(c => `${c.item.title}(${c.score})`).join(', ')}`);
 
     let subject = null;
@@ -436,6 +493,41 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
             }
         } catch (e) {
             if (String(e && e.message).includes('AbortError')) throw e;
+        }
+    }
+
+    // Repli index web : la recherche ne fournit pas toujours de slug, mais la
+    // fiche peut exister dans le catalogue SSR du site.
+    if (!subject) {
+        // Seuls le titre et le titre original servent d'aiguillage : les titres
+        // alternatifs TMDB contiennent des éditions dérivées ("Avengers Endgame:
+        // Encore", "… Extended") qui désignent d'autres fiches du catalogue.
+        const wantedTitleSets = titles.slice(0, 2).map(t => tokenSet(t)).filter(st => st.size);
+        let catalog = [];
+        try {
+            catalog = await getWebCatalog({ signal });
+        } catch (e) {
+            if (String(e && e.message).includes('AbortError')) throw e;
+        }
+        const candidatesSlugs = matchCatalogSlugs(catalog, wantedTitleSets, isMovie);
+        for (const slug of candidatesSlugs) {
+            if (isAborted(signal) || isBudgetExhausted(t0, BUDGET_MS)) break;
+            try {
+                const detail = await getDetail(slug, { token, signal });
+                if (detail && detail.data) {
+                    subject = detail.data.subject || {};
+                    resource = detail.data.resource || {};
+                    h5Token = detail.token || token;
+                    h5Ready = true;
+                    detailPath = slug;
+                    primaryId = String(subject.subjectId || '');
+                    matchedTitle = subject.title || slugTitle(slug);
+                    console.log(`[MovieBox] fiche via index web: ${slug}`);
+                    break;
+                }
+            } catch (e) {
+                if (String(e && e.message).includes('AbortError')) throw e;
+            }
         }
     }
 
@@ -489,6 +581,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
     const streams = [];
     for (const track of tracks) {
         if (isAborted(signal) || isBudgetExhausted(t0, BUDGET_MS)) break;
+        // Une fiche sans ressource enchaîne 3 tentatives lentes par piste (web
+        // puis mobile) : on réserve 12 s de marge pour terminer proprement
+        // plutôt que d'être coupé par le timeout de 60 s du plugin.
+        if (Date.now() - t0 > BUDGET_MS - 12000) {
+            console.log('[MovieBox] budget presque épuisé → pistes restantes ignorées');
+            break;
+        }
         try {
             let playData = null;
             if (h5Ready) {

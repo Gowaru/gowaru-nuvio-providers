@@ -352,6 +352,148 @@ export async function getPlayerDomain(token, signal = null) {
     return SITE_ORIGIN;
 }
 
+/** HTML brut via le BFF web (pages SSR du site). */
+function webHtmlHeaders() {
+    return { 'User-Agent': WEB_UA, Accept: 'text/html,application/xhtml+xml' };
+}
+
+/**
+ * HTML brut d'une page SSR.
+ *
+ * `safeFetch` refuse volontairement les corps HTML tronqués (un parse cheerio
+ * partiel est pire que rien) — mais ici on lit des liens et un payload JSON
+ * situés **avant** la coupure à 1 Mo. D'où le repli `fetch` qui accepte le
+ * texte partiel : `/fr/web/midnight` (1,24 Mo) reste ainsi exploitable.
+ */
+async function webGetHtml(path, { signal = null } = {}) {
+    if (isAborted(signal)) throw new Error('AbortError');
+    const url = `${SITE_ORIGIN}${path}`;
+    const res = await safeFetch(url, {
+        headers: webHtmlHeaders(),
+        signal: signal || undefined,
+        timeout: 15000,
+    });
+    if (res && res.ok) {
+        try {
+            const html = await res.text();
+            if (html) return html;
+        } catch (_) {}
+    }
+    if (isAborted(signal)) throw new Error('AbortError');
+    const abort = typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+        ? AbortSignal.timeout(15000)
+        : (signal || undefined);
+    try {
+        const raw = await fetch(url, { headers: webHtmlHeaders(), redirect: 'follow', signal: abort });
+        if (!raw || !raw.ok) return null;
+        const text = await raw.text();
+        return text || null;
+    } catch (e) {
+        if (String(e && e.message).includes('AbortError')) throw e;
+        return null;
+    }
+}
+
+/**
+ * Pages listing SSR du site. Chacune expose un payload Nuxt (`__NUXT_DATA__`,
+ * format devalue) listant les fiches avec leur titre exact, et des liens
+ * `/detail/<slug>` en repli. On les agrège pour retrouver une fiche que la
+ * recherche ne renvoie pas.
+ *
+ * `/fr/web/midnight` pèse 1,24 Mo (page refusée par `safeFetch`), mais ses 328
+ * fiches et son payload tiennent sous 780 Ko → lues via le repli tolérant.
+ */
+const WEB_CATALOG_PATHS = [
+    '/fr/web/movie',
+    '/fr/web/tv-series',
+    '/fr/web/animated-series',
+    '/fr/web/film',
+    '/fr/web/midnight',
+];
+
+// Un slug web = titre lisible + suffixe base62 (`-eJtQlwysSv4`).
+const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9-]{11,}$/;
+
+/**
+ * Payload Nuxt (devalue) : tableau plat où les objets référencent leurs valeurs
+ * par index. On récupère les objets portant `title` ET `detailPath` — ceux des
+ * schémas ont des index de formes, donc on valide les deux résolutions.
+ */
+function catalogFromPayload(html, out) {
+    const start = html.indexOf('__NUXT_DATA__');
+    if (start === -1) return;
+    const open = html.indexOf('>', start);
+    const close = html.indexOf('</script>', open + 1);
+    if (open === -1 || close === -1) return;
+    let arr;
+    try {
+        arr = JSON.parse(html.slice(open + 1, close));
+    } catch (_) {
+        return;
+    }
+    if (!Array.isArray(arr)) return;
+    for (let i = 0; i < arr.length; i++) {
+        const el = arr[i];
+        if (!el || typeof el !== 'object' || Array.isArray(el)) continue;
+        const ti = el.title;
+        const di = el.detailPath;
+        if (typeof ti !== 'number' || typeof di !== 'number') continue;
+        const title = arr[ti];
+        const slug = arr[di];
+        if (typeof title !== 'string' || typeof slug !== 'string') continue;
+        if (!SLUG_RE.test(slug)) continue;
+        addCatalogEntry(out, slug, title);
+    }
+}
+
+/** Repli : liens `/detail/<slug>` du HTML (payload illisible ou absent). */
+function catalogFromLinks(html, out) {
+    const re = /\/detail\/([A-Za-z0-9][A-Za-z0-9-]*)/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const slug = m[1];
+        // Ignore les liens tronqués (coupe juste après le tiret) et les slugs
+        // sans suffixe d'identifiant.
+        if (slug.length < 12 || slug.endsWith('-') || !slug.includes('-')) continue;
+        addCatalogEntry(out, slug, null);
+    }
+}
+
+function addCatalogEntry(out, slug, title) {
+    const clean = title ? String(title).trim() : '';
+    const prev = out.get(slug);
+    // Le payload expose parfois le même slug plusieurs fois (bannière + grille) :
+    // on garde le premier titre non vide.
+    if (prev && (prev.title || !clean)) return;
+    out.set(slug, { slug, title: clean });
+}
+
+let _webCatalog = null;
+
+/**
+ * Index du catalogue web : `[{ slug, title }]` (mémoïsé pour l'exécution en
+ * cours). Coût : 5 pages SSR (~3,7 Mo réseau, ~1,2 Mo analysés) — à n'appeler
+ * qu'en dernier recours, quand aucune fiche du site n'est lisible.
+ */
+export async function getWebCatalog({ signal = null } = {}) {
+    if (_webCatalog) return _webCatalog;
+    const out = new Map();
+    for (const path of WEB_CATALOG_PATHS) {
+        if (isAborted(signal)) break;
+        try {
+            const html = await webGetHtml(path, { signal });
+            if (!html) continue;
+            catalogFromPayload(html, out);
+            catalogFromLinks(html, out);
+        } catch (e) {
+            if (String(e && e.message).includes('AbortError')) throw e;
+        }
+    }
+    _webCatalog = Array.from(out.values());
+    console.log(`[MovieBox] index web: ${_webCatalog.length} fiches`);
+    return _webCatalog;
+}
+
 /** Fiche complète (pistes audio, saisons, sous-titres). */
 export async function getDetail(detailPath, { token = null, signal = null } = {}) {
     const r = await webGet(`/detail?detailPath=${encodeURIComponent(detailPath)}`, { token, signal });
