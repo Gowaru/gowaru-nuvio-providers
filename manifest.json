@@ -52,15 +52,15 @@
     {
       "id": "animesama-co",
       "name": "AnimeSama.co (DLE Mirror)",
-      "description": "Animes VF et VOSTFR sur AnimeSama.co (miroir DLE) — schéma /saison-saison-N/ + garde de défacement.",
-      "version": "1.0.15",
+      "description": "⚠ Désactivé 2026-11 : les pages saison/épisode d'animesama.co sont défacemées par un attaquant (toutes les fiches renvoient une image « pwned », 168 octets) → 0 flux. Le provider repart automatiquement quand le site est restauré.",
+      "version": "1.0.16",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
         "tv"
       ],
       "filename": "providers/animesama-co.js",
-      "enabled": true,
+      "enabled": false,
       "logo": "https://raw.githubusercontent.com/Anime-Sama/IMG/img/autres/logo.png",
       "contentLanguage": [
         "fr"
@@ -76,15 +76,15 @@
     {
       "id": "animesultra",
       "name": "AnimesUltra",
-      "description": "Animes en streaming VOSTFR et VF.",
-      "version": "1.0.40",
+      "description": "⚠ Désactivé 2026-11 : AnimesUltra est hors service. L'origin renvoie 525 (SSL handshake failed) en continu et, quand il répond, le template est cassé (toutes les cartes et le bouton « Regarder » pointent sur « / », aucune page épisode, recherche 404). Aucun lecteur n'est atteignable. Le provider sonde les hôtes connus et repart automatiquement dès que le site est réparé.",
+      "version": "1.0.41",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
         "tv"
       ],
       "filename": "providers/animesultra.js",
-      "enabled": true,
+      "enabled": false,
       "logo": "https://animesultra.org/templates/animeultra/images/favicon.ico",
       "contentLanguage": [
         "fr"
@@ -230,6 +230,31 @@
       "filename": "providers/flemmix.js",
       "enabled": true,
       "logo": "https://flemmix.me/favicon.ico",
+      "contentLanguage": [
+        "fr"
+      ],
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": false
+    },
+    {
+      "id": "fluneo",
+      "name": "Fluneo",
+      "description": "Anime VF et VOSTFR sur myfluneo.eu (lecteurs vidmoly/VOE/streamtape, saisons et VF par slug, réglages cookie Cloudflare — Mobile uniquement).",
+      "version": "1.0.0",
+      "hasSettings": true,
+      "author": "Gowaru",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/fluneo.js",
+      "enabled": true,
+      "logo": "https://myfluneo.eu/favicon.ico",
       "contentLanguage": [
         "fr"
       ],
@@ -422,9 +447,9 @@
     },
     {
       "id": "voiranime-one",
-      "name": "VoirAnime.one",
-      "description": "Animes VF et VOSTFR en streaming sur le moteur VoirAnime/Anisama (Next.js) — domaines détectés automatiquement (miroirs nomades).",
-      "version": "0.1.4",
+      "name": "VoirAnime (Anisama)",
+      "description": "Animes et films VF/VOSTFR du moteur Anisama (anisama.fr) — recherche /recherche/?q=, fiches /catalogue/{slug}/ (saisons, sagas à numérotation absolue, films), lecteurs ansembed (HLS) ; leurres dood/EarnVids filtrés.",
+      "version": "0.2.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -432,7 +457,7 @@
       ],
       "filename": "providers/voiranime-one.js",
       "enabled": true,
-      "logo": "https://voiranime.one/assets/voiranime-logo.svg",
+      "logo": "https://anisama.fr/assets/img/favicon/favicon-32x32.png",
       "contentLanguage": [
         "fr"
       ],
@@ -512,33 +537,10 @@
       ]
     },
     {
-      "id": "adkami",
-      "name": "ADKami",
-      "description": "Animes VF et VOSTFR sur ADKami (sondage multi-variantes des pages épisode, lecteurs tiers vidmoly/dood/voe/byse/streamtape, offsets saisonniers TMDB).",
-      "version": "0.1.2",
-      "author": "Gowaru",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "filename": "providers/adkami.js",
-      "enabled": true,
-      "logo": "https://www.adkami.com/favicon.ico",
-      "contentLanguage": [
-        "fr",
-        "ja"
-      ],
-      "categories": [
-        "anime",
-        "tv",
-        "movies"
-      ]
-    },
-    {
       "id": "animesite",
       "name": "AnimeSite",
-      "description": "Animes VF et VOSTFR sur AnimeSite (Next.js/RSC, API /api/stream/token par cookies de session, 5 lecteurs par épisode : Sibnet, Byse HLS, Sendvid, Ansembed, Uqload ; langue détectée sur la page de chaque embed, validation saison/épisode via JSON-LD, catalogue complet via sitemap, repli titre FR via TMDB).",
-      "version": "0.2.0",
+      "description": "Animes et films VF et VOSTFR sur AnimeSite (Next.js/RSC, API /api/stream/token sérialisée pour éviter le rate-limit IP, jusqu'à 10 lecteurs par épisode dont Byse HLS, Sendvid, Sibnet, Ansembed, Uqload, Vidmoly ; langue lue sur le titre de chaque embed, numérotation absolue (One Piece) mappée via JSON-LD + TMDB, validation saison/épisode, catalogue complet via sitemap, repli titre FR via TMDB).",
+      "version": "0.3.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -585,7 +587,7 @@
       "id": "vostfree",
       "name": "Vostfree",
       "description": "Animes VF et VOSTFR : catalogue complet (sitemap) et tous les lecteurs de chaque épisode résolus en direct.",
-      "version": "1.3.1",
+      "version": "1.3.2",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",
@@ -750,8 +752,8 @@
     {
       "id": "franime",
       "name": "Franime",
-      "description": "Anime VF et VOSTFR en streaming sur franime.fr (catalogue indexé Kitsu).",
-      "version": "0.0.3",
+      "description": "Anime VF et VOSTFR en streaming sur franime.fr (catalogue indexé Kitsu, décodage des liens watch2, numérotation absolue des saisons, résolution des lecteurs Byse et externes).",
+      "version": "0.1.0",
       "author": "Gowaru",
       "supportedTypes": [
         "movie",

@@ -51,6 +51,20 @@ export function resetCookies() {
   cookieLine = ''
 }
 
+/**
+ * Sérialise TOUS les appels au site (1 à la fois).
+ * Constaté en live : 45 requêtes séquentielles passent sans 429, alors qu'un
+ * burst de 10-12 en parallèle déclenche un ban IP de ~3,5 min. La latence
+ * naturelle du site (200-400 ms) suffit comme espacement ; on n'utilise pas
+ * de timer (absent sur NuvioTV).
+ */
+let siteChain = Promise.resolve()
+function siteLock(fn) {
+  const run = siteChain.then(fn, fn)
+  siteChain = run.then(() => {}, () => {})
+  return run
+}
+
 function baseHeaders(extra) {
   return {
     'User-Agent': USER_AGENT,
@@ -67,7 +81,7 @@ export async function fetchPage(url, options = {}) {
   const { signal, headers } = options
   try {
     await ensureCookies(signal)
-    const res = await fetch(url, {
+    const res = await siteLock(() => fetch(url, {
       headers: baseHeaders({
         ...(headers || {}),
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -76,7 +90,7 @@ export async function fetchPage(url, options = {}) {
       }),
       redirect: 'follow',
       signal,
-    })
+    }))
     if (!res.ok) {
       console.log(`[AnimeSite] fetchPage ${res.status} ${url}`)
       return null
@@ -104,19 +118,29 @@ export async function fetchPage(url, options = {}) {
 /** @typedef {{kind:'hls'|'mp4', url:string, headers?:Object}} DirectResult */
 
 /**
- * POST /api/stream/token puis GET /v/{token} → URL finale.
- * @param {string} idAndSlugTitle ex "2104032-frieren-beyond-journey-s-end"
- * @param {number|string} season
- * @param {number|string} episode
- * @param {number} playerIndex
- * @param {object} [options] { signal }
- * @returns {Promise<EmbedResult|DirectResult|null>}
+ * Le site applique un rate-limit IP très punitif : un burst trop gros renvoie
+ * 429 {"status":"rate-limited"} puis BLOQUE l'IP ~3,5 min (mesuré en live :
+ * 217 s). Dès qu'un 429 est vu, tout nouvel appel doit être abandonné sans
+ * requête — sinon on prolonge le ban et le plugin renvoie 0 flux.
  */
-export async function resolveStreamSrc(idAndSlugTitle, season, episode, playerIndex, options = {}) {
+let rateLimited = false
+
+/** Vrai si l'API a renvoyé un 429 pendant cette exécution. */
+export function isRateLimited() {
+  return rateLimited
+}
+
+/**
+ * POST /api/stream/token seul (1 requête) — sert à valider un couple
+ * (saison, épisode) avant de sonder les 12 lecteurs.
+ * @returns {Promise<{status:'ok', data:Object}|{status:string, rateLimited?:boolean}|null>}
+ */
+export async function fetchStreamToken(idAndSlugTitle, season, episode, playerIndex, options = {}) {
   const { signal } = options
+  if (rateLimited) return { status: 'rate-limited', rateLimited: true }
   try {
     await ensureCookies(signal)
-    const post = await fetch(BASE + '/api/stream/token', {
+    const post = await siteLock(() => fetch(BASE + '/api/stream/token', {
       method: 'POST',
       headers: baseHeaders({
         'Content-Type': 'application/json',
@@ -132,27 +156,61 @@ export async function resolveStreamSrc(idAndSlugTitle, season, episode, playerIn
       }),
       redirect: 'follow',
       signal,
-    })
-    if (post.status === 403 || post.status === 401) {
-      if (options._retried) return null
-      // cookies expirés → un refresh puis un seul retry
-      resetCookies()
-      await refreshCookies(signal)
-      return resolveStreamSrc(idAndSlugTitle, season, episode, playerIndex, { ...options, _retried: true })
+    }))
+    if (post.status === 429) {
+      if (!rateLimited) console.log('[AnimeSite] 429 rate-limited → arrêt des appels API')
+      rateLimited = true
+      return { status: 'rate-limited', rateLimited: true }
     }
-    if (!post.ok) {
-      console.log(`[AnimeSite] stream/token ${post.status}`)
+    if (post.status === 403 || post.status === 401) {
+      return { status: String(post.status) }
+    }
+    if (!post.ok) return { status: String(post.status) }
+    const data = await post.json().catch(() => null)
+    if (!data || data.status !== 'ok' || !data.src) {
+      return { status: (data && data.status) || 'unknown' }
+    }
+    return { status: 'ok', data }
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw e
+    console.log(`[AnimeSite] stream/token error: ${e.message}`)
+    return null
+  }
+}
+
+/**
+ * POST /api/stream/token puis GET /v/{token} → URL finale.
+ * @param {string} idAndSlugTitle ex "2104032-frieren-beyond-journey-s-end"
+ * @param {number|string} season
+ * @param {number|string} episode
+ * @param {number} playerIndex
+ * @param {object} [options] { signal }
+ * @returns {Promise<EmbedResult|DirectResult|null>}
+ */
+export async function resolveStreamSrc(idAndSlugTitle, season, episode, playerIndex, options = {}) {
+  const { signal } = options
+  try {
+    const tok = await fetchStreamToken(idAndSlugTitle, season, episode, playerIndex, options)
+    if (!tok) return null
+    if (tok.status !== 'ok') {
+      if (tok.status === '403' || tok.status === '401') {
+        if (options._retried) return null
+        // cookies expirés → un refresh puis un seul retry
+        resetCookies()
+        await refreshCookies(signal)
+        return resolveStreamSrc(idAndSlugTitle, season, episode, playerIndex, { ...options, _retried: true })
+      }
+      if (!tok.rateLimited) console.log(`[AnimeSite] stream/token ${tok.status}`)
       return null
     }
-    const data = await post.json().catch(() => null)
-    if (!data || data.status !== 'ok' || !data.src) return null
+    const data = tok.data
 
     // GET /v/{token} → 302 vers l'embed (ou flux direct si isHls)
-    const vres = await fetch(BASE + data.src, {
+    const vres = await siteLock(() => fetch(BASE + data.src, {
       headers: baseHeaders({ Cookie: cookieLine, Referer: BASE + '/' + idAndSlugTitle }),
       redirect: 'manual',
       signal,
-    })
+    }))
     const loc = vres.headers.get('location') || vres.headers.get('Location')
     if (data.isHls && !loc) {
       const text = await vres.text().catch(() => '')

@@ -32,12 +32,80 @@ export const HEADERS = {
     'Connection': 'keep-alive'
 };
 
-export async function fetchText(url, options = {}) {
-    const signal = options.signal || _currentSignal;
-    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+/* ---------- Anti-429 : cooldown par domaine + cache de réponses ---------- */
 
+// Le site renvoie 429 dès quelques requêtes rapprochées. On mémorise une
+// fenêtre de blocage par host (Retry-After si fourni) et on bascule sur
+// l'autre domaine au lieu de marteler celui qui limite.
+const COOLDOWN_MS = 30000;
+const COOLDOWN_MAX_MS = 120000;
+const cooldownUntil = Object.create(null);
+
+// Cache partagé des réponses GET (pages HTML/JSON) : une même page demandée
+// deux fois dans la même exécution ne repart pas sur le réseau.
+const RESPONSE_TTL_MS = 300000;
+const RESPONSE_MAX = 120;
+const responseCache = new Map();
+
+function hostOf(url) {
+    try { return new URL(url).host; } catch (e) { return ''; }
+}
+
+/** Le domaine de cette URL est-il en fenêtre 429 ? */
+export function isDomainCooling(url) {
+    return (cooldownUntil[hostOf(url)] || 0) > Date.now();
+}
+
+function markCooldown(url, res) {
+    let ms = COOLDOWN_MS;
+    try {
+        const h = res && res.headers && (typeof res.headers.get === 'function'
+            ? res.headers.get('retry-after')
+            : res.headers['retry-after']);
+        const secs = parseInt(h, 10);
+        if (secs > 0) ms = Math.min(secs * 1000, COOLDOWN_MAX_MS);
+    } catch (e) { /* headers indisponibles */ }
+    cooldownUntil[hostOf(url)] = Date.now() + ms;
+    console.warn(`[Frenchstream] 429 sur ${hostOf(url)} — pause ${Math.round(ms / 1000)}s`);
+}
+
+function isRateLimited(res) {
+    const s = res && typeof res.status === 'number' ? res.status : 0;
+    return s === 429 || s === 503;
+}
+
+/** Même chemin sur l'autre domaine, si celui-ci n'est pas en cooldown. */
+function alternateUrl(url) {
+    let origin = '';
+    try { origin = new URL(url).origin; } catch (e) { return null; }
+    if (!BASE_URLS.includes(origin)) return null;
+    for (const base of BASE_URLS) {
+        if (base === origin) continue;
+        if ((cooldownUntil[hostOf(base)] || 0) > Date.now()) continue;
+        return base + url.slice(origin.length);
+    }
+    return null;
+}
+
+function cacheGet(url) {
+    const e = responseCache.get(url);
+    if (!e) return undefined;
+    if (Date.now() - e.ts >= RESPONSE_TTL_MS) { responseCache.delete(url); return undefined; }
+    return e.data;
+}
+
+function cacheSet(url, data) {
+    if (responseCache.size >= RESPONSE_MAX) {
+        let oldestKey = null, oldestTs = Infinity;
+        for (const [k, v] of responseCache) { if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; } }
+        if (oldestKey) responseCache.delete(oldestKey);
+    }
+    responseCache.set(url, { data, ts: Date.now() });
+}
+
+async function requestOnce(url, options) {
+    const signal = options.signal || _currentSignal;
     await rateLimit(DOMAIN);
-    console.log(`[Frenchstream] Fetching: ${url}`);
     const base = options.baseUrl || (() => { try { return new URL(url).origin; } catch (e) { return BASE_URL; } })();
     const timeout = options.timeout || GLOBAL_TIMEOUT_MS;
     const mergedHeaders = {
@@ -46,15 +114,52 @@ export async function fetchText(url, options = {}) {
         Origin: base,
         ...(options.headers || {})
     };
+    const { baseUrl, headers, cache, ...restOptions } = options;
+    return safeFetch(url, { headers: mergedHeaders, ...restOptions, timeout, signal });
+}
 
-    const { baseUrl, headers, ...restOptions } = options;
-    const res = await safeFetch(url, { headers: mergedHeaders, ...restOptions, timeout, signal });
-    if (!res || !res.ok) {
-        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
-        throw new Error(`HTTP error ${status} for ${url}`);
+export async function fetchText(url, options = {}) {
+    const signal = options.signal || _currentSignal;
+    if (isAborted(signal)) throw new Error('AbortError: Request aborted');
+
+    const useCache = options.cache !== false;
+    if (useCache) {
+        const hit = cacheGet(url);
+        if (hit !== undefined) {
+            console.log(`[Frenchstream] Page en cache: ${url}`);
+            return hit;
+        }
     }
 
-    return await res.text();
+    // Domaine déjà limité → tenter directement l'autre.
+    let target = url;
+    if (isDomainCooling(target)) {
+        const alt = alternateUrl(target);
+        if (alt) { console.log(`[Frenchstream] ${hostOf(target)} en cooldown → ${hostOf(alt)}`); target = alt; }
+    }
+
+    console.log(`[Frenchstream] Fetching: ${target}`);
+    let res = await requestOnce(target, options);
+
+    if (isRateLimited(res)) {
+        markCooldown(target, res);
+        const alt = alternateUrl(target);
+        if (alt) {
+            console.log(`[Frenchstream] Retry anti-429 sur ${hostOf(alt)}`);
+            res = await requestOnce(alt, { ...options, baseUrl: alt.slice(0, alt.indexOf('/', 8)) });
+            if (isRateLimited(res)) markCooldown(alt, res);
+            else target = alt;
+        }
+    }
+
+    if (!res || !res.ok) {
+        const status = res && typeof res.status === 'number' ? res.status : 'no-response';
+        throw new Error(`HTTP error ${status} for ${target}`);
+    }
+
+    const text = await res.text();
+    if (useCache) cacheSet(url, text);
+    return text;
 }
 
 export async function fetchJson(url, options = {}) {
@@ -65,6 +170,24 @@ export async function fetchJson(url, options = {}) {
         console.error(`[Frenchstream] Failed to parse JSON for ${url}`);
         throw e;
     }
+}
+
+/**
+ * GET JSON avec bascule de domaine (.net → .one). Les endpoints de données
+ * (get_seasons.php, data/eps_*.txt, film_api.php) sont servis par le domaine
+ * canonique ; si .net tombe ou renvoie une erreur, .one reste jouable.
+ * `path` doit commencer par '/'.
+ */
+export async function fetchJsonFailover(path, options = {}) {
+    let lastErr = null;
+    for (const base of BASE_URLS) {
+        try {
+            return await fetchJson(base + path, { ...options, baseUrl: base });
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    throw lastErr || new Error('Frenchstream: all domains failed for ' + path);
 }
 
 export async function fetchPost(url, body, options = {}) {
@@ -82,8 +205,23 @@ export async function fetchPost(url, body, options = {}) {
         Origin: base,
         ...(options.headers || {})
     };
-    const { baseUrl, headers, ...restOptions } = options;
-    const res = await safeFetch(url, { method: 'POST', body, headers: mergedHeaders, ...restOptions, timeout, signal });
+    const { baseUrl, headers, cache, ...restOptions } = options;
+    let res = await safeFetch(url, { method: 'POST', body, headers: mergedHeaders, ...restOptions, timeout, signal });
+
+    if (isRateLimited(res)) {
+        markCooldown(url, res);
+        const alt = alternateUrl(url);
+        if (alt) {
+            console.log(`[Frenchstream] POST retry anti-429 sur ${hostOf(alt)}`);
+            const altBase = alt.slice(0, alt.indexOf('/', 8));
+            res = await safeFetch(alt, {
+                method: 'POST', body, timeout, signal,
+                headers: { ...mergedHeaders, Referer: `${altBase}/`, Origin: altBase }
+            });
+            if (isRateLimited(res)) markCooldown(alt, res);
+        }
+    }
+
     if (!res || !res.ok) {
         const status = res && typeof res.status === 'number' ? res.status : 'no-response';
         throw new Error(`HTTP error ${status} for POST ${url}`);

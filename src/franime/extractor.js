@@ -29,6 +29,8 @@
 
 import { fetchJson, fetchTextSafe, fetchFinalUrl, apiHeaders, API, SITE } from './http.js';
 import { resolveStream, normalizeLanguageCode, isAborted, safeFetch, sleep } from '../utils/resolvers.js';
+import { getAbsoluteEpisodeFromTmdb, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
+import { resolveByse, isByseUrl } from '../jetanimes/byse.js';
 import { HEADERS } from './http.js';
 
 const KITSU_SEARCH = 'https://kitsu.io/api/edge/anime?filter[text]=';
@@ -36,20 +38,30 @@ const MAX_CATALOG_PROBES = 3;      // candidats sondés max (chaque sonde ~10 KB
 const MAX_LECTEURS_PER_LANG = 3;   // lecteurs résolus max par langue
 
 /**
- * Décodage du token watch2 : base64 → hex → XOR 0x01.
- * Renvoie la chaîne décodée ou null si le format ne colle pas.
+ * Décodage du token watch2 : base64 → hex → XOR d'un OCTET UNIQUE.
+ *
+ * DIAG 2026-11 : la clé XOR n'est plus fixe (0x01 historique). Elle change à
+ * CHAQUE requête (0x51, 0x55, 0x5d, 0x03, 0x04… observés sur 6 appels
+ * consécutifs) et n'est transmise nulle part en clair : elle est dérivée côté
+ * serveur du token `a`. Chercher une clé fixe renvoyait donc systématiquement
+ * null → « aucun lecteur fiable résolu » → 0 stream pour TOUT le catalogue.
+ *
+ * On retrouve la clé par force brute (256 essais sur ~35 octets, négligeable) :
+ * le seul décodage qui produit une URL http(s) bien formée est le bon. Les
+ * autres paramètres (a/c/d/…) ne sont pas des URLs — seul `b` porte l'embed.
  */
 function decodeWatchToken(value) {
     try {
-        const step1 = atob(value);
-        if (!step1 || !/^[0-9a-fA-F]+$/.test(step1) || step1.length % 2 !== 0) return null;
-        let out = '';
-        for (let i = 0; i < step1.length; i += 2) {
-            out += String.fromCharCode(parseInt(step1.substr(i, 2), 16) ^ 1);
+        const hex = atob(value);
+        if (!hex || !/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return null;
+        const bytes = [];
+        for (let i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substr(i, 2), 16));
+        for (let key = 0; key < 256; key++) {
+            let out = '';
+            for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i] ^ key);
+            if (/^https?:\/\/[a-z0-9.-]+\.[a-z]{2,}(?:[:/]|$)/i.test(out) && !/\s/.test(out)) return out;
         }
-        // Sanité : une URL embed commence par http et contient un domaine
-        if (!/^https?:\/\//.test(out)) return null;
-        return out;
+        return null;
     } catch (e) {
         return null;
     }
@@ -242,6 +254,7 @@ async function resolveLecteurEmbed(animeId, saisonIndex, episodeIndex, lang, lec
 function playerLabelFromUrl(url) {
     const u = String(url || '').toLowerCase();
     if (u.includes('sibnet')) return 'Sibnet';
+    if (u.includes('byse')) return 'Byse';
     if (u.includes('sendvid')) return 'SendVid';
     if (u.includes('vidmoly')) return 'VidMoly';
     if (u.includes('filemoon') || u.includes('moonplayer')) return 'FileMoon';
@@ -265,26 +278,6 @@ function isKnownDecoy(embed) {
 }
 
 /**
- * Canary anti-leurre : sur un catalogue réel, deux épisodes distincts
- * pointent vers des embeds distincts. Si l'API renvoie le MÊME embed pour
- * l'épisode cible et son voisin (même langue/lecteur), c'est le placeholder
- * générique (anti-scraping) → aucun stream fiable extractible.
- * Renvoie true si le canary passe (ou s'il n'est pas concluable).
- */
-async function passesCanary(baseEmbed, animeId, saisonIndex, episodeIndex, lang, signal) {
-    const alts = [episodeIndex + 1, episodeIndex - 1].filter(i => i >= 0);
-    for (const alt of alts) {
-        if (isAborted(signal)) return true;
-        const other = await resolveLecteurEmbed(animeId, saisonIndex, alt, lang, 0, signal);
-        if (!other) continue;
-        const same = other.trim().toLowerCase() === String(baseEmbed).trim().toLowerCase();
-        console.log(`[Franime] Canary: epIndex ${episodeIndex} vs ${alt} → ${same ? 'IDENTIQUES (leurre)' : 'différents (réel)'}`);
-        return !same;
-    }
-    return true; // pas d'épisode comparable → le check statique a déjà passé
-}
-
-/**
  * Point d'entrée de l'extraction.
  * @returns {Promise<Array<object>>} streams bruts (passés à resolveStream par createProvider)
  */
@@ -292,8 +285,12 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     // ⚠️ Nuvio passe 'series' (pas 'tv') — 7ᵉ occurrence du bug de dispatch
     // dans ce repo : toujours normaliser.
     const isTv = mediaType === 'tv' || mediaType === 'series';
-    const wantedSeason = isTv ? parseInt(season, 10) || 1 : null;
-    const wantedEpisode = isTv ? parseFloat(episode) : null;
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    const se = isTv
+        ? await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv' })
+        : { season: null, episode: null };
+    const wantedSeason = isTv ? se.season : null;
+    const wantedEpisode = isTv ? se.episode : null;
 
     console.log(`[Franime] Extraction ${mediaType} ${tmdbId}` +
         (wantedSeason != null ? ` S${wantedSeason}E${wantedEpisode}` : ''));
@@ -330,6 +327,13 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     if (!words.length) return [];
     // Variante raccourcie pour les longs titres ("Demon Slayer: Kimetsu no Yaiba" → "Demon Slayer")
     if (primary.includes(':') && primary.split(':')[0].trim().length >= 4) searchQueries.push(primary.split(':')[0].trim());
+    // Variantes TMDB supplémentaires : le catalogue franime est indexé sous le
+    // titre anglais/original Kitsu, alors que TMDB renvoie souvent le titre FR
+    // en premier ("Les Carnets de l'apothicaire" ≠ "The Apothecary Diaries").
+    for (const t of titles.slice(1, 4)) {
+        const s = String(t || '').trim();
+        if (s.length >= 3 && !searchQueries.includes(s)) searchQueries.push(s);
+    }
 
     const kitsuCandidates = [];
     for (const q of searchQueries) {
@@ -344,15 +348,27 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
         return [];
     }
 
-    // Score des candidats Kitsu avec les mots de TOUTES les variantes de titre
-    const scored = kitsuCandidates
-        .map(c => ({ ...c, score: scoreCandidate({ title: c.title, titleO: c.title, titles: null }, words, wantedSeason, primary) }))
-        .filter(c => c.score > 0)
-        .sort((a, b) => b.score - a.score);
+    // Score des candidats Kitsu en essayant les mots de CHAQUE variante TMDB
+    // (le titre FR ne matche pas le canonicalTitle anglais, et inversement).
+    const wordSets = [words];
+    for (const t of titles.slice(0, 5)) {
+        const w = titleWords(t);
+        if (w.length && !wordSets.some((x) => x.join(' ') === w.join(' '))) wordSets.push(w);
+    }
+    let scored = [];
+    for (const w of wordSets) {
+        scored = kitsuCandidates
+            .map(c => ({ ...c, score: scoreCandidate({ title: c.title, titleO: c.title, titles: null }, w, wantedSeason, primary) }))
+            .filter(c => c.score > 0)
+            .sort((a, b) => b.score - a.score);
+        if (scored.length) break;
+    }
     if (!scored.length) {
         console.warn('[Franime] Aucun candidat Kitsu pertinent');
         return [];
-    }    // 3. Validation chez franime : UN fetch anime-seasons/{id} par candidat
+    }
+
+    // 3. Validation chez franime : UN fetch anime-seasons/{id} par candidat
     //    (~10-300 KB) — fournit saisons + épisodes + INDEX 0-based directs.
     const validated = [];
     for (const cand of scored.slice(0, 5)) {
@@ -365,40 +381,79 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
         return [];
     }
 
-    // 4. Choix du candidat ET de la saison : numéro de saison exact d'abord,
-    //    sinon saison contenant l'épisode cible, sinon première saison.
-    let chosen = null;
-    let chosenSeason = null;
-    for (const cand of validated) {
-        for (const sp of cand.seasons) {
-            const hasEp = sp.episodes.some(e => episodeNumber(e) === wantedEpisode);
-            if (wantedSeason != null && sp.seasonNumber === wantedSeason && hasEp) {
-                chosen = cand; chosenSeason = sp; break;
-            }
+    // 4. Choix du candidat, de la saison et de l'INDEX d'épisode.
+    //
+    //    DIAG 2026-11 : franime numérote certaines saisons en ABSOLU (One Piece
+    //    saison 2 = 62…143, saison 3 = 144…206). Chercher uniquement
+    //    « saison N + épisode E » tombait alors sur la saison 1 (épisode 1 au
+    //    lieu de l'épisode 62) → « les épisodes ne correspondent pas ». On
+    //    calcule donc le numéro absolu TMDB et on l'essaie aussi.
+    let absolute = null;
+    if (isTv && wantedSeason != null && wantedEpisode != null) {
+        try {
+            absolute = await getAbsoluteEpisodeFromTmdb(tmdbId, wantedSeason, wantedEpisode);
+        } catch (e) {
+            if (isAborted(signal)) throw e;
         }
-        if (chosen) break;
     }
-    if (!chosen) {
+    // Saisons « spéciales » (0.5 = OAV, 0 = bonus) exclues : elles portent une
+    // numérotation repartant de 1 et capturaient One Piece S2E1 → épisode 1
+    // d'un OAV au lieu de l'épisode 62. Le site les expose comme saison 0.5.
+    const isRegularSeason = (sp) => Number(sp.seasonNumber) >= 1;
+    const indexOfNumber = (sp, num) => sp.episodes.findIndex(e => episodeNumber(e) === num);
+    const pickInSeason = (seasonNumber, num) => {
+        if (num == null) return false;
+        for (const cand of validated) {
+            const sp = cand.seasons.find(s => isRegularSeason(s) && s.seasonNumber === seasonNumber);
+            if (!sp) continue;
+            const i = indexOfNumber(sp, num);
+            if (i >= 0) { chosen = cand; chosenSeason = sp; episodeIndex = i; return true; }
+        }
+        return false;
+    };
+    const pickAnySeason = (num, allowSpecials) => {
+        if (num == null) return false;
         for (const cand of validated) {
             for (const sp of cand.seasons) {
-                const hasEp = wantedEpisode != null && sp.episodes.some(e => episodeNumber(e) === wantedEpisode);
-                if (hasEp) { chosen = cand; chosenSeason = sp; break; }
+                if (!allowSpecials && !isRegularSeason(sp)) continue;
+                const i = indexOfNumber(sp, num);
+                if (i >= 0) { chosen = cand; chosenSeason = sp; episodeIndex = i; return true; }
             }
-            if (chosen) break;
         }
-        if (!chosen) { chosen = validated[0]; chosenSeason = chosen.seasons[0]; }
+        return false;
+    };
+    let chosen = null;
+    let chosenSeason = null;
+    let episodeIndex = -1;
+    // a) numérotation normale : saison demandée + épisode demandé
+    if (wantedSeason != null) pickInSeason(wantedSeason, wantedEpisode);
+    // b) même saison mais numérotation absolue (One Piece S2E1 = ép. 62)
+    if (!chosen && wantedSeason != null && absolute) pickInSeason(wantedSeason, absolute);
+    // c) numérotation absolue dans une AUTRE saison (TMDB S3E1 = abs 78, qui
+    //    vit chez franime dans la saison 2)
+    if (!chosen && absolute) pickAnySeason(absolute, false);
+    // d) dernier recours : épisode demandé, hors saisons spéciales
+    if (!chosen) pickAnySeason(wantedEpisode, false);
+    // e) index positionnel dans la saison demandée (champ `number` exotique) —
+    //    jamais une autre saison : mieux vaut 0 flux qu'un épisode faux.
+    if (!chosen && wantedSeason != null && wantedEpisode != null) {
+        for (const cand of validated) {
+            const sp = cand.seasons.find(s => isRegularSeason(s) && s.seasonNumber === wantedSeason);
+            if (sp && sp.episodes.length >= wantedEpisode) {
+                chosen = cand; chosenSeason = sp; episodeIndex = wantedEpisode - 1; break;
+            }
+        }
+    }
+    if (!chosen) {
+        console.warn(`[Franime] Épisode ${wantedEpisode} (absolu ${absolute || '?'}) absent du catalogue — 0 propre`);
+        return [];
     }
 
     const animeId = chosen.id;
     console.log(`[Franime] Cible: id=${animeId} "${chosen.title}" saison ${chosenSeason.seasonNumber} ` +
-        `(index ${chosenSeason.index}, ${chosenSeason.episodes.length} épisodes)`);
+        `(index ${chosenSeason.index}, ${chosenSeason.episodes.length} épisodes, épisode #${episodeNumber(chosenSeason.episodes[episodeIndex])})`);
 
-    // 5. INDEX de l'épisode cible (0-based) — c'est lui que GET_LECTEUR attend
-    const episodeIndex = chosenSeason.episodes.findIndex(e => episodeNumber(e) === wantedEpisode);
-    if (episodeIndex === -1) {
-        console.warn(`[Franime] Épisode ${wantedEpisode} introuvable dans la saison ${chosenSeason.seasonNumber}`);
-        return [];
-    }
+    // 6. Collecte des lecteurs par langue (VF puis VOSTFR)
     const rawStreams = [];
     const langDefs = [
         { key: 'vf', display: 'VF', code: 'fr' },
@@ -406,10 +461,11 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     ];
 
     // 6. Résolution des lecteurs (sondes d'index 0..n, 404 = fin de liste).
-    //    L'embed est décodé du paramètre b de l'URL watch2 finale. Tout embed
-    //    identifié comme leurre invalide la langue concernée (canary). Les
-    //    noms exacts des lecteurs ne sont pas requis : identifiés par domaine.
-    const MAX_INDEX_PROBES = 5;
+    //    L'embed est décodé du paramètre `b` de l'URL watch2 (clé XOR variable)
+    //    → plus besoin de suivre la redirection : la page watch2 est derrière un
+    //    challenge Cloudflare interactif (403) et ne sert qu'en repli.
+    const MAX_INDEX_PROBES = 6;
+    const seenKeys = new Set();
     for (const ld of langDefs) {
         let resolved = 0;
         let failures = 0;
@@ -424,17 +480,16 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
                 continue;
             }
             if (isKnownDecoy(embed)) {
-                console.warn(`[Franime] Embed-leurre statique détecté (${ld.display}) — langue ignorée`);
-                break;
-            }
-            // Canary : si un épisode voisin donne le MÊME embed, c'est le
-            // placeholder générique → aucun stream fiable pour cette langue.
-            if (i === 0 && !(await passesCanary(embed, animeId, chosenSeason.index, episodeIndex, ld.key, signal))) {
-                break;
+                console.warn(`[Franime] Embed-leurre statique détecté (${ld.display}) — ignoré`);
+                continue;
             }
             const label = playerLabelFromUrl(embed);
-            // Déduplique par domaine : la même entrée API peut exister en double
-            if (rawStreams.some(s => playerLabelFromUrl(s.url) === label)) continue;
+            // Dédup par URL + LANGUE : VF et VOSTFR partagent souvent le même
+            // hébergeur (sendvid/byse) — dédupliquer par domaine seul supprimait
+            // la version VOSTFR du même épisode.
+            const key = `${embed}|${ld.key}`;
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
             resolved++;
             rawStreams.push({
                 url: embed,
@@ -448,9 +503,55 @@ export async function extractStreams(tmdbId, mediaType, season, episode, { signa
     }
 
     if (!rawStreams.length) {
-        console.warn('[Franime] Aucun lecteur fiable résolu (leurre anti-scraping ou catalogue vide)');
+        console.warn('[Franime] Aucun lecteur disponible (VF/VOSTFR absents côté site)');
         return [];
     }
-    console.log(`[Franime] ${rawStreams.length} lecteurs bruts → resolveStream`);
-    return rawStreams;
+
+    // 7. Résolution des embeds en URLs JOUABLES.
+    //    ⚠ createProvider n'appelle pas resolveStream : un provider qui rend
+    //    des pages /embed/ livre des flux qui ne démarrent jamais (« le flux
+    //    reste sur un écran noir / ne se lance pas »). Byse a son propre
+    //    décodeur AES-GCM, le reste passe par resolveStream (sendvid → MP4,
+    //    sibnet → MP4, uqload/ansembed → HLS…).
+    const REFERER = SITE + '/';
+    const resolveOne = async (stream) => {
+        try {
+            if (isByseUrl(stream.url)) {
+                const r = await resolveByse(
+                    stream.url,
+                    async (u, o) => {
+                        const res = await safeFetch(u, {
+                            ...o,
+                            headers: { ...((o && o.headers) || {}), Referer: REFERER },
+                        });
+                        return res ? { text: await res.text(), finalUrl: res.url } : null;
+                    },
+                    signal
+                );
+                if (!r || !r.url) return null;
+                return { ...stream, url: r.url, type: 'hls', quality: stream.quality || '1080p' };
+            }
+            const r = await resolveStream(
+                { ...stream, headers: { Referer: REFERER, 'User-Agent': HEADERS['User-Agent'] } },
+                0
+            );
+            if (!r || !r.url || typeof r.url !== 'string' || r.url.includes('[object')) return null;
+            // Passthrough = embed non résolu → injouable, on jette.
+            if (r.url === stream.url || (!/\.(mp4|m3u8)(\?|$)/i.test(r.url) && /\/embed|shell\.php|\/e\//i.test(r.url))) return null;
+            const type = /\.m3u8/i.test(r.url) ? 'hls' : /\.mp4/i.test(r.url) ? 'mp4' : r.type;
+            return { ...stream, ...r, url: r.url, type, title: stream.title, name: stream.name, language: stream.language };
+        } catch (e) {
+            if (isAborted(signal)) throw e;
+            console.warn(`[Franime] Résolution échouée (${stream.name}): ${e.message}`);
+            return null;
+        }
+    };
+    const settled = await Promise.allSettled(rawStreams.map((s) => resolveOne(s)));
+    const streams = [];
+    for (const s of settled) {
+        const v = s.status === 'fulfilled' ? s.value : null;
+        if (v && v.url) streams.push(v);
+    }
+    console.log(`[Franime] ${rawStreams.length} lecteurs bruts → ${streams.length} flux jouables`);
+    return streams;
 }

@@ -1,408 +1,403 @@
 /**
- * Extractor for VoirAnime.one (voiranime.one — SPA Next.js/RSC, diag live 2026-09).
+ * Extractor for VoirAnime.one — rebranché 2026-11 sur le moteur **Anisama**
+ * (`anisama.fr`), après la mort DNS des domaines Next.js historiques
+ * (`voiranime.one`, `anisama.org`, `anisama.net`).
  *
- * Chaîne réelle :
- *   1. Search : GET /api/anime/search?q=X&langue=&type=&page=N
- *      → { animes:[{slug,title,titleFrench,titleEnglish,titleOriginal,titleJp,
- *         synonyms,malId,type:"TV"|"Film"|"OVA"|"Spécial",seasons,langues,…}] }
- *      (API publique sans auth ; catalogue ≈ 1395 fiches).
- *   2. Fiche /{slug} : payload RSC (self.__next_f.push) avec
- *      seasons:[{number, episodes:[{number, released, langues:["VF","VOSTFR"]}]}].
- *      → plan de saison/épisodes + garde `released` (pas de page fantôme).
- *   3. Page épisode : /{slug}/{saison}/{VF|VOSTFR}/{ep}
- *      Films : /{slug}/film/{VF|VOSTFR}/1 (slot saison = "film", 1 seul lecteur).
- *      Contient exactement UNE iframe /embed/{cuid} (1 langue = 1 lecteur).
- *   4. L'embed /embed/{cuid} (page Next.js du site) contient l'iframe externe
- *      réelle (vidmoly, sibnet, …) → resolveStream gère le host.
+ * Chaîne réelle (vérifiée en live 2026-11) :
+ *   1. Recherche : GET /recherche?q={titre}
+ *      → cartes `<a class="card … card--anime-id" href="/catalogue/{slug}/"
+ *        title="{Titre}">` (les cartes de scans `card--scan-id` sont ignorées).
+ *   2. Fiche /catalogue/{slug}/ :
+ *      - séries : liens `/catalogue/{slug}/saison-{N}/` (One Piece et quelques
+ *        longues séries utilisent des **sagas** : `/saga-3-…-episode-144-a-206/`
+ *        avec numérotation **absolue** des épisodes) ;
+ *      - films : `/catalogue/{slug}/film/episode-1/{vf|vostfr}/`.
+ *   3. Page épisode `…/episode-{N}/{vf|vostfr}/` : les lecteurs sont dans
+ *      `<option value="{url embed}" data-key="{vf|vostfr}_…">`.
+ *   4. `resolveStream` gère les hôtes : `ansembed.net` (clone uqload, master
+ *      HLS signé lisible) est le lecteur principal ; `jeremyparticipantanything`
+ *      (redirection dood) et `Smoothpre` (EarnVids) sont des leurres sans flux.
  *
- * Anti-faux-match :
- *  - Scoring par tokens entiers + bonus position + pénalité extra words,
- *    comparé sur TOUS les titres du résultat (title, titleFrench, titleEnglish,
- *    titleOriginal, titleJp, synonyms, slug) ;
- *  - Exclusions d'homonymes (Steins;Gate, The New Gate, Ikebukuro West Gate
- *    Park, Rio - Rainbow Gate, Mister Gates…) ;
- *  - Garde type : une demande TV ne prend jamais un enregistrement "Film"/"OVA"
- *    (et inversement) — le champ API `type` est fiable ( MAL ).
- *  - Garde saison : `seasons` vient de l'API, épisodes réels de la fiche RSC ;
- *    une demande S2+ sur une fiche sans cette saison → 0 (pas d'épisode S1).
+ * Garde-fous : un épisode n'est **jamais** servi depuis une autre saison
+ * (saison absente → 0 flux + log) ; les sagas sont résolues par épisode
+ * absolu calculé sur TMDB ; un film ne répond pas à une demande TV.
  */
 
-import { fetchText, fetchJson, getBase, resolveBase, isBaseAlive } from './http.js';
-import { resolveStream, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
+import { fetchHtml, getBase, resolveBase } from './http.js';
+import { resolveStream, dedupeStreams, isAborted, isBudgetExhausted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
+import { getAbsoluteEpisodeFromTmdb } from '../utils/dle-extractor.js';
 
-const SITE = 'voiranime.one';
-
-/* ────────────────────────── Config ────────────────────────── */
-
-const TIMEOUTS = { search: 10000, fiche: 12000, episode: 12000, resolve: 15000 };
+const PROVIDER = 'VoirAnime.one';
+const TIMEOUTS = { search: 10000, fiche: 12000, episode: 12000 };
 const BUDGET_MS = 40000;
+const MAX_CANDIDATES = 3;
+const MAX_EMBEDS = 6;
 
-/** Homonymes à exclure (tokens interdits dans slug/titres quand la requête ne les contient pas). */
-const HOMONYM_EXCLUSIONS = [
-    'steins-gate', 'stein-s-gate', 'the-new-gate', 'rainbow-gate',
-    'west-gate', 'gates', 'gate-7', 'burikko-gate', 'gate-of-revelation',
-];
+/* ────────────────────────── Helpers texte ────────────────────────── */
 
-const SEASON_SLOT = 'film';
-
-/* ────────────────────────── Helpers ────────────────────────── */
-
-const STOP_WORDS = new Set([
-    // EN
-    'the', 'a', 'an', 'of', 'no', 'wa', 'ga', 'wo', 'o', 'ni', 'to', 'da',
-    // FR (articles/prépositions — bruits dans les titres FR)
-    'de', 'la', 'le', 'les', 'des', 'du', 'et', 'un', 'une', 'au', 'aux',
-    'en', 'sur', 'pour', 'par', 'd', 'l',
-    'i', // numérotation romaine/lettre seule
-]);
-
-function normalizeText(s) {
+function norm(s) {
     return String(s || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\b(le|la|les|the|a|of|de|des|du|et|and|au|aux)\b/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
 }
 
 function tokens(s) {
-    return normalizeText(s).split(' ').filter(Boolean);
+    return new Set(norm(s).split(' ').filter(Boolean));
 }
 
 /**
- * Score de correspondance query ↔ titre (0..100).
- * - tokens entiers uniquement ("gate" ne matche pas "gates") ;
- * - bonus position si le titre COMMENCE par la requête ;
- * - pénalité par mot du titre non couvert (extra words), stop-words ignorés.
+ * Score 0..1 : part des tokens du titre TMDB retrouvés dans le candidat,
+ * pénalisée par les mots en trop du candidat (évite « X le film » pour « X »).
  */
-function scoreMatch(queryTokens, title) {
-    const titleTok = tokens(title);
-    if (!queryTokens.length || !titleTok.length) return 0;
-    const titleSet = new Set(titleTok);
-    let matched = 0;
-    for (const q of queryTokens) if (titleSet.has(q)) matched++;
-    if (matched === 0) return 0;
-    const extra = titleTok.filter(t => !STOP_WORDS.has(t) && !queryTokens.includes(t)).length;
-    let score = Math.round((matched / queryTokens.length) * 70 + (matched / titleTok.length) * 30);
-    // bonus position : le titre commence par la requête complète
-    const joined = normalizeText(title);
-    const qJoined = queryTokens.join(' ');
-    if (joined === qJoined) score += 30;
-    else if (joined.startsWith(qJoined + ' ')) score += 20;
-    score -= extra * 15;
-    return Math.max(0, score);
+function titleScore(target, candidate) {
+    const a = tokens(target);
+    const b = tokens(candidate);
+    if (!a.size || !b.size) return 0;
+    let hit = 0;
+    for (const t of a) if (b.has(t)) hit++;
+    const coverage = hit / a.size;
+    const extra = Math.max(0, b.size - a.size);
+    return coverage * (1 - Math.min(0.25, extra * 0.05));
 }
 
-function isHomonym(slug, titles, queryTokens) {
-    const s = String(slug || '').toLowerCase();
-    for (const bad of HOMONYM_EXCLUSIONS) {
-        if (!s.includes(bad)) continue;
-        // le terme exclu ne doit pas faire partie de la requête elle-même
-        const badTok = bad.split('-');
-        if (badTok.every(t => queryTokens.includes(t))) continue;
-        return true;
-    }
-    // vérifie aussi dans les titres alternatifs
-    const joined = normalizeText(titles.join(' '));
-    for (const bad of HOMONYM_EXCLUSIONS) {
-        if (!joined.includes(bad.replace(/-/g, ' '))) continue;
-        const badTok = bad.split('-');
-        if (badTok.every(t => queryTokens.includes(t))) continue;
-        return true;
-    }
-    return false;
-}
+/* ────────────────────────── Recherche ────────────────────────── */
 
-/**
- * Extrait le payload RSC concaténé d'une page Next.js.
- * Chaque chunk est un littéral JSON complet (`self.__next_f.push([1,"…"])`) :
- * on le parse individuellement au lieu de recoller les échappements à la main
- * (l'ancien `replace(/"/g,'\\"')` corrompait les chaînes contenant des guillemets,
- * ce qui faisait échouer le parse de `seasons` sur les fiches au synopsis riche).
- */
-function extractRscPayload(html) {
-    const chunks = [];
-    const re = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+/** Cartes de résultat d'une page /recherche : [{ slug, title }]. */
+function parseSearchCards(html) {
+    const out = [];
+    const seen = new Set();
+    const re = /<a\b[^>]*>/g;
     let m;
     while ((m = re.exec(html)) !== null) {
-        try { chunks.push(JSON.parse(m[1])); } catch { /* chunk partiel : ignoré */ }
+        const tag = m[0];
+        if (!/card--anime-id/.test(tag)) continue;      // exclut card--scan-id
+        const href = tag.match(/href="https?:\/\/[^/"]+\/catalogue\/([^/"]+)\/"/);
+        if (!href) continue;
+        const title = tag.match(/title="([^"]*)"/);
+        const slug = href[1];
+        if (seen.has(slug)) continue;
+        seen.add(slug);
+        out.push({ slug, title: decodeHtml(title ? title[1] : slug) });
     }
-    if (!chunks.length) {
-        // repli : chunk découpé par le serveur, on recolle les littéraux bruts
-        const raw = [];
-        const re2 = /self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)/g;
-        while ((m = re2.exec(html)) !== null) raw.push(m[1]);
-        if (!raw.length) return '';
-        chunks.push(raw.join(''));
-    }
-    return chunks.join('')
-        .replace(/\\\\u002F/gi, '/')
-        .replace(/\\u002F/gi, '/')
-        .replace(/\\n/g, '\n');
+    return out;
+}
+
+function decodeHtml(s) {
+    return String(s || '')
+        .replace(/&#0?39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .trim();
 }
 
 /**
- * Récupère le tableau `"seasons":[…]` par appariement de crochets.
- * Plus sûr que l'ancienne regex non-greedy, qui s'arrêtait au premier mot-clé
- * connu et cassait dès qu'un synopsis contenait `],"rating`.
+ * Nettoie une requête pour la recherche du site : la ponctuation des titres
+ * TMDB (« Your Name. », « Hatena☆Illusion », « Re:Zero ») fait renvoyer 0
+ * résultat au moteur, qui indexe des titres alphanumériques.
  */
-function extractSeasonsArray(src) {
-    const key = src.indexOf('"seasons":[');
-    if (key === -1) return null;
-    const start = key + '"seasons":'.length;
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    for (let i = start; i < src.length; i++) {
-        const ch = src[i];
-        if (inStr) {
-            if (esc) esc = false;
-            else if (ch === '\\') esc = true;
-            else if (ch === '"') inStr = false;
-            continue;
-        }
-        if (ch === '"') inStr = true;
-        else if (ch === '[') depth++;
-        else if (ch === ']') {
-            depth--;
-            if (depth === 0) {
-                try { return JSON.parse(src.slice(start, i + 1)); } catch { return null; }
-            }
-        }
-    }
-    return null;
+function cleanQuery(s) {
+    return String(s || '')
+        .replace(/[.:;!?()\[\]{}"“”'’☆★·:–—]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
-/* ────────────────────────── Search ────────────────────────── */
-
 /**
- * Recherche côté site. Retourne [{slug, type, langues, titles:[…]}].
- * Essaie plusieurs requêtes (titres TMDB) et accumule les résultats (jamais
- * d'écrasement — bug d'accumulation déjà vu sur coflix).
+ * Variantes de requête pour un titre, de la plus fidèle à la plus large.
+ * Le moteur fait un LIKE strict : « Kaguya-sama: Love Is War » trouve la fiche,
+ * « Kaguya-sama Love Is War » (tiret supprimé) renvoie 0 — d'où l'ordre : titre
+ * brut d'abord, ponctuation retirée ensuite, dernier mot distinctif en secours.
  */
-async function searchSite(queries, mediaType, signal) {
-    const bySlug = new Map();
-    const addList = (list) => {
-        for (const a of list) {
-            if (!a || !a.slug || bySlug.has(a.slug)) continue;
-            bySlug.set(a.slug, {
-                slug: a.slug,
-                type: String(a.type || '').toLowerCase(), // tv | film | ova | spécial
-                langues: Array.isArray(a.langues) ? a.langues : [],
-                titles: [
-                    a.title, a.titleFrench, a.titleEnglish,
-                    a.titleOriginal, a.titleJp,
-                    ...(Array.isArray(a.synonyms) ? a.synonyms : []),
-                    a.slug,
-                ].filter(Boolean),
-            });
-        }
-    };
+function queryVariants(title) {
+    const raw = String(title || '').trim();
+    const out = [raw, raw.replace(/[.:;!?]+$/g, '').trim(), cleanQuery(raw)];
+    const longest = cleanQuery(raw).split(' ').filter(w => w.length >= 4).sort((a, b) => b.length - a.length)[0];
+    if (longest) out.push(longest);
+    return [...new Set(out.filter(Boolean))];
+}
+
+/** Cherche les titres TMDB sur le moteur et renvoie les candidats triés. */
+async function searchCandidates(titles, signal, start) {
+    const cands = new Map();
+    const queries = [];
+    for (const title of titles.slice(0, 4)) {
+        for (const q of queryVariants(title)) if (!queries.includes(q)) queries.push(q);
+    }
     for (const q of queries) {
-        if (!q || isAborted(signal)) break;
-        const data = await fetchJson(
-            `/api/anime/search?q=${encodeURIComponent(q)}&page=1`,
-            { timeout: TIMEOUTS.search, signal },
-        );
-        const list = (data && Array.isArray(data.animes)) ? data.animes : null;
-        if (!list) continue;
-        addList(list);
-        // Pagination : une requête courte ("naruto") renvoie plusieurs pages ;
-        // n'en lire qu'une faisait manquer la fiche exacte noyée dans les dérivés.
-        const totalPages = Number(data.totalPages) || 1;
-        if (bySlug.size < 8 && totalPages > 1) {
-            const p2 = await fetchJson(
-                `/api/anime/search?q=${encodeURIComponent(q)}&page=2`,
-                { timeout: TIMEOUTS.search, signal },
-            );
-            if (p2 && Array.isArray(p2.animes)) addList(p2.animes);
+        if (isAborted(signal) || isBudgetExhausted(start, BUDGET_MS)) break;
+        const html = await fetchHtml(`/recherche/?q=${encodeURIComponent(q)}`, {
+            timeout: TIMEOUTS.search,
+            signal,
+        }).catch(() => null);
+        if (!html) continue;
+        for (const card of parseSearchCards(html)) {
+            let score = 0;
+            for (const t of titles) score = Math.max(score, titleScore(t, card.title));
+            // Un slug proche du titre compte aussi (le `title` du site peut
+            // contenir une saison ou un suffixe).
+            for (const t of titles) score = Math.max(score, titleScore(t, card.slug.replace(/-/g, ' ')) * 0.95);
+            const prev = cands.get(card.slug);
+            if (!prev || prev.score < score) cands.set(card.slug, { ...card, score });
         }
-        if (bySlug.size >= 12) break; // assez de candidats
+        if ((cands.size && Math.max(...[...cands.values()].map(c => c.score)) >= 0.9)) break;
     }
-    return [...bySlug.values()];
+    return [...cands.values()]
+        .filter(c => c.score >= 0.7)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_CANDIDATES);
 }
 
 /* ────────────────────────── Fiche ────────────────────────── */
 
-/**
- * Récupère le plan de saisons d'une fiche : { seasons: Map(num → {maxEp, releasedSet}),
- * isFilm }. Tolère le HTML échappé ou non.
- */
-async function getFichePlan(slug, signal) {
-    const html = await fetchText(`/${slug}`, { timeout: TIMEOUTS.fiche, signal });
+async function loadCatalogue(slug, signal) {
+    const html = await fetchHtml(`/catalogue/${slug}/`, { timeout: TIMEOUTS.fiche, signal });
     if (!html) return null;
-    const payload = extractRscPayload(html);
-    const plan = extractSeasonsArray(payload || html);
-    if (!plan || !Array.isArray(plan)) return null;
 
-    const seasons = new Map();
-    let hasEpisodeData = false;
-    for (const s of plan) {
-        if (!s || typeof s.number !== 'number') continue;
-        const eps = Array.isArray(s.episodes) ? s.episodes : [];
-        const released = new Set();
-        let maxEp = 0;
-        for (const e of eps) {
-            if (!e || typeof e.number !== 'number') continue;
-            hasEpisodeData = true;
-            if (e.released !== false) released.add(e.number);
-            if (e.number > maxEp) maxEp = e.number;
-        }
-        seasons.set(s.number, { maxEp, released });
+    const saisons = [...new Set(
+        [...html.matchAll(new RegExp(`/catalogue/${escapeRe(slug)}/saison-(\\d+)/`, 'g'))]
+            .map(m => parseInt(m[1], 10))
+    )].filter(n => n > 0).sort((a, b) => a - b);
+
+    // Sagas (One Piece…) : numérotation ABSOLUE des épisodes, la plage est
+    // inscrite dans le slug (`…-episode-144-a-206/`).
+    const sagas = [];
+    const sagaRe = new RegExp(`/catalogue/${escapeRe(slug)}/((?:kai-)?saga-[^"/]+)/`, 'g');
+    for (const m of html.matchAll(sagaRe)) {
+        const path = m[1].replace(/\/$/, '');
+        const range = path.match(/episode-(\d+)-a-(\d+)?/);
+        sagas.push({
+            path,
+            from: range ? parseInt(range[1], 10) : 0,
+            to: range && range[2] ? parseInt(range[2], 10) : Infinity,
+        });
     }
-    return { seasons, hasEpisodeData };
+
+    return {
+        saisons,
+        sagas,
+        hasFilm: new RegExp(`/catalogue/${escapeRe(slug)}/film/episode-1/`).test(html),
+    };
 }
 
-/* ────────────────────────── Page épisode ────────────────────────── */
-
-/** Récupère l'embed /embed/{cuid} d'une page épisode et résout son iframe externe. */
-async function extractFromEpisodePage(slug, seasonSlot, lang, ep, signal, title) {
-    const path = `/${slug}/${seasonSlot}/${lang}/${ep}`;
-    const html = await fetchText(path, { timeout: TIMEOUTS.episode, signal });
-    if (!html) return [];
-
-    const cuid = html.match(/\/embed\/([a-z0-9]+(?:\d[a-z0-9]*))/)?.[1];
-    if (!cuid) return [];
-
-    const embedHtml = await fetchText(`/embed/${cuid}`, {
-        timeout: TIMEOUTS.episode,
-        signal,
-        headers: { Referer: `${getBase()}/` },
-    });
-    if (!embedHtml) return [];
-
-    const external = (embedHtml.match(/<iframe[^>]*src="(https?:\/\/[^"]+)"/)?.[1] || '')
-        .split(String.fromCharCode(92) + '/').join('/'); // dé-échappe \/ (iframe parfois inline dans le JSON RSC de l'embed)
-    if (!external) return [];
-
-    if (!/^https?:\/\//.test(external)) return []; // sanity : URL absolue uniquement
-    const isFilm = seasonSlot === SEASON_SLOT;
-    const label = isFilm ? 'Film' : `S${seasonSlot}E${ep}`;
-    // VF = doublage FR (piste fr), VOSTFR = VO sous-titrée : même code langue
-    // côté app (fr), mais le label doit rester visible dans le titre.
-    const out = await resolveStream({
-        url: external,
-        name: `${SITE} ${label} ${lang}`,
-        title,
-        language: 'fr',
-        quality: '',
-        provider: SITE,
-    }, 0);
-    if (!out || !out.url) return [];
-    if (out.isDirect === false) return []; // pas de flux non résolu (lecteur mort)
-    return [{
-        url: out.url,
-        name: `${SITE} ${label} ${lang}`,
-        title: title ? `${title} [${lang}]` : `[${lang}]`,
-        quality: out.quality || '',
-        language: 'fr',
-        headers: out.headers || undefined,
-        provider: SITE,
-    }];
+function escapeRe(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/* ────────────────────────── Flux principal ────────────────────────── */
+/* ────────────────────────── Épisodes ────────────────────────── */
 
+/** Numéros d'épisodes présents dans une page de saison/saga. */
+function parseEpisodeNumbers(html, basePath) {
+    const nums = new Set();
+    const re = new RegExp(`${escapeRe(basePath)}/episode-(\\d+)/`, 'g');
+    for (const m of html.matchAll(re)) nums.add(parseInt(m[1], 10));
+    return nums;
+}
+
+/** Lecteurs d'une page épisode : [{ url, lang }]. */
+function parseEmbeds(html) {
+    const out = [];
+    const seen = new Set();
+    const re = /<option\b[^>]*>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const tag = m[0];
+        const value = tag.match(/value="(https?:\/\/[^"]+)"/);
+        const key = tag.match(/data-key="(vf|vostfr)_/);
+        if (!value) continue;
+        const url = decodeHtml(value[1]);
+        if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+        seen.add(url);
+        out.push({ url, lang: key && key[1] === 'vf' ? 'fr' : 'ja' });
+    }
+    return out;
+}
+
+/** Priorité : ansembed (vrai flux) d'abord, puis le reste. */
+function hostRank(url) {
+    const u = String(url).toLowerCase();
+    if (u.includes('ansembed.')) return 0;
+    if (u.includes('sibnet') || u.includes('uqload') || u.includes('vidmoly')) return 1;
+    return 2;
+}
+
+/**
+ * Lecteurs leurres du site (vérifié 2026-11) : `jeremyparticipantanything`
+ * redirige vers un dood sans flux, `Smoothpre` (EarnVids) sert une page vide,
+ * `arianathankspecial` ne contient qu'une vidéo de démo → aucune résolution
+ * possible, on les écarte au lieu de livrer une page HTML comme « flux ».
+ */
+const JUNK_EMBED_HOSTS = ['jeremyparticipantanything.', 'arianathankspecial.', 'smoothpre.', 'earnvids.'];
+function isJunkEmbed(url) {
+    const u = String(url).toLowerCase();
+    return JUNK_EMBED_HOSTS.some(h => u.includes(h));
+}
+
+async function fetchEmbeds(path, signal) {
+    const html = await fetchHtml(path, { timeout: TIMEOUTS.episode, signal }).catch(() => null);
+    return html ? parseEmbeds(html) : [];
+}
+
+/* ────────────────────────── Flux ────────────────────────── */
+
+/**
+ * @param {string|number} tmdbId
+ * @param {'tv'|'movie'} mediaType
+ * @param {string|number} [season]
+ * @param {string|number} [episode]
+ * @param {object} [options] - { signal }
+ * @returns {Promise<Array>}
+ */
 export async function extractStreams(tmdbId, mediaType, season, episode, options = {}) {
+    const start = Date.now();
     const signal = options.signal;
-    const t0 = Date.now();
-    const seasonNum = parseInt(season, 10) || 1;
-    const epNum = parseInt(episode, 10) || 1;
-    const isMovie = mediaType === 'movie';
+    if (isAborted(signal)) throw new Error('AbortError: aborted');
 
-    // 0. Domaine vivant ? Le moteur nomade change d'hôte : sans cette sonde,
-    // chaque requête partait vers un domaine à la délégation DNS cassée.
+    const type = mediaType === 'movie' ? 'movie' : 'tv';
+    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
+    const epNum = Math.max(1, parseInt(episode, 10) || 1);
+
     const base = await resolveBase(signal);
-    if (!base || !isBaseAlive()) return [];
+    if (!base) {
+        console.warn(`[${PROVIDER}] Aucun domaine du moteur disponible — 0 stream`);
+        return [];
+    }
 
-    // 1. Titres de recherche (TMDB)
     let titles = [];
     try {
-        titles = await getTmdbTitles(tmdbId, isMovie ? 'movie' : 'tv', { season: seasonNum, episode: epNum });
-    } catch { /* noop */ }
-    const queries = [...new Set([titles[0], ...titles].filter(Boolean))].slice(0, 6);
-    if (!queries.length) return [];
-
-    // 2. Recherche site
-    const candidates = await searchSite(queries, mediaType, signal);
-    if (!candidates.length) return [];
-
-    // 3. Scoring + gardes — score = max sur TOUTES les requêtes (titres TMDB
-    // FR/EN/romaji : le site indexe sous son propre titre, souvent le FR)
-    const queryTokenSets = queries.map(q => tokens(q));
-    let best = null;
-    let bestScore = 0;
-    for (const c of candidates) {
-        if (isHomonym(c.slug, c.titles, queryTokenSets[0])) continue;
-        // Garde type : TV ≠ film/ova
-        if (isMovie && c.type !== 'film') continue;
-        if (!isMovie && c.type === 'film') continue;
-        let s = 0;
-        for (const qt of queryTokenSets) {
-            for (const t of c.titles) s = Math.max(s, scoreMatch(qt, t));
-        }
-        if (s > bestScore) { bestScore = s; best = c; }
+        titles = await getTmdbTitles(tmdbId, type, type === 'tv' ? { season: seasonNum } : {});
+    } catch (e) {
+        if (isAborted(signal)) throw e;
     }
-    if (!best || bestScore < 45) return [];
-    console.log(`[VoirAnimeOne] Match: ${best.slug} (score ${bestScore}, type ${best.type})`);
-
-    // 4. Plan de saisons (garde existence) — sauf films (1 lecteur, pas de plan)
-    let seasonSlot;
-    if (isMovie) {
-        seasonSlot = SEASON_SLOT;
-    } else {
-        const plan = await getFichePlan(best.slug, signal);
-        if (plan && plan.hasEpisodeData) {
-            const s = plan.seasons.get(seasonNum);
-            if (!s) {
-                console.log(`[VoirAnimeOne] S${seasonNum} absente de ${best.slug} (${[...plan.seasons.keys()].join(',')}), abandon`);
-                return [];
-            }
-            if (s.released.size && !s.released.has(epNum)) {
-                console.log(`[VoirAnimeOne] S${seasonNum}E${epNum} non sorti sur le site, abandon`);
-                return [];
-            }
-        }
-        // sans plan, on tente la page directement (l'API peut être en retard sur la fiche)
-        seasonSlot = seasonNum;
+    if (!titles || titles.length === 0) {
+        console.warn(`[${PROVIDER}] Aucun titre TMDB pour ${tmdbId}`);
+        return [];
     }
 
-    // 5. Langues : on tente TOUJOURS VF et VOSTFR (le champ `langues` de l'API
-    // est un résumé par série, souvent en retard sur les pages épisode : s'y
-    // fier faisait disparaître les VF fraîchement ajoutées). Ordre = préférence.
-    const known = (best.langues || []).map(l => String(l).toUpperCase());
-    const langs = [];
-    if (known.includes('VF') || !known.length) langs.push('VF');
-    langs.push('VOSTFR');
-    if (!langs.includes('VF')) langs.push('VF');
+    const candidates = await searchCandidates(titles, signal, start);
+    if (candidates.length === 0) {
+        console.log(`[${PROVIDER}] Aucun candidat pour "${titles[0]}"`);
+        return [];
+    }
 
-    // 6. Extraction par langue (séquentiel, garde-fou temps côté index)
-    const all = [];
-    for (const lang of langs) {
-        if (isAborted(signal)) break;
-        if (isBudgetExhausted(t0, BUDGET_MS)) {
-            console.log(`[VoirAnimeOne] budget atteint, langues restantes ignorées (${lang})`);
-            break;
-        }
+    // Épisode absolu (utile uniquement pour les fiches en sagas).
+    let absoluteEp = null;
+    if (type === 'tv') {
         try {
-            const streams = await extractFromEpisodePage(best.slug, String(seasonSlot), lang, epNum, signal, titles[0] || best.titles[0]);
-            all.push(...streams);
+            absoluteEp = await getAbsoluteEpisodeFromTmdb(tmdbId, seasonNum, epNum);
         } catch (e) {
-            if (String(e && e.message).includes('AbortError')) throw e;
+            if (isAborted(signal)) throw e;
         }
     }
 
-    // 7. Dédup par langue + host + path : VF et VOSTFR peuvent pointer vers le
-    // même fichier vidéo ; ils doivent pourtant rester deux entrées distinctes.
-    const seen = new Set();
-    return all.filter(st => {
-        try {
-            const u = new URL(st.url);
-            const key = `${String(st.name || '').toUpperCase()}|${u.host}${u.pathname.replace(/\?.*$/, '')}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        } catch { return true; }
-    });
+    for (const cand of candidates) {
+        if (isAborted(signal) || isBudgetExhausted(start, BUDGET_MS)) break;
+
+        const cat = await loadCatalogue(cand.slug, signal);
+        if (!cat) continue;
+
+        let episodePaths = [];
+        let servedEp = epNum;
+
+        if (type === 'movie') {
+            if (!cat.hasFilm) continue;
+            episodePaths = [
+                `/catalogue/${cand.slug}/film/episode-1/vostfr/`,
+                `/catalogue/${cand.slug}/film/episode-1/vf/`,
+            ];
+        } else {
+            if (cat.saisons.length > 0) {
+                if (!cat.saisons.includes(seasonNum)) {
+                    // Saison absente : on ne sert JAMAIS l'épisode d'une autre
+                    // saison (demande explicite de non-régression).
+                    console.log(`[${PROVIDER}] Saison ${seasonNum} absente de "${cand.slug}" (site : ${cat.saisons.join(', ')})`);
+                    continue;
+                }
+                episodePaths = [
+                    `/catalogue/${cand.slug}/saison-${seasonNum}/episode-${epNum}/vostfr/`,
+                    `/catalogue/${cand.slug}/saison-${seasonNum}/episode-${epNum}/vf/`,
+                ];
+            } else if (cat.sagas.length > 0) {
+                if (!absoluteEp) continue;
+                const saga = cat.sagas.find(s => absoluteEp >= s.from && absoluteEp <= s.to)
+                    // Plage ouverte (`episode-1156-a`) : dernière saga connue.
+                    || cat.sagas[cat.sagas.length - 1];
+                if (!saga) continue;
+                servedEp = absoluteEp;
+                episodePaths = [
+                    `/catalogue/${cand.slug}/${saga.path}/episode-${absoluteEp}/vostfr/`,
+                    `/catalogue/${cand.slug}/${saga.path}/episode-${absoluteEp}/vf/`,
+                ];
+            } else {
+                // Fiche film uniquement : jamais de repli pour une demande TV.
+                continue;
+            }
+        }
+
+        // Lecture des lecteurs des deux langues.
+        const embeds = [];
+        for (const path of episodePaths) {
+            if (isAborted(signal) || isBudgetExhausted(start, BUDGET_MS)) break;
+            const list = await fetchEmbeds(path, signal);
+            for (const em of list) if (!embeds.some(x => x.url === em.url)) embeds.push(em);
+        }
+        if (embeds.length === 0) continue;
+
+        const ranked = embeds
+            .filter(em => !isJunkEmbed(em.url))
+            .sort((a, b) => hostRank(a.url) - hostRank(b.url))
+            .slice(0, MAX_EMBEDS);
+        if (ranked.length === 0) continue;
+
+        const epLabel = type === 'movie' ? 'Film' : `Ép.${servedEp}`;
+        const streams = ranked.map(em => ({
+            url: em.url,
+            title: `[${em.lang === 'fr' ? 'VF' : 'VOSTFR'}] Anisama · ${epLabel}`,
+            name: `${PROVIDER} ${em.lang === 'fr' ? 'VF' : 'VOSTFR'}`,
+            language: em.lang,
+            provider: PROVIDER,
+        }));
+
+        const resolved = [];
+        for (let i = 0; i < streams.length; i++) {
+            if (isAborted(signal) || isBudgetExhausted(start, BUDGET_MS)) break;
+            const st = streams[i];
+            try {
+                const r = await resolveStream(st, i);
+                const outUrl = r && r.url ? r.url : st.url;
+                // Un embed qui ressort inchangé n'a pas été résolu : c'est une
+                // page HTML, pas un flux (le player de l'app ne peut rien en
+                // faire). Seuls les hôtes déjà directs sont conservés tels quels.
+                if (outUrl === st.url && !/\/(hls\d?|dash)\/|\.(m3u8|mp4|mkv|webm|mpd)([?#]|$)/i.test(outUrl)) {
+                    console.log(`[${PROVIDER}] lecteur non résolu, écarté : ${st.url.slice(0, 70)}`);
+                    continue;
+                }
+                if (r && r.url) {
+                    const { isDirect, originalUrl, ...clean } = r;
+                    resolved.push({ ...st, ...clean, provider: PROVIDER });
+                }
+            } catch (e) {
+                if (isAborted(signal)) throw e;
+                console.log(`[${PROVIDER}] resolveStream échoué : ${e && e.message}`);
+            }
+        }
+
+        const final = dedupeStreams(resolved);
+        if (final.length > 0) {
+            console.log(`[${PROVIDER}] "${cand.slug}" → ${final.length} flux en ${Date.now() - start}ms`);
+            return final;
+        }
+        console.log(`[${PROVIDER}] "${cand.slug}" : lecteurs présents mais aucun flux résolu`);
+    }
+
+    console.log(`[${PROVIDER}] Done: 0 stream en ${Date.now() - start}ms`);
+    return [];
 }
+
+export default { extractStreams };

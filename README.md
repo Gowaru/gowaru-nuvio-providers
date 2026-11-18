@@ -2,7 +2,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.2.4-green.svg)](manifest.json)
-[![Providers](https://img.shields.io/badge/providers-37-brightgreen.svg)](manifest.json)
+[![Providers](https://img.shields.io/badge/providers-36-brightgreen.svg)](manifest.json)
 [![Runtime](https://img.shields.io/badge/runtime-QuickJS-orange.svg)](#-quickjs-runtime)
 
 An optimized collection of French streaming plugins for the **Nuvio** app. This bundle covers anime (VF/VOSTFR), movies and series with a direct-link resolution system for smooth playback on mobile **and TV**.
@@ -22,56 +22,55 @@ An optimized collection of French streaming plugins for the **Nuvio** app. This 
 
 ---
 
-## 🇫🇷 Included providers (37)
+## 🇫🇷 Included providers (36)
 
-This bundle ships **37 providers** covering the French streaming landscape — anime, movies & series, in VF and VOSTFR.
+This bundle ships **36 providers** covering the French streaming landscape — anime, movies & series, in VF and VOSTFR.
 
-### 📊 Anime (26)
+### 📊 Anime (25)
 
 | # | Provider | 🎬 Content | 🌐 Lang | 💾 Formats | 📱 App | 📺 TV | 🏷️ Ver. |
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
-| 1 | **ADKami** | 🎬📺 | FR / JA | — | ✅ | ✅ | 0.1.2 |
-| 2 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.2.0 |
-| 3 | **AnimeSite** | 🎬📺 | VOSTFR | HLS, MP4 | ✅ | ✅ | 0.2.0 |
-| 4 | **Anime-Ultime** ¹ | 🎬📺 | VF / VOSTFR | MP4 | ✅ | ✅ | 0.0.6 |
-| 5 | **AnimeVOST.fr** | 📺 _only_ | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.2.0 |
-| 6 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.1.55 |
-| 7 | **AnimesUltra** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.40 |
-| 8 | **AnimeSama.co (DLE Mirror)** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
-| 9 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.20 |
-| 10 | **Aniverse** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 0.3.0 |
-| 11 | **Franime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.3 |
-| 12 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
-| 13 | **French-Anime** | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
-| 14 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
-| 15 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.2.0 |
-| 16 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.21 |
-| 17 | **Neko-Sama** ⁷ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.6 |
-| 18 | **SenAnimes** ⁶ | 🎬📺 | FR / JA | — | ⚠️ | ⚠️ | 0.1.3 |
-| 19 | **Sekai** ² | 🎬📺 | VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.27 |
-| 20 | **VoirAnime** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.3.1 |
-| 21 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
-| 22 | **VoirAnime.one** ⁸ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ⚠️ | ⚠️ | 0.1.4 |
-| 23 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.17 |
-| 24 | **VoiranimeBE** | 🎬📺 | VOSTFR / JA | — | ✅ | ✅ | 0.1.2 |
-| 25 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.3.1 |
-| 26 | **WaveAnime** ⁴ | 🎬📺 | VF / VOSTFR | DASH | ✅ | ✅ | 0.0.10 |
+| 1 | **Anime-Sama** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.2.0 |
+| 2 | **AnimeSite** | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
+| 3 | **Anime-Ultime** ¹ | 🎬📺 | VF / VOSTFR | MP4 | ✅ | ✅ | 0.0.6 |
+| 4 | **AnimeVOST.fr** | 📺 _only_ | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.2.0 |
+| 5 | **AnimeVOSTFR** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.1.55 |
+| 6 | **AnimesUltra** ⁹ | 🎬📺 | VF / VOSTFR | MP4, MKV | ❌ | ❌ | 1.0.41 |
+| 7 | **AnimeSama.co (DLE Mirror)** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ❌ | ❌ | 1.0.16 |
+| 8 | **AnimoFlix** | 🎬📺 | VF / VOSTFR | MP4, MKV | ✅ | ✅ | 1.0.20 |
+| 9 | **Aniverse** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 0.3.0 |
+| 10 | **Franime** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.0 |
+| 11 | **FullAnime** | 🎬📺 | VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.5 |
+| 12 | **French-Anime** | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
+| 13 | **French-Manga** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
+| 14 | **Jetanimes** | 📺 _only_ | VOSTFR | — | ✅ | ✅ | 0.2.0 |
+| 15 | **Mugiwara-no-Streaming** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.0.21 |
+| 16 | **Neko-Sama** ⁷ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.6 |
+| 17 | **SenAnimes** ⁶ | 🎬📺 | FR / JA | — | ⚠️ | ⚠️ | 0.1.3 |
+| 18 | **Sekai** ² | 🎬📺 | VOSTFR | MP4, MKV | ✅ | ⚠️ | 1.0.27 |
+| 19 | **VoirAnime** ³ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ⚠️ | 1.3.1 |
+| 20 | **VoirAnime.homes** _DLE_ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ✅ | 0.3.0 |
+| 21 | **VoirAnime (Anisama)** ⁸ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.2.0 |
+| 22 | **VoirAnime.rip** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.17 |
+| 23 | **VoiranimeBE** | 🎬📺 | VOSTFR / JA | — | ✅ | ✅ | 0.1.2 |
+| 24 | **Vostfree** | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 1.3.2 |
+| 25 | **WaveAnime** ⁴ | 🎬📺 | VF / VOSTFR | DASH | ✅ | ✅ | 0.0.10 |
 
 ### 🎬 Movies & Series (11)
 
 | # | Provider | 🎬 Content | 🌐 Lang | 💾 Formats | 📱 App | 📺 TV | 🏷️ Ver. |
 | :-: | :--- | :---: | :---: | :---: | :---: | :---: | :-: |
-| 27 | **Coflix** ⁵ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ⚠️ | 2.2.0 |
-| 28 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
-| 29 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
-| 30 | **Frenchstream** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.24 |
-| 31 | **Movix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 0.1.6 |
-| 32 | **Nakios** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.1.1 |
-| 33 | **Papadustream** | 🎬📺 | FR / EN | M3U8 | ✅ | ✅ | 1.1.2 |
-| 34 | **StreamZo** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 1.0.7 |
-| 35 | **Voirdrama** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.4 |
-| 36 | **Webflix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.4 |
-| 37 | **Wookafr** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
+| 26 | **Coflix** ⁵ | 🎬📺 | VF / VOSTFR | HLS, MP4 | ✅ | ⚠️ | 2.2.0 |
+| 27 | **DuLourd** | 📺 _only_ | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
+| 28 | **Flemmix** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.14 |
+| 29 | **Frenchstream** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 2.0.24 |
+| 30 | **Movix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, MKV, M3U8 | ✅ | ✅ | 0.1.6 |
+| 31 | **Nakios** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.1.1 |
+| 32 | **Papadustream** | 🎬📺 | FR / EN | M3U8 | ✅ | ✅ | 1.1.2 |
+| 33 | **StreamZo** | 🎬📺 | VF / VOSTFR | M3U8 | ✅ | ✅ | 1.0.7 |
+| 34 | **Voirdrama** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.0.4 |
+| 35 | **Webflix** ⚙️ | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 0.1.4 |
+| 36 | **Wookafr** | 🎬📺 | VF / VOSTFR | MP4, M3U8 | ✅ | ✅ | 1.0.15 |
 
 > **Legend:**
 > - 🎬📺 = Movies & Series | 📺 _only_ = Series only
@@ -88,7 +87,8 @@ This bundle ships **37 providers** covering the French streaming landscape — a
 > - ⁵ **Coflix**: the site rotates domains (`coflix.wiki` → `301` → `coflix.gold`, root redirect) — the provider probes the live domain at runtime, then uses the theme AJAX API (`suggest` → `list-episode` → `player`) with a `/filter?keyword=` fallback. Streams hosted on `*.tnmr.org` (403) are dropped instead of being returned unplayable, and `dood.*`/`playmogo` embeds are detected as Cloudflare-Turnstile-gated instead of burning the budget (optional Turnstile solver available in the provider settings, disabled by default, needs your own CapSolver/2Captcha key).
 > - ⁶ **SenAnimes**: since 2026-10 the site requires a server-side Cloudflare Turnstile check (`403 {"error":"verification-humaine"}` on `/api/episode/source`, whatever the headers sent) — no source can be resolved from a plugin runtime, so the provider is kept for its catalogue/mapping logic but returns no stream. It detects the gate, exits in < 2 s and logs the reason instead of wasting the budget.
 > - ⁷ **Neko-Sama**: catalogue récupéré via le sitemap WordPress (1440 fiches, 1 requête) → plus de sondage de slugs à l'aveugle ni de faux matches ; les arcs One Piece en numérotation absolue sont remappés (`saga-2` = 62..143) ; jusqu'à 2 hébergeurs distincts par langue (vidmoly, sendvid…). Le site ne publie en général que de la VOSTFR (groupes `SUB:`). Titres absents du site : 0 stream en ~2 s.
-> - ⁸ **VoirAnime.one**: le domaine `voiranime.one` (moteur Next.js « Anisama ») a une délégation DNS cassée depuis 2026-11 et aucun miroir vivant n'est connu → 0 stream en ~2 s. Le provider sonde une liste de domaines à l'exécution (`CANDIDATE_HOSTS`) et repart automatiquement dès qu'un hôte répond.
+> - ⁸ **VoirAnime (Anisama)**: le moteur a déménagé de `voiranime.one` (Next.js, DNS mort) vers **`anisama.fr`** (Laravel) — recherche `/recherche/?q=`, fiches `/catalogue/{slug}/` (saisons, sagas One Piece à numérotation absolue via TMDB, films `/film/episode-1/`), lecteurs `ansembed.net` (clone uqload, master HLS). Les faux lecteurs `jeremyparticipantanything` (dood) et `Smoothpre` (EarnVids) sont filtrés. Le provider sonde toujours `CANDIDATE_HOSTS` à l'exécution pour suivre un futur changement de domaine.
+> - ⁹ **AnimesUltra**: site hors service depuis 2026-11 — l'origin renvoie `525 SSL handshake failed` en continu et les rares `200` servent un template cassé (cartes et bouton « Regarder » en `href="/"`, aucune page épisode, `/index.php?do=search` en 404). Aucun lecteur n'est atteignable : provider désactivé, il sonde les hôtes connus et repart automatiquement si le site est réparé.
 
 ---
 

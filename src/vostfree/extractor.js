@@ -44,7 +44,12 @@ const MAX_STREAMS = 8;
 // résolveurs savent les lire.
 const UNRESOLVABLE_HOSTS = ['voe.sx', 'streamtape', 'stape', 'dood.', 'ds2play', 'bigwar5',
     'ninjastream', 'upvid', 'opvid', 'jetload', 'getvid.', 'lvturbo', 'streamlare', 'filemoon',
-    'myvi.ru', 'myvi.tv', 'iframedream', 'kaztube', 'fembed.', 'vfree.'];
+    'myvi.ru', 'myvi.tv', 'iframedream', 'kaztube', 'fembed.', 'vfree.',
+    // Famille StreamSB (`sb…`) et MixDrop, portées par les slots `vip` :
+    // domaines parqués (ww16/ww17) ou résolution derrière reCAPTCHA v3.
+    'sbchill.', 'sbbrisk.', 'sbhight.', 'sbface.', 'sbrity.', 'sbanh.', 'sblongvu.', 'sblanh.',
+    'sbfast.', 'sbfull.', 'sbthe.', 'sbspeed.', 'sblona.', 'viewsb.', 'likessb.',
+    'mixdrop.', 'vudeo.', 'gvstream.', 'gvlod.', 'vidfast.', 'rapids.', 'vidspot.', 'openload.'];
 
 // `sibnet` est le lecteur le plus courant du catalogue mais répond **403**
 // depuis un datacenter : il est tenté quand même (il fonctionne depuis une IP

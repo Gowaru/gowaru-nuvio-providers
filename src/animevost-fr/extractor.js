@@ -33,7 +33,7 @@
 import { fetchJson, fetchText, setCurrentSignal, BASE } from './http.js';
 import { resolveStream, isAborted } from '../utils/resolvers.js';
 import { getTmdbTitles } from '../utils/metadata.js';
-import { toSlug, resolveTargetEpisodes } from '../utils/dle-extractor.js';
+import { toSlug, resolveTargetEpisodes, resolveSeasonEpisodeInputs } from '../utils/dle-extractor.js';
 
 /** Clé XOR statique du player gupload (stable, vérifiée sur plusieurs pages). */
 const GUPLOAD_XOR_KEY = 'G7#kP!2qZxV9mRwL';
@@ -392,8 +392,10 @@ export async function extractStreams(tmdbId, mediaType, season, episode, options
 
     if (mediaType === 'movie') return []; // catalogue 100% séries
 
-    const seasonNum = Math.max(1, parseInt(season, 10) || 1);
-    const episodeNum = Math.max(1, parseInt(episode, 10) || 1);
+    // season=null (anime videoIds on TV) + absolute episode -> (S,E)
+    const se = await resolveSeasonEpisodeInputs(season, episode, tmdbId, { mediaType: 'tv' });
+    const seasonNum = Math.max(1, se.season);
+    const episodeNum = Math.max(1, se.episode);
 
     const titles = await getTmdbTitles(tmdbId, 'tv', { season: seasonNum });
     if (!titles || titles.length === 0) return [];
